@@ -278,3 +278,119 @@ void ByteTracker::update(float dt, const EgoState& ego, const std::vector<Detect
         for (int t = 0; t < nRows; ++t) {
             for (int d = 0; d < nCols; ++d) {
                 const auto& det = detections[highIdxScratch_[d]];
+                const float dist = std::hypot(tracks_[t].x[0] - det.worldPos.x, tracks_[t].x[1] - det.worldPos.z);
+                const float classPen = (tracks_[t].pub.semantic == det.semantic) ? 0.0f : 1.5f;
+                costFlatScratch_[static_cast<size_t>(t) * nCols + d] = dist + classPen;
+            }
+        }
+        hungarian_.solve(costFlatScratch_.data(), nRows, nCols, nCols, cfg_.btHighMatchDistM);
+        for (int t = 0; t < nRows; ++t) {
+            const int d = hungarian_.assign[t];
+            if (d >= 0) {
+                updateTrack(tracks_[t], detections[highIdxScratch_[d]], false);
+                trackMatchedScratch_[t] = 1;
+                highDetMatchedScratch_[d] = 1;
+            }
+        }
+    }
+
+    // Stage 2 (ByteTrack): Low-Confidence matching for unmatched active/lost tracks
+    unmatchedScratch_.clear();
+    for (size_t t = 0; t < tracks_.size(); ++t) {
+        if (!trackMatchedScratch_[t] && tracks_[t].pub.state != TrackState::Tentative) {
+            unmatchedScratch_.push_back(static_cast<int>(t));
+        }
+    }
+    if (!unmatchedScratch_.empty() && !lowIdxScratch_.empty()) {
+        const int nRows = static_cast<int>(unmatchedScratch_.size());
+        const int nCols = static_cast<int>(lowIdxScratch_.size());
+        costFlatScratch_.resize(static_cast<size_t>(nRows) * nCols);
+        for (int r = 0; r < nRows; ++r) {
+            const int t = unmatchedScratch_[r];
+            for (int d = 0; d < nCols; ++d) {
+                const auto& det = detections[lowIdxScratch_[d]];
+                costFlatScratch_[static_cast<size_t>(r) * nCols + d] =
+                    std::hypot(tracks_[t].x[0] - det.worldPos.x, tracks_[t].x[1] - det.worldPos.z);
+            }
+        }
+        hungarian_.solve(costFlatScratch_.data(), nRows, nCols, nCols, cfg_.btLowMatchDistM);
+        for (int r = 0; r < nRows; ++r) {
+            const int d = hungarian_.assign[r];
+            if (d >= 0) {
+                const int t = unmatchedScratch_[r];
+                updateTrack(tracks_[t], detections[lowIdxScratch_[d]], true);
+                trackMatchedScratch_[t] = 1;
+            }
+        }
+    }
+
+    for (size_t t = 0; t < tracks_.size(); ++t) {
+        if (!trackMatchedScratch_[t]) {
+            if (tracks_[t].pub.state == TrackState::Tentative) {
+                tracks_[t].pub.state = TrackState::Removed;
+            } else if (tracks_[t].pub.timeSinceUpdateSec > cfg_.btMaxTimeLostSec) {
+                tracks_[t].pub.state = TrackState::Removed;
+            } else {
+                tracks_[t].pub.state = TrackState::Lost;
+            }
+        }
+        refreshTrackPose(tracks_[t], ego);
+    }
+
+    tracks_.erase(
+        std::remove_if(tracks_.begin(), tracks_.end(),
+                       [](const InternalTrack& tr) { return tr.pub.state == TrackState::Removed; }),
+        tracks_.end());
+
+    for (size_t d = 0; d < highIdxScratch_.size(); ++d) {
+        if (!highDetMatchedScratch_[d]) {
+            spawnTrack(detections[highIdxScratch_[d]]);
+            refreshTrackPose(tracks_.back(), ego);
+        }
+    }
+}
+
+void ByteTracker::collectActiveTracks(std::vector<Track3D>& out) const {
+    out.clear();
+    for (const auto& tr : tracks_) {
+        if (tr.pub.state == TrackState::Tracked || tr.pub.state == TrackState::Lost) {
+            out.push_back(tr.pub);
+        }
+    }
+}
+
+std::vector<Track3D> ByteTracker::activeTracks() const {
+    std::vector<Track3D> out;
+    out.reserve(tracks_.size());
+    collectActiveTracks(out);
+    return out;
+}
+
+void ByteTracker::exportTrackPriorsGpu(const EgoState& ego, std::vector<TrackPriorGpu>& out) const {
+    out.assign(static_cast<size_t>(cfg_.btMaxTracks), TrackPriorGpu{});
+    int idx = 0;
+    const float s = std::sin(ego.yaw), c = std::cos(ego.yaw);
+    for (const auto& tr : tracks_) {
+        if (idx >= cfg_.btMaxTracks) break;
+        if (tr.pub.state != TrackState::Tracked && tr.pub.state != TrackState::Lost) continue;
+        const float dx = tr.x[0] - ego.pos.x;
+        const float dz = tr.x[1] - ego.pos.z;
+        const float egoX = dx * s + dz * c;
+        const float egoY = dx * c - dz * s;
+
+        TrackPriorGpu g{};
+        g.posVel = {egoX, egoY, tr.x[2], tr.x[3]};
+        g.sizeMeta = {tr.pub.halfExtents.x, tr.pub.halfExtents.z,
+                      static_cast<float>(static_cast<int>(tr.pub.semantic)), tr.pub.posSigmaM};
+        g.yawValid = {tr.pub.yaw, tr.pub.score, static_cast<float>(tr.pub.trackId), 1.0f};
+        out[idx++] = g;
+    }
+}
+
+std::vector<TrackPriorGpu> ByteTracker::exportTrackPriorsGpu(const EgoState& ego) const {
+    std::vector<TrackPriorGpu> out;
+    exportTrackPriorsGpu(ego, out);
+    return out;
+}
+
+} // namespace cybercab
