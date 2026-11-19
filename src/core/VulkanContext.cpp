@@ -158,3 +158,147 @@ void VulkanContext::pickPhysicalDevice(bool requireSurface) {
     std::vector<VkPhysicalDevice> devices(count);
     vkEnumeratePhysicalDevices(instance_, &count, devices.data());
 
+    int bestScore = -1;
+    for (VkPhysicalDevice dev : devices) {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(dev, &props);
+
+        uint32_t qCount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(dev, &qCount, nullptr);
+        std::vector<VkQueueFamilyProperties> qProps(qCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(dev, &qCount, qProps.data());
+
+        int chosenFamily = -1;
+        for (uint32_t i = 0; i < qCount; ++i) {
+            bool hasGfx = (qProps[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0;
+            bool hasCmp = (qProps[i].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0;
+            if (!hasGfx || !hasCmp) continue;
+            if (requireSurface) {
+                VkBool32 present = VK_FALSE;
+                vkGetPhysicalDeviceSurfaceSupportKHR(dev, i, surface_, &present);
+                if (!present) continue;
+            }
+            chosenFamily = static_cast<int>(i);
+            break;
+        }
+        if (chosenFamily < 0) continue;
+
+        int score = 10;
+        if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) score += 1000;
+        else if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) score += 100;
+
+        if (score > bestScore) {
+            bestScore = score;
+            physicalDevice_ = dev;
+            graphicsQueueFamily_ = static_cast<uint32_t>(chosenFamily);
+            deviceProps_ = props;
+        }
+    }
+
+    if (physicalDevice_ == VK_NULL_HANDLE) {
+        throw std::runtime_error("Failed to find suitable Vulkan GPU with graphics+compute queue");
+    }
+}
+
+void VulkanContext::createLogicalDevice(bool requireSwapchain) {
+    float priority = 1.0f;
+    VkDeviceQueueCreateInfo qci{};
+    qci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    qci.queueFamilyIndex = graphicsQueueFamily_;
+    qci.queueCount = 1;
+    qci.pQueuePriorities = &priority;
+
+    std::vector<const char*> devExts;
+    if (requireSwapchain) {
+        devExts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    }
+
+    VkPhysicalDeviceFeatures features{};
+    features.fillModeNonSolid = VK_TRUE;
+    features.wideLines = VK_TRUE;
+
+    VkDeviceCreateInfo dci{};
+    dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    dci.queueCreateInfoCount = 1;
+    dci.pQueueCreateInfos = &qci;
+    dci.enabledExtensionCount = static_cast<uint32_t>(devExts.size());
+    dci.ppEnabledExtensionNames = devExts.empty() ? nullptr : devExts.data();
+    dci.pEnabledFeatures = &features;
+
+    VK_CHECK(vkCreateDevice(physicalDevice_, &dci, nullptr, &device_));
+    vkGetDeviceQueue(device_, graphicsQueueFamily_, 0, &graphicsQueue_);
+}
+
+void VulkanContext::createCommandAndDescriptorPools() {
+    VkCommandPoolCreateInfo cpci{};
+    cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    cpci.queueFamilyIndex = graphicsQueueFamily_;
+    VK_CHECK(vkCreateCommandPool(device_, &cpci, nullptr, &commandPool_));
+
+    std::vector<VkDescriptorPoolSize> sizes = {
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 256},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 512},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 256},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 128},
+    };
+    VkDescriptorPoolCreateInfo dpci{};
+    dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    dpci.maxSets = 512;
+    dpci.poolSizeCount = static_cast<uint32_t>(sizes.size());
+    dpci.pPoolSizes = sizes.data();
+    VK_CHECK(vkCreateDescriptorPool(device_, &dpci, nullptr, &descriptorPool_));
+}
+
+uint32_t VulkanContext::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const {
+    VkPhysicalDeviceMemoryProperties memProps{};
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice_, &memProps);
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i) {
+        if ((typeFilter & (1u << i)) && (memProps.memoryTypes[i].propertyFlags & properties) == properties) {
+            return i;
+        }
+    }
+    throw std::runtime_error("Failed to find suitable Vulkan memory type");
+}
+
+VkFormat VulkanContext::findDepthFormat() const {
+    for (VkFormat fmt : {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT}) {
+        VkFormatProperties props{};
+        vkGetPhysicalDeviceFormatProperties(physicalDevice_, fmt, &props);
+        if ((props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0) {
+            return fmt;
+        }
+    }
+    throw std::runtime_error("Failed to find supported depth format");
+}
+
+VkCommandBuffer VulkanContext::beginSingleTimeCommands() const {
+    VkCommandBufferAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandPool = commandPool_;
+    ai.commandBufferCount = 1;
+
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VK_CHECK(vkAllocateCommandBuffers(device_, &ai, &cmd));
+
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
+    return cmd;
+}
+
+void VulkanContext::endSingleTimeCommands(VkCommandBuffer cmd) const {
+    VK_CHECK(vkEndCommandBuffer(cmd));
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+    VK_CHECK(vkQueueSubmit(graphicsQueue_, 1, &si, VK_NULL_HANDLE));
+    VK_CHECK(vkQueueWaitIdle(graphicsQueue_));
+    vkFreeCommandBuffers(device_, commandPool_, 1, &cmd);
+}
+
+} // namespace cybercab
