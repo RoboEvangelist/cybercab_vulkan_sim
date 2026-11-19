@@ -1,0 +1,182 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+// Stage 6a: 4D Occupancy Network & Flow Field
+// Evaluates the 3D voxel grid (60 x 40 x 8 = 19,200 voxels) from:
+//   - BEVFormer Spatial-Temporal features & pillar Z-responses
+//   - ByteTrack motion-compensated 3D track priors (pure perception outputs)
+//   - Bayesian temporal confidence accumulation & decay
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 2) in;
+
+layout(std430, binding = 0) readonly buffer CurrBevFeatIn {
+    vec4 feat[];
+} uBevFeat;
+
+layout(std430, binding = 1) readonly buffer CurrBevMetaIn {
+    vec4 meta[];
+} uBevMeta;
+
+layout(std430, binding = 2) readonly buffer BevPillarHeightIn {
+    vec4 zResponses[];
+} uBevPillar;
+
+layout(std430, binding = 3) readonly buffer TrackPriorsIn {
+    TrackPriorGpu tracks[64];
+} uTracks;
+
+// Persistent voxel grid updated via Bayesian log-odds across frames:
+//   state: vec4(float(semanticClass), confidence, vx_world, vz_world)
+//   uncert: vec4(epistemicSigma, obsWeight, flowSpeed, zWorld)
+layout(std430, binding = 4) buffer VoxelStateIO {
+    vec4 state[];
+} uVoxelState;
+
+layout(std430, binding = 5) buffer VoxelUncertIO {
+    vec4 uncert[];
+} uVoxelUncert;
+
+layout(push_constant) uniform OccPC {
+    uint nx;
+    uint ny;
+    uint nz;
+    uint numTracks;
+    float minX;
+    float maxX;
+    float minY;
+    float maxY;
+    float minZ;
+    float maxZ;
+    float decayRate;
+    float dt;
+    float egoX;
+    float egoZ;
+    float egoYaw;
+    float occThresh;
+} pc;
+
+void main() {
+    uint ix = gl_GlobalInvocationID.x;
+    uint iy = gl_GlobalInvocationID.y;
+    uint iz = gl_GlobalInvocationID.z;
+    if (ix >= pc.nx || iy >= pc.ny || iz >= pc.nz) return;
+
+    float stepX = (pc.maxX - pc.minX) / float(pc.nx);
+    float stepY = (pc.maxY - pc.minY) / float(pc.ny);
+    float stepZ = (pc.maxZ - pc.minZ) / float(pc.nz);
+
+    float egoX = pc.minX + (float(ix) + 0.5) * stepX;
+    float egoY = pc.minY + (float(iy) + 0.5) * stepY;
+    float wy = pc.minZ + (float(iz) + 0.5) * stepZ;
+
+    uint vIdx = (ix * pc.ny + iy) * pc.nz + iz;
+    uint bevCell = iy * pc.nx + ix;
+
+    const vec4 prevState = uVoxelState.state[vIdx];
+    const uint prevSem = uint(round(prevState.x));
+    const float prevConf = (prevSem == 7u || prevSem == 0u) ? 0.0 : max(0.0, prevState.y - pc.dt * pc.decayRate);
+
+    // Exclude Cybercab's own hull + close bumper shear margin
+    if (egoX > -1.35 && egoX < 3.75 && abs(egoY) < 1.25) {
+        uVoxelState.state[vIdx] = vec4(0.0);
+        uVoxelUncert.uncert[vIdx] = vec4(0.0, 1.0, 0.0, wy);
+        return;
+    }
+
+    vec4 f0 = uBevFeat.feat[bevCell * 4u + 0u];
+    vec4 f1 = uBevFeat.feat[bevCell * 4u + 1u];
+    vec4 f2 = uBevFeat.feat[bevCell * 4u + 2u];
+    vec4 meta = uBevMeta.meta[bevCell];
+    vec4 zResp = uBevPillar.zResponses[bevCell];
+
+    float obsWeight = meta.x;
+    float bevVar = meta.y;
+
+    // Interpolate vertical pillar response at voxel height wy
+    float zAnchors[4] = float[4](0.45, 1.05, 1.75, 2.65);
+    float zScore = zResp.x;
+    if (wy >= zAnchors[0] && wy <= zAnchors[3]) {
+        for (int k = 0; k < 3; ++k) {
+            if (wy >= zAnchors[k] && wy <= zAnchors[k + 1]) {
+                float t = (wy - zAnchors[k]) / (zAnchors[k + 1] - zAnchors[k]);
+                zScore = mix(zResp[k], zResp[k + 1], t);
+            }
+        }
+    } else if (wy > zAnchors[3]) {
+        zScore = zResp.w * 0.7;
+    }
+
+    // Visual occupancy score from BEVFormer features (f1 is already per-pixel road-masked; avoid crushing small agents on road)
+    const float skyRoadMask = clamp(1.0 - f2.x * 1.5 - f1.w * 0.35 - f2.y * 0.65, 0.15, 1.0);
+    const float structMask = smoothstep(0.008, 0.035, f0.z + f2.z * 0.5);
+    const float visualOcc = clamp((zScore * 1.25 + f1.x * 0.85 + f1.y * 1.15 + f1.z * 0.70) * skyRoadMask * structMask * obsWeight, 0.0, 1.0);
+
+    uint sem = (prevConf > 0.08) ? prevSem : 0u;
+    float newConf = prevConf;
+    float vxW = prevState.z * 0.5;
+    float vzW = prevState.w * 0.5;
+    float sigma = sqrt(bevVar);
+
+    // Dense BEV visual semantic classification
+    if (visualOcc > max(pc.occThresh, 0.46) && wy < 3.5 && zScore > 0.15) {
+        newConf = max(newConf, clamp(visualOcc * 1.15, 0.35, 0.95));
+        if (f1.y > f1.x && f1.y > f1.z && wy <= 1.9) {
+            sem = 2u; // Pedestrian
+        } else if (f1.z > f1.x && wy > 1.2) {
+            sem = 3u; // Signal / Sign
+        } else if (wy > 3.2 && zResp.w > zResp.x * 1.4) {
+            sem = 5u; // Overhang
+        } else if (f1.x > 0.25 && wy < 2.5) {
+            sem = 1u; // Vehicle
+        } else if (wy > 0.9) {
+            sem = 4u; // Static structure
+        }
+    }
+
+    // Fuse ByteTrack 3D Track Priors (sharpen dynamic vehicles/pedestrians & inject 4D flow)
+    float sinEgo = sin(pc.egoYaw);
+    float cosEgo = cos(pc.egoYaw);
+    float wx = pc.egoX + egoX * sinEgo + egoY * cosEgo;
+    float wz = pc.egoZ + egoX * cosEgo - egoY * sinEgo;
+
+    for (uint t = 0u; t < pc.numTracks; ++t) {
+        TrackPriorGpu tr = uTracks.tracks[t];
+        if (tr.yawValid.w < 0.5) continue;
+        float tEgoX = tr.posVel.x;
+        float tEgoY = tr.posVel.y;
+        float dx = egoX - tEgoX;
+        float dy = egoY - tEgoY;
+        float hx = tr.sizeMeta.x + 0.25;
+        float hz = tr.sizeMeta.y + 0.25;
+        if (abs(dx) > max(hx, hz) + 0.8 || abs(dy) > max(hx, hz) + 0.8) continue;
+
+        // Rotate offset into track local OBB
+        float relYaw = tr.yawValid.x - pc.egoYaw;
+        float cy = cos(relYaw), sy = sin(relYaw);
+        float lx = dx * cy + dy * sy;
+        float ly = -dx * sy + dy * cy;
+        float maxH = (tr.sizeMeta.z > 1.5 && tr.sizeMeta.z < 2.5) ? 1.8 : 2.2;
+
+        if (abs(lx) <= hz && abs(ly) <= hx && wy <= maxH) {
+            uint trSem = uint(round(tr.sizeMeta.z));
+            float trConf = clamp(tr.yawValid.y, 0.4, 1.0);
+            if (trConf >= newConf * 0.85) {
+                sem = trSem;
+                newConf = max(newConf, trConf);
+                vxW = tr.posVel.z;
+                vzW = tr.posVel.w;
+                sigma = max(sigma, tr.sizeMeta.w);
+            }
+        }
+    }
+
+    if (newConf <= 0.08) {
+        sem = 0u;
+        newConf = 0.0;
+        vxW = 0.0;
+        vzW = 0.0;
+    }
+
+    uVoxelState.state[vIdx] = vec4(float(sem), newConf, vxW, vzW);
+    uVoxelUncert.uncert[vIdx] = vec4(sigma, obsWeight, length(vec2(vxW, vzW)), wy);
+}
