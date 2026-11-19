@@ -1,0 +1,24 @@
+# Build directories and compiled artifacts
+/build/
+/cmake-build-*/
+*.spv
+*.o
+*.a
+*.so
+
+# Runtime generated traces & offscreen dumps
+trace_*.jsonl
+gtest_trace_unit.jsonl
+cybercab_preview.bmp
+*.ppm
+*.bmp
+
+# Legacy root starter scratch file
+/main.cpp
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
