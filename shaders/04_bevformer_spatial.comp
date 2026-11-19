@@ -98,3 +98,102 @@ void main() {
     vec4 zAct = vec4(0.0);
 
     // Ego footprint mask (ignore inside Cybercab body itself)
+    bool insideEgo = (egoX > -1.1 && egoX < 3.5 && abs(egoY) < 1.15);
+
+    if (!insideEgo) {
+        for (int zi = 0; zi < 4; ++zi) {
+            float egoZ = zList[zi];
+            float zScoreAcc = 0.0;
+            float zWAcc = 0.0;
+
+            for (uint c = 0u; c < 8u; ++c) {
+                CamProjGpu cp = uCamProj.cams[c];
+                vec4 pCam = cp.camFromEgoISO * vec4(egoX, egoY, egoZ, 1.0);
+                if (pCam.z < 0.7 || pCam.z > cp.dims.z) continue;
+
+                const float xn = pCam.x / pCam.z;
+                const float yn = pCam.y / pCam.z;
+                const float r2 = xn * xn + yn * yn;
+                if (r2 > 3.2) continue;
+
+                // Forward Brown-Conrady distortion matching ISP shader (from common.glsl)
+                const vec2 distXY = brownConradyDistort(vec2(xn, yn), cp.dist);
+                const float xd = distXY.x;
+                const float yd = distXY.y;
+
+                float uPx = cp.intr.x * xd + cp.intr.z;
+                float vPx = cp.intr.y * yd + cp.intr.w;
+                float uNorm = uPx / cp.dims.x;
+                float vNorm = vPx / cp.dims.y;
+                if (uNorm < 0.02 || uNorm > 0.98 || vNorm < 0.02 || vNorm > 0.98) continue;
+
+                // Query SoilDetector patch weight w_c(u, v) and epistemic variance
+                uint pCol = min(pc.patchCols - 1u, uint(uNorm * float(pc.patchCols)));
+                uint pRow = min(pc.patchRows - 1u, uint(vNorm * float(pc.patchRows)));
+                vec4 soilInfo = uSoilPatch.patches[c * (pc.patchCols * pc.patchRows) + pRow * pc.patchCols + pCol];
+                float wPatch = soilInfo.y;
+                float varPatch = soilInfo.z;
+
+                vec4 m0 = sampleEncMem(c, uNorm, vNorm, 0u);
+                vec4 m1 = sampleEncMem(c, uNorm, vNorm, 1u);
+                vec4 m2 = sampleEncMem(c, uNorm, vNorm, 2u);
+                vec4 m3 = sampleEncMem(c, uNorm, vNorm, 3u);
+
+                // Deformable spatial cross-attention weight (prefers sharp center rays & unsoiled cameras)
+                float rangeAtten = 1.0 / (1.0 + 0.025 * pCam.z);
+                float centerAtten = 1.0 - 0.35 * length(vec2(uNorm - 0.5, vNorm - 0.5));
+                float attnW = wPatch * rangeAtten * centerAtten;
+
+                agg[0] += m0 * attnW;
+                agg[1] += m1 * attnW;
+                agg[2] += m2 * attnW;
+                agg[3] += m3 * attnW;
+                totalWeight += attnW;
+                varWeightedSum += varPatch * attnW;
+                if (zi == 1) camHits += wPatch;
+
+                float objSal = (m1.x * 0.9 + m1.y * 1.45 + m1.z * 1.1) * clamp(1.0 - m2.x * 1.3 - m1.w * 0.7, 0.0, 1.0);
+                zScoreAcc += objSal * attnW;
+                zWAcc += attnW;
+            }
+            if (zWAcc > 1e-4) {
+                zAct[zi] = zScoreAcc / zWAcc;
+            }
+        }
+    }
+
+    uint cellIdx = iy * pc.nx + ix;
+    uint base = cellIdx * 4u;
+    vec4 warpedMeta = uWarpedBevMeta.meta[cellIdx];
+
+    if (totalWeight > 1e-4) {
+        for (int s = 0; s < 4; ++s) agg[s] /= totalWeight;
+    }
+
+    // Fuse Spatial Cross-Attention + Temporal Self-Attention (weighted by spatial vs temporal reliability)
+    float spatialConf = clamp(totalWeight * 0.55, 0.0, 1.0);
+    float temporalConf = warpedMeta.x;
+    float alpha = spatialConf / max(spatialConf + temporalConf * 0.65, 1e-4);
+
+    vec4 prevFeat0 = uWarpedBevFeat.feat[base + 0u];
+    vec4 prevFeat1 = uWarpedBevFeat.feat[base + 1u];
+    vec4 prevFeat2 = uWarpedBevFeat.feat[base + 2u];
+    vec4 prevFeat3 = uWarpedBevFeat.feat[base + 3u];
+
+    vec4 fused0 = mix(prevFeat0, agg[0], alpha);
+    vec4 fused1 = mix(prevFeat1, agg[1], alpha);
+    vec4 fused2 = mix(prevFeat2, agg[2], alpha);
+    vec4 fused3 = mix(prevFeat3, agg[3], alpha);
+
+    uCurrBevFeat.feat[base + 0u] = fused0;
+    uCurrBevFeat.feat[base + 1u] = fused1;
+    uCurrBevFeat.feat[base + 2u] = fused2;
+    uCurrBevFeat.feat[base + 3u] = fused3;
+
+    float spatialVar = (totalWeight > 1e-4) ? (varWeightedSum / totalWeight) : 1.0;
+    float fusedVar = mix(warpedMeta.y, spatialVar, alpha);
+    float tempDelta = length(fused1.xyz - prevFeat1.xyz);
+
+    uCurrBevMeta.meta[cellIdx] = vec4(max(spatialConf, temporalConf * 0.85), fusedVar, camHits, tempDelta);
+    uBevPillarHeight.zResponses[cellIdx] = zAct;
+}
