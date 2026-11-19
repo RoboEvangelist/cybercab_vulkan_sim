@@ -49,6 +49,10 @@ private:
     VulkanBuffer trackPriorsSSBO_;
     VulkanBuffer voxelStateSSBO_;
     VulkanBuffer voxelUncertSSBO_;
+    VulkanBuffer prevVoxelStateSSBO_;
+    VulkanBuffer prevVoxelUncertSSBO_;
+    bool hasPrevEgo_ = false;
+    EgoState prevEgo_{};
     mutable std::vector<Vec4> statesScratch_;
     mutable std::vector<Vec4> uncertScratch_;
 };

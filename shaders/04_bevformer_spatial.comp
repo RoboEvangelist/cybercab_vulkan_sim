@@ -106,7 +106,13 @@ void main() {
             float zScoreAcc = 0.0;
             float zWAcc = 0.0;
 
+            uint hitGroupsMask = 0u;
+            float camAttnW[8], camDynSal[8], camPoleW[8], camVar[8];
+            vec4 camM0[8], camM1[8], camM2[8], camM3[8];
+            bool camValid[8];
+
             for (uint c = 0u; c < 8u; ++c) {
+                camValid[c] = false;
                 CamProjGpu cp = uCamProj.cams[c];
                 vec4 pCam = cp.camFromEgoISO * vec4(egoX, egoY, egoZ, 1.0);
                 if (pCam.z < 0.7 || pCam.z > cp.dims.z) continue;
@@ -139,20 +145,50 @@ void main() {
                 vec4 m2 = sampleEncMem(c, uNorm, vNorm, 2u);
                 vec4 m3 = sampleEncMem(c, uNorm, vNorm, 3u);
 
+                float poleResp = m2.w;
+                if (c < 5u) {
+                    float duCell = 0.30 / float(pc.featW);
+                    poleResp = max(poleResp, max(sampleEncMem(c, clamp(uNorm - duCell, 0.01, 0.99), vNorm, 2u).w,
+                                                 sampleEncMem(c, clamp(uNorm + duCell, 0.01, 0.99), vNorm, 2u).w));
+                }
+                float poleRangeGate = (c >= 5u) ? smoothstep(13.5, 10.5, pCam.z) : smoothstep(18.0, 15.8, pCam.z);
+                float poleHitThresh = (c >= 5u) ? 0.28 : 0.16;
+                if (wPatch > 0.30 && poleResp > poleHitThresh && poleRangeGate > 0.05) {
+                    uint grpBit = (c < 3u) ? 1u : (1u << (c - 2u));
+                    hitGroupsMask |= grpBit;
+                }
+
                 // Deformable spatial cross-attention weight (prefers sharp center rays & unsoiled cameras)
                 float rangeAtten = 1.0 / (1.0 + 0.025 * pCam.z);
                 float centerAtten = 1.0 - 0.35 * length(vec2(uNorm - 0.5, vNorm - 0.5));
                 float attnW = wPatch * rangeAtten * centerAtten;
 
-                agg[0] += m0 * attnW;
-                agg[1] += m1 * attnW;
-                agg[2] += m2 * attnW;
-                agg[3] += m3 * attnW;
-                totalWeight += attnW;
-                varWeightedSum += varPatch * attnW;
+                camValid[c] = true;
+                camAttnW[c] = attnW;
+                camVar[c] = varPatch;
+                camM0[c] = m0;
+                camM1[c] = m1;
+                camM2[c] = vec4(m2.xyz, m2.w * poleRangeGate);
+                camM3[c] = m3;
+                camDynSal[c] = (m1.x * 1.05 + m1.y * 1.35 + m1.z * 1.1) * clamp(1.0 - m2.x * 1.3 - m1.w * 0.7, 0.0, 1.0);
+                camPoleW[c] = (m2.w * poleRangeGate) * clamp(1.0 - m1.x * 1.5 - m1.y * 1.5, 0.0, 1.0);
                 if (zi == 1) camHits += wPatch;
+            }
 
-                float objSal = (m1.x * 0.9 + m1.y * 1.45 + m1.z * 1.1) * clamp(1.0 - m2.x * 1.3 - m1.w * 0.7, 0.0, 1.0);
+            const float poleParallaxGate = (bitCount(hitGroupsMask) >= 2) ? 1.0 : 0.0;
+            for (uint c = 0u; c < 8u; ++c) {
+                if (!camValid[c]) continue;
+                float attnW = camAttnW[c];
+                vec4 m2Gated = vec4(camM2[c].xyz, camM2[c].w * poleParallaxGate);
+
+                agg[0] += camM0[c] * attnW;
+                agg[1] += camM1[c] * attnW;
+                agg[2] += m2Gated * attnW;
+                agg[3] += camM3[c] * attnW;
+                totalWeight += attnW;
+                varWeightedSum += camVar[c] * attnW;
+
+                float objSal = camDynSal[c] + camPoleW[c] * 2.25 * poleParallaxGate;
                 zScoreAcc += objSal * attnW;
                 zWAcc += attnW;
             }

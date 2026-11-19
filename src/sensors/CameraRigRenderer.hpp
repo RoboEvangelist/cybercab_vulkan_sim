@@ -19,6 +19,7 @@ struct CameraMatrices {
     Mat4 proj;
     Mat4 viewProj;
     CameraIntrinsics intr;
+    std::array<float, 4> distortion{};
     float renderScale = 1.0f;
 };
 

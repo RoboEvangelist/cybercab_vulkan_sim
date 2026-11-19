@@ -93,6 +93,13 @@ void TraceLogger::logFrame(int stepIdx, float simTimeSec,
     jEval["pos_rmse_m"] = perc.eval.trackPosRmseM;
     jEval["matched_gt"] = perc.eval.matchedGtObjects;
     jEval["total_gt"] = perc.eval.totalGtDynamic;
+    jEval["ghost_ped_dets"] = perc.eval.ghostPedDetections;
+    jEval["ghost_veh_dets"] = perc.eval.ghostVehDetections;
+    jEval["misclassified_trucks"] = perc.eval.misclassifiedTrucks;
+    jEval["truck_veh_voxels"] = perc.eval.truckVehVoxels;
+    jEval["truck_ped_voxels"] = perc.eval.truckPedVoxels;
+    jEval["sign_pole_voxels"] = perc.eval.signPoleVoxels;
+    jEval["total_pipeline_ms"] = perc.eval.totalPipelineMs;
     root["eval_metrics"] = jEval;
 
     Json::Value jGpu;

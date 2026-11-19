@@ -18,6 +18,12 @@ layout(push_constant) uniform BackbonePC {
     uint featHeight;
     uint patchCols;
     uint patchRows;
+    uint hasPrevTensor;
+    uint pad0;
+    vec4 horizon03;
+    vec4 horizon47;
+    vec4 horizonSlope03;
+    vec4 horizonSlope47;
 } pc;
 
 vec3 fetchCurr(uint cam, int x, int y) {
@@ -32,6 +38,24 @@ vec3 fetchPrev(uint cam, int x, int y) {
     return uPrevCamTensor.pixels[(cam * pc.camHeight + uint(cy)) * pc.camWidth + uint(cx)].rgb;
 }
 
+float satOf(vec3 col) {
+    const float mx = max(col.r, max(col.g, col.b));
+    const float mn = min(col.r, min(col.g, col.b));
+    return (mx > 1e-4) ? ((mx - mn) / mx) : 0.0;
+}
+
+// Painted (saturated) or silver-metallic vehicle body sample used to ground dark foreground tire/underbody pixels
+bool isVehBodySample(vec3 s) {
+    const float sf = satOf(s);
+    const float sl = luma(s);
+    return (sf > 0.38 && sl > 0.10) ||
+           (sf >= 0.14 && sf < 0.24 && s.b >= s.g && s.g >= s.r && sl > 0.215);
+}
+
+bool isDarkAsphaltSample(vec3 s) {
+    return (s.b >= s.g * 0.96) && (satOf(s) < 0.36) && (luma(s) < 0.225);
+}
+
 shared vec4 s_block[8][8][4];
 
 void main() {
@@ -40,23 +64,31 @@ void main() {
     const uint cam = gl_GlobalInvocationID.z;
     if (fx >= pc.featWidth || fy >= pc.featHeight) return;
 
+    const float baseHorizV = (cam < 4u) ? pc.horizon03[cam] : pc.horizon47[cam - 4u];
+    const float horizSlope = (cam < 4u) ? pc.horizonSlope03[cam] : pc.horizonSlope47[cam - 4u];
+
     const int strideX = int(pc.camWidth / pc.featWidth);
     const int strideY = int(pc.camHeight / pc.featHeight);
     const int x0 = int(fx) * strideX;
     const int y0 = int(fy) * strideY;
 
     float gxAcc = 0.0, gyAcc = 0.0, motAcc = 0.0;
-    float vehScoreAcc = 0.0, pedScoreAcc = 0.0, sigScoreAcc = 0.0, roadScoreAcc = 0.0;
+    float vehScoreAcc = 0.0, pedScoreAcc = 0.0, sigScoreAcc = 0.0, poleSignAcc = 0.0, poleStrongAcc = 0.0, roadScoreAcc = 0.0;
     float skyScoreAcc = 0.0, bldgScoreAcc = 0.0, lumAcc = 0.0;
     float samples = 0.0;
+    float minObjU = 1.0, maxObjU = 0.0;
+    float minObjV = 1.0, maxObjV = 0.0;
+    bool hasSubObj = false;
 
-    for (int dy = 0; dy < strideY; dy += 2) {
-        for (int dx = 0; dx < strideX; dx += 2) {
+    for (int dy = 0; dy < strideY; ++dy) {
+        for (int dx = 0; dx < strideX; ++dx) {
             const int px = x0 + dx;
             const int py = y0 + dy;
             const vec3 c = fetchCurr(cam, px, py);
             const vec3 p = fetchPrev(cam, px, py);
+            const float uFrac = float(px) / float(pc.camWidth);
             const float vFrac = float(py) / float(pc.camHeight);
+            const float camHorizV = clamp(baseHorizV + horizSlope * (uFrac - 0.5), 0.34, 0.66);
 
             const float lC = luma(c);
             const float lL = luma(fetchCurr(cam, px - 2, py));
@@ -66,44 +98,166 @@ void main() {
 
             const float gx = abs(lR - lL);
             const float gy = abs(lD - lU);
-            const float mot = length(c - p);
+            const float mot = (pc.hasPrevTensor != 0u) ? length(c - p) : 0.0;
 
             const float maxC = max(c.r, max(c.g, c.b));
             const float minC = min(c.r, min(c.g, c.b));
             const float sat = (maxC > 1e-4) ? ((maxC - minC) / maxC) : 0.0;
 
-            const float isSky = clamp((c.b - c.r) * 3.5, 0.0, 1.0) * clamp((lC - 0.42) * 3.0, 0.0, 1.0);
+            // Sky is blue-dominant over green & red; avoid misclassifying green/cyan traffic lights as sky
+            const float isSky = clamp((c.b - c.g) * 4.0, 0.0, 1.0) * clamp((c.b - c.r) * 3.0, 0.0, 1.0) * clamp((lC - 0.42) * 3.0, 0.0, 1.0);
             const float isAsphalt = clamp(1.0 - sat * 3.5, 0.0, 1.0) * clamp(1.0 - abs(lC - 0.16) * 5.0, 0.0, 1.0);
-            const float isSlateGround = (vFrac > 0.47 && c.b >= c.g && c.g >= c.r && sat < 0.60 && lC < 0.34) ? 1.0 : 0.0;
-            const float isWhiteStripe = (vFrac > 0.49) ? (clamp(1.0 - sat * 5.0, 0.0, 1.0) * clamp((lC - 0.54) * 3.5, 0.0, 1.0)) : 0.0;
-            const float isAmberCurb = (vFrac > 0.47 && c.r > c.g * 1.08 && c.r < c.g * 1.80 && c.g > c.b * 1.22 && (c.r - c.b) > 0.12) ? 1.0 : 0.0;
+            const bool silverColorMatch = (sat >= 0.14 && sat < 0.235) && c.b >= c.g && c.g >= c.r &&
+                                          (c.b <= c.r * 1.32) && lC >= 0.215 && lC <= 0.85;
+            const float roadTopV = min(0.47, camHorizV + 0.008);
+            const float isSlateGround = (vFrac > roadTopV && c.b >= c.g && c.g >= c.r && sat < 0.60 && (vFrac <= 0.80 || lC >= 0.105) && lC < 0.34 && !silverColorMatch) ? 1.0 : 0.0;
+            const vec3 cStripeU4 = fetchCurr(cam, px, py - 4);
+            const vec3 cStripeU7 = fetchCurr(cam, px, py - 7);
+            const vec3 cStripeD4 = fetchCurr(cam, px, py + 4);
+            const vec3 cStripeD7 = fetchCurr(cam, px, py + 7);
+            const bool darkAboveStripe = (luma(cStripeU4) < 0.28 && satOf(cStripeU4) < 0.45) ||
+                                         (luma(cStripeU7) < 0.28 && satOf(cStripeU7) < 0.45);
+            const bool darkBelowStripe = (luma(cStripeD4) < 0.28 && satOf(cStripeD4) < 0.45) ||
+                                         (luma(cStripeD7) < 0.28 && satOf(cStripeD7) < 0.45);
+            const bool flatRoadStrip = (vFrac > camHorizV + 0.005) && darkAboveStripe && darkBelowStripe;
+            const float isWhiteStripe = (vFrac > 0.49 || flatRoadStrip) ? (clamp(1.0 - sat * 5.0, 0.0, 1.0) * clamp((lC - 0.42) * 4.5, 0.0, 1.0)) : 0.0;
+            const float isAmberCurb = (vFrac > min(0.45, camHorizV + 0.004) && c.r > c.g * 1.05 && c.r < c.g * 1.82 && c.g > c.b * 1.15 && (c.r - c.b) > 0.10) ? 1.0 : 0.0;
             const float isRoad = clamp(isAsphalt + isSlateGround + isWhiteStripe + isAmberCurb, 0.0, 1.0);
 
-            // Emissive red/amber/green signal lenses or taillights
-            const float isRedSig = clamp((c.r - 0.62) * 3.0, 0.0, 1.0) * clamp((c.r - c.g) * 2.5, 0.0, 1.0);
-            const float isGrnSig = clamp((c.g - 0.58) * 3.0, 0.0, 1.0) * clamp((c.g - c.r) * 2.0, 0.0, 1.0) * (vFrac < 0.45 ? 1.0 : 0.2);
+            // Emissive red/green signal lenses or deep crimson / bloomed-pink taillights (exclude amber road curbs!)
+            const float isRedSig = clamp((c.r - 0.62) * 3.0, 0.0, 1.0) * clamp((c.r - c.g * 1.85) * 3.0, 0.0, 1.0) * (1.0 - isAmberCurb);
+            const float isBloomedRed = clamp((c.r - 0.48) * 3.5, 0.0, 1.0) *
+                                       clamp((c.r - c.g * 1.24) * 3.5, 0.0, 1.0) *
+                                       clamp((c.r - c.b * 1.24) * 3.5, 0.0, 1.0) *
+                                       (1.0 - isAmberCurb);
+            const float isGrnSig = clamp((c.g - 0.55) * 3.0, 0.0, 1.0) * clamp((c.g - c.r) * 2.0, 0.0, 1.0) *
+                                   clamp((c.g - c.b * 0.96) * 5.0, 0.0, 1.0) * (1.0 - isSky) * (1.0 - isRoad) * (vFrac < 0.46 ? 1.0 : 0.15);
             const float isSig = (vFrac < 0.47) ? clamp(isRedSig + isGrnSig, 0.0, 1.0) : 0.0;
 
             // Mask out ego vehicle's own gold hood/nose/fenders in camera views
-            const float uFrac = float(px) / float(pc.camWidth);
-            const bool isEgoSelf = (cam == 0u && vFrac > 0.78) ||
+            const bool isEgoSelf = (cam == 0u && vFrac > 0.89) ||
                                    (cam == 2u && vFrac > 0.68 && uFrac > 0.15 && uFrac < 0.85) ||
+                                   (cam == 3u && uFrac > 0.87 && vFrac > 0.50) ||
+                                   (cam == 4u && uFrac < 0.13 && vFrac > 0.50) ||
                                    (cam == 5u && uFrac > 0.66 && vFrac > 0.45) ||
                                    (cam == 6u && uFrac < 0.34 && vFrac > 0.45) ||
-                                   (vFrac > 0.84);
+                                   (vFrac > 0.89);
 
-            // Pedestrian chromaticity (saturated shirt in road/sidewalk band, exclude slate/road/curb/ego)
-            const float roadBand = smoothstep(0.40, 0.46, vFrac) * (1.0 - smoothstep(0.76, 0.86, vFrac));
-            const float isPedColor = isEgoSelf ? 0.0 : (clamp((sat - 0.48) * 2.8, 0.0, 1.0) * clamp((lC - 0.19) * 3.5, 0.0, 1.0) * (1.0 - isSky) * (1.0 - isRoad));
+            // Narrow vertical poles (sign posts, signal masts): isolated same-sign horizontal ridge/valley + vertical continuity
+            bool isPoleMatch = false;
+            if (!isEgoSelf && (1.0 - isSky) > 0.5 && vFrac > 0.05 && vFrac < 0.78 &&
+                c.b > c.g && c.g > c.r && sat >= 0.32 && sat <= 0.50 && lC >= 0.060 && lC <= 0.54) {
+                const vec3 cU4 = fetchCurr(cam, px, py - 4);
+                const vec3 cD4 = fetchCurr(cam, px, py + 4);
+                const float vertDiff = min(length(cU4 - c), length(cD4 - c));
+                if (vertDiff < 0.045) {
+                    const vec3 cL4 = fetchCurr(cam, px - 4, py);
+                    const vec3 cR4 = fetchCurr(cam, px + 4, py);
+                    const vec3 cL8 = fetchCurr(cam, px - 8, py);
+                    const vec3 cR8 = fetchCurr(cam, px + 8, py);
+                    const float dLumL4 = lC - luma(cL4), dLumR4 = lC - luma(cR4);
+                    const float dLumL8 = lC - luma(cL8), dLumR8 = lC - luma(cR8);
+                    const float dBluL4 = c.b - cL4.b, dBluR4 = c.b - cR4.b;
+                    const float dBluL8 = c.b - cL8.b, dBluR8 = c.b - cR8.b;
+                    const float maxBgL4 = max(luma(cL4), luma(cR4));
+                    const float maxBgL8 = max(luma(cL8), luma(cR8));
+                    const float minBgL4 = min(luma(cL4), luma(cR4));
+                    const float minBgL8 = min(luma(cL8), luma(cR8));
+                    const bool groundLuma = (lC <= 0.35);
+                    const vec3 cU8 = fetchCurr(cam, px, py - 8);
+                    const vec3 cU16 = fetchCurr(cam, px, py - 16);
+                    const vec3 cU24 = fetchCurr(cam, px, py - 24);
+                    const bool poleAbove = (cU8.b > cU8.g && cU8.b > cU8.r * 1.15 && satOf(cU8) >= 0.25 && length(cU8 - c) < 0.10) &&
+                                           ((cU16.b > cU16.r * 1.12 && !(cU16.g > cU16.r * 1.6 && cU16.g > cU16.b)) ||
+                                            (satOf(cU16) < 0.16 && luma(cU16) >= 0.52)) &&
+                                           !(cU24.r > cU24.b * 1.15);
+                    const bool symGround4 = (minBgL4 >= 0.135 && length(cL4 - cR4) < 0.08 && poleAbove);
+                    const bool symGround8 = (minBgL8 >= 0.135 && length(cL8 - cR8) < 0.08 && poleAbove);
+                    const bool valley4 = ((maxBgL4 > 0.42 || symGround4) && dLumL4 < -0.032 && dLumR4 < -0.032);
+                    const bool valley8 = ((maxBgL8 > 0.42 || symGround8) && dLumL8 < -0.032 && dLumR8 < -0.032);
+                    const bool ridge4 = ((groundLuma && ((dLumL4 > 0.020 && dLumR4 > 0.020) || (dBluL4 > 0.028 && dBluR4 > 0.028)) && length(cL4 - cR4) < 0.24) || valley4);
+                    const bool ridge8 = ((groundLuma && ((dLumL8 > 0.020 && dLumR8 > 0.020) || (dBluL8 > 0.028 && dBluR8 > 0.028)) && length(cL8 - cR8) < 0.24) || valley8);
+                    isPoleMatch = (ridge4 || ridge8);
+                }
+            }
+            bool isSpeedSignMatch = false;
+            if (!isEgoSelf && sat < 0.14 && (1.0 - isSky) > 0.5 && (1.0 - isRoad) > 0.5 &&
+                vFrac < camHorizV - 0.015 && lC >= 0.62) {
+                const int pyHorizA = clamp(int(camHorizV * float(pc.camHeight)), 0, int(pc.camHeight) - 1);
+                const int pyHorizB = clamp(int((camHorizV + 0.014) * float(pc.camHeight)), 0, int(pc.camHeight) - 1);
+                const vec3 cHLA = fetchCurr(cam, px - 3, pyHorizA);
+                const vec3 cHRA = fetchCurr(cam, px + 3, pyHorizA);
+                const vec3 cHLB = fetchCurr(cam, px - 3, pyHorizB);
+                const vec3 cHRB = fetchCurr(cam, px + 3, pyHorizB);
+                const bool hasBelowWhiteTruck = (luma(cHLA) >= 0.28 && satOf(cHLA) < 0.18) ||
+                                                (luma(cHRA) >= 0.28 && satOf(cHRA) < 0.18) ||
+                                                (luma(cHLB) >= 0.28 && satOf(cHLB) < 0.18) ||
+                                                (luma(cHRB) >= 0.28 && satOf(cHRB) < 0.18);
+                const bool hasBelowBlueCab = (satOf(cHLA) > 0.58 && cHLA.b > cHLA.r * 2.30) ||
+                                             (satOf(cHRA) > 0.58 && cHRA.b > cHRA.r * 2.30) ||
+                                             (satOf(cHLB) > 0.58 && cHLB.b > cHLB.r * 2.30) ||
+                                             (satOf(cHRB) > 0.58 && cHRB.b > cHRB.r * 2.30);
+                const vec3 cW15L = fetchCurr(cam, px - 15, py);
+                const vec3 cW15R = fetchCurr(cam, px + 15, py);
+                const bool extraWideWhite = (luma(cW15L) >= 0.42 && satOf(cW15L) < 0.16 &&
+                                             luma(cW15R) >= 0.42 && satOf(cW15R) < 0.16);
+                isSpeedSignMatch = (!hasBelowWhiteTruck && !hasBelowBlueCab && !extraWideWhite);
+            }
+            const float isPoleOrSign = clamp(max(isSig, max(isPoleMatch ? 0.90 : 0.0, isSpeedSignMatch ? 0.90 : 0.0)), 0.0, 1.0);
+
+            // Road band calibrated per-camera to true world horizon scanline camHorizV
+            const float roadBand = smoothstep(camHorizV - 0.008, camHorizV + 0.018, vFrac) *
+                                   (1.0 - smoothstep(0.85, 0.93, vFrac));
+            // Crimson-magenta pedestrian outfits (c.b/c.g ~ 1.49 on PED_08; synthetic magenta test cars have c.b/c.g > 2.0)
+            const bool isCrimsonPed = (c.r > c.b * 1.40) && (c.b > c.g * 1.24) && (c.b < c.g * 1.85) && (sat > 0.44);
+            const float isPedColor = isEgoSelf ? 0.0 : (clamp((sat - 0.44) * 2.8, 0.0, 1.0) * clamp((lC - 0.06) * 5.0, 0.0, 1.0) * (1.0 - isSky) * (1.0 - isRoad));
             const float isPed = isPedColor * roadBand;
 
-            // Vehicle chassis: mid-frame painted car body / red taillight / truck cargo box (strictly upper vertical band to avoid flat white crosswalks)
-            const float isTail = isRedSig * smoothstep(0.44, 0.54, vFrac);
-            const float isVehPaint = isEgoSelf ? 0.0 : (clamp((sat - 0.42) * 2.5, 0.0, 1.0) * clamp((lC - 0.19) * 3.5, 0.0, 1.0) * (1.0 - isSky) * (1.0 - isRoad) * roadBand);
-            const float isTruckBox = (!isEgoSelf && vFrac > 0.34 && vFrac < 0.495 && sat < 0.16 && lC > 0.33 && c.b >= c.r * 0.95 && (1.0 - isSky) > 0.5) ? 0.85 : 0.0;
-            const float isVeh = clamp(isVehPaint * 0.78 + isTail * 1.4 + isTruckBox, 0.0, 1.0);
+            // Vehicle chassis: mid-frame painted car body / red-orange or bloomed taillight / shaded or sunlit truck cargo box
+            const float isTailColor = (c.b < c.g * 1.18 && c.b < c.g + 0.08) ? 1.0 : 0.0;
+            const float isTail = max(isRedSig, isBloomedRed) * isTailColor * smoothstep(camHorizV - 0.015, camHorizV + 0.065, vFrac) * (1.0 - isRoad) * (isCrimsonPed ? 0.0 : 1.0);
+            const float isVehPaint = isEgoSelf ? 0.0 : (clamp((sat - 0.44) * 2.8, 0.0, 1.0) * clamp((lC - 0.06) * 5.0, 0.0, 1.0) * (1.0 - isSky) * (1.0 - isRoad) * roadBand * (isCrimsonPed ? 0.85 : 1.0));
+            const bool neutralNonSkyRoad = !isEgoSelf && sat < 0.14 && c.b >= c.r * 0.95 && (1.0 - isSky) > 0.5 && (1.0 - isRoad) > 0.5;
+            const bool shadedTruckCore = neutralNonSkyRoad && sat < 0.055 && vFrac > 0.06 && vFrac < 0.62 && lC > 0.28 && lC < 0.44 &&
+                                         !(sat < 0.045 && lC < 0.354 && vFrac > 0.55);
+            const bool shadedTruckPanel = shadedTruckCore ||
+                                          (neutralNonSkyRoad && vFrac > 0.06 && vFrac < camHorizV + 0.010 && lC > 0.28 && lC < 0.58);
+            const bool sunlitUpperCargo = !isEgoSelf && sat < 0.095 && c.b >= c.r * 0.88 && (1.0 - isSky) > 0.5 && (1.0 - isRoad) > 0.5 &&
+                                          vFrac > 0.22 && vFrac < 0.70 && lC >= 0.52 && lC < 0.985;
+            const bool sunlitTruckPanel = sunlitUpperCargo || (neutralNonSkyRoad && vFrac > camHorizV + 0.003 && vFrac < min(0.515, camHorizV + 0.025) && lC >= 0.45);
+            const float isTruckBox = (shadedTruckPanel || sunlitTruckPanel) ? 0.85 : 0.0;
+            // Deep blue-tinted vehicle windshield glass bridges lower bumper/cab to upper roof/cargo box
+            const float isVehGlass = (!isEgoSelf && sat > 0.58 && c.b > c.r * 2.30 && c.b > c.g * 1.45 &&
+                                      lC > 0.025 && lC < 0.16 && (1.0 - isSky) > 0.5 && (1.0 - isRoad) > 0.5 &&
+                                      vFrac > camHorizV - 0.06 && vFrac < 0.58) ? 0.58 : 0.0;
+            bool isSilverStripeAA = false;
+            if (!isEgoSelf && silverColorMatch && (1.0 - isSky) > 0.5 &&
+                vFrac > camHorizV - 0.01 && vFrac < 0.89) {
+                const bool horizFlanked = isDarkAsphaltSample(fetchCurr(cam, px - 5, py)) &&
+                                          isDarkAsphaltSample(fetchCurr(cam, px + 5, py));
+                const bool vertFlanked = (vFrac > camHorizV + 0.018) &&
+                                         isDarkAsphaltSample(fetchCurr(cam, px, py - 4)) &&
+                                         isDarkAsphaltSample(fetchCurr(cam, px, py + 4));
+                isSilverStripeAA = horizFlanked || vertFlanked;
+            }
+            const bool isSilverMetallic = !isEgoSelf && silverColorMatch && !isSilverStripeAA && (1.0 - isSky) > 0.5 &&
+                                          vFrac > camHorizV - 0.01 && vFrac < 0.89;
+            // Dark foreground tires / underbody shadow directly beneath close vehicle chassis (grounds close Cam0 vBot)
+            bool isVehDarkBase = false;
+            if (!isEgoSelf && (1.0 - isSky) > 0.5 && vFrac > 0.80 && vFrac < 0.90 && lC < 0.095 && sat < 0.55) {
+                const vec3 vU4 = fetchCurr(cam, px, py - 4);
+                const vec3 vU8 = fetchCurr(cam, px, py - 8);
+                const vec3 vU12 = fetchCurr(cam, px, py - 12);
+                if (isVehBodySample(vU4) || isVehBodySample(vU8) || isVehBodySample(vU12)) {
+                    const vec3 vL3 = fetchCurr(cam, px - 3, py);
+                    const vec3 vR3 = fetchCurr(cam, px + 3, py);
+                    isVehDarkBase = (luma(vL3) < 0.12 || luma(vR3) < 0.12);
+                }
+            }
+            const float isVeh = clamp(isVehPaint + isTail * 1.4 + isTruckBox + isVehGlass + (isSilverMetallic ? 0.78 : 0.0) + (isVehDarkBase ? 0.68 : 0.0), 0.0, 1.0);
 
-            const float isBldg = (1.0 - isSky) * (1.0 - isRoad) * (vFrac < 0.41 ? 0.95 : 0.0);
+            // Buildings & ground-floor window strips above camera horizon (do not mask truck cargo box!)
+            const float isBldg = (1.0 - isSky) * (1.0 - isRoad) * (1.0 - isTruckBox) * (1.0 - isVehGlass) * (isSilverMetallic ? 0.0 : 1.0) * smoothstep(camHorizV, camHorizV - 0.038, vFrac) * 0.95;
 
             gxAcc += gx;
             gyAcc += gy;
@@ -111,10 +265,23 @@ void main() {
             vehScoreAcc += isVeh;
             pedScoreAcc += isPed;
             sigScoreAcc += isSig;
+            poleSignAcc += isPoleOrSign;
+            if (isPoleOrSign >= 0.45) poleStrongAcc += 1.0;
             roadScoreAcc += isRoad;
             skyScoreAcc += isSky;
             bldgScoreAcc += isBldg;
             lumAcc += lC;
+            if (max(isVeh, max(isPed, isSig)) > 0.23) {
+                const float u0 = (float(px) + 0.15) / float(pc.camWidth);
+                const float v0 = (float(py) + 0.15) / float(pc.camHeight);
+                const float u1 = (float(px) + 0.85) / float(pc.camWidth);
+                const float v1 = (float(py) + 0.85) / float(pc.camHeight);
+                minObjU = min(minObjU, u0);
+                maxObjU = max(maxObjU, u1);
+                minObjV = min(minObjV, v0);
+                maxObjV = max(maxObjV, v1);
+                hasSubObj = true;
+            }
             samples += 1.0;
         }
     }
@@ -126,6 +293,8 @@ void main() {
     const float mVeh = vehScoreAcc / samples;
     const float mPed = pedScoreAcc / samples;
     const float mSig = sigScoreAcc / samples;
+    const float mPoleRaw = poleSignAcc / samples;
+    const float mPoleCoh = (poleStrongAcc >= 3.0) ? clamp(mPoleRaw * 3.0, 0.0, 1.0) : mPoleRaw;
     const float mRoad = roadScoreAcc / samples;
     const float mSky = skyScoreAcc / samples;
     const float mBldg = bldgScoreAcc / samples;
@@ -143,11 +312,13 @@ void main() {
     const float vPrior = clamp((float(fy) + 0.5) / float(pc.featHeight), 0.0, 1.0);
 
     const float objEnergy = clamp((mVeh * 0.75 + mPed * 1.15 + mSig * 0.85) * fovea * wPatch, 0.0, 1.5);
+    const float packedMinUV = hasSubObj ? (floor(clamp(minObjU, 0.0, 0.9999) * 2047.0 + 0.5) * 2048.0 + floor(clamp(minObjV, 0.0, 0.9999) * 2047.0 + 0.5)) : -1.0;
+    const float packedMaxUV = hasSubObj ? (floor(clamp(maxObjU, 0.0, 1.0) * 2047.0 + 0.5) * 2048.0 + floor(clamp(maxObjV, 0.0, 1.0) * 2047.0 + 0.5)) : -1.0;
 
-    const vec4 c0 = vec4(mGx, mGy, clamp((mGx + mGy) * fovea, 0.0, 2.0), silu(mGx + mGy - 0.05));
+    const vec4 c0 = vec4(mGx, mGy, clamp((mGx + mGy) * fovea, 0.0, 2.0), packedMinUV);
     const vec4 c1 = vec4(mVeh * wPatch, mPed * wPatch, mSig * wPatch, mRoad);
-    const vec4 c2 = vec4(mSky, mBldg, mMot, mLum);
-    const vec4 c3 = vec4(vPrior, wPatch, sigmaSoil, objEnergy);
+    const vec4 c2 = vec4(mSky, mBldg, mMot, mPoleCoh * wPatch);
+    const vec4 c3 = vec4(vPrior, wPatch, packedMaxUV, objEnergy);
 
     const uint baseIdx = ((cam * pc.featHeight + fy) * pc.featWidth + fx) * 4u;
     uFeatS4.feat[baseIdx + 0u] = c0;

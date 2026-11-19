@@ -197,6 +197,16 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
         }
     }
 
+    if (cfg.controlHz <= 0.0f || cfg.camWidth <= 0 || cfg.camHeight <= 0 ||
+        cfg.featWidth <= 0 || cfg.featHeight <= 0 ||
+        cfg.occStepX <= 0.0f || cfg.occStepY <= 0.0f || cfg.occStepZ <= 0.0f ||
+        cfg.occNx() <= 0 || cfg.occNy() <= 0 || cfg.occNz() <= 0 ||
+        cfg.rtdetrLowConfThresh <= 0.0f || cfg.rtdetrLowConfThresh >= cfg.rtdetrHighConfThresh ||
+        cfg.soilMinTokenWeight <= 0.0f || cfg.soilMinTokenWeight >= 1.0f ||
+        cfg.wheelbaseM <= 0.0f) {
+        throw std::runtime_error("Invalid numeric parameter bounds in SimConfig YAML");
+    }
+
     return cfg;
 }
 

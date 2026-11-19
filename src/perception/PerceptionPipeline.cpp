@@ -26,6 +26,7 @@ void PerceptionPipeline::onCameraResized(const CameraRigRenderer& rig) {
 
 void PerceptionPipeline::reset() {
     tracker_.reset();
+    detr_.resetHistory();
     bev_.resetHistory();
     occ_.resetVoxels();
 }
@@ -46,6 +47,7 @@ void PerceptionPipeline::runFrame(const VulkanContext& ctx,
                                   PerceptionFrameOutput& out,
                                   GpuProfiler* profiler) {
     const EgoState& ego = world.ego();
+    detr_.updateHorizonFromRig(rig);
 
     // GPU Batch 1: SoilDetector -> Backbone + FPN -> RT-DETR Encoder & Decoder
     {
@@ -109,6 +111,11 @@ void PerceptionPipeline::runFrame(const VulkanContext& ctx,
         out.gpuStageMs = profiler->resolveTimingsMs();
     }
     out.eval = evaluateAgainstGroundTruth(world, out);
+    double sumMs = 0.0;
+    for (const auto& kv : out.gpuStageMs) {
+        sumMs += kv.second;
+    }
+    out.eval.totalPipelineMs = sumMs;
 }
 
 PerceptionFrameOutput PerceptionPipeline::runFrame(const VulkanContext& ctx,
@@ -133,7 +140,6 @@ EvalMetrics PerceptionPipeline::evaluateAgainstGroundTruth(const WorldEngine& wo
         }
     }
     m.totalGtDynamic = static_cast<int>(gtInRangeScratch_.size());
-    if (gtInRangeScratch_.empty()) return m;
 
     int matchedGt = 0;
     double sqErrSum = 0.0;
@@ -155,16 +161,67 @@ EvalMetrics PerceptionPipeline::evaluateAgainstGroundTruth(const WorldEngine& wo
     for (const auto& d : out.detections3D) {
         if (d.semantic == SemanticClass::SignalSign || d.rangeM > 42.0f) continue;
         validDets++;
+        bool matchedAny = false;
+        bool matchedSameClass = false;
         for (const auto& g : gtInRangeScratch_) {
-            if (std::hypot(d.worldPos.x - g.cx, d.worldPos.z - g.cz) < 6.0f) {
-                tpDets++;
+            const float dist = std::hypot(d.worldPos.x - g.cx, d.worldPos.z - g.cz);
+            if (dist < 6.0f) matchedAny = true;
+            if (g.semantic == d.semantic && dist < ((d.semantic == SemanticClass::Pedestrian) ? 3.5f : 5.0f)) {
+                matchedSameClass = true;
+            }
+        }
+        if (matchedAny) tpDets++;
+        if (!matchedSameClass) {
+            if (d.semantic == SemanticClass::Pedestrian) m.ghostPedDetections++;
+            else if (d.semantic == SemanticClass::Vehicle) m.ghostVehDetections++;
+        }
+    }
+
+    if (!world.vehicles().empty()) {
+        const auto& truck = world.vehicles().at(0);
+        const float truckRange = std::hypot(truck.pos.x - ego.pos.x, truck.pos.z - ego.pos.z);
+        if (truckRange <= 42.0f) {
+            for (const auto& d : out.detections3D) {
+                if (d.semantic == SemanticClass::Pedestrian &&
+                    std::hypot(d.worldPos.x - truck.pos.x, d.worldPos.z - truck.pos.z) < 5.5f) {
+                    m.misclassifiedTrucks++;
+                }
+            }
+            const float cosY = std::cos(truck.yaw), sinY = std::sin(truck.yaw);
+            for (const auto& v : out.activeVoxels) {
+                const float dx = v.wx - truck.pos.x;
+                const float dz = v.wz - truck.pos.z;
+                const float locX = dx * cosY - dz * sinY;
+                const float locZ = dx * sinY + dz * cosY;
+                if (std::abs(locX) <= truck.halfExtents.x + 0.6f &&
+                    std::abs(locZ) <= truck.halfExtents.z + 0.6f &&
+                    v.wy <= truck.halfExtents.y * 2.0f + 0.6f) {
+                    if (v.sem == SemanticClass::Vehicle) m.truckVehVoxels++;
+                    else if (v.sem == SemanticClass::Pedestrian) m.truckPedVoxels++;
+                }
+            }
+        }
+    }
+
+    const Vec2 signAnchors[] = {
+        {6.5f, WorldEngine::kLoopHalfZ - 6.2f},
+        {12.5f, -WorldEngine::kLoopHalfZ - 5.6f},
+        {-34.0f, WorldEngine::kLoopHalfZ + 5.6f},
+        {WorldEngine::kLoopHalfX - 6.0f, 0.0f},
+        {WorldEngine::kLoopHalfX + 6.0f, 0.0f},
+    };
+    for (const auto& v : out.activeVoxels) {
+        if (v.sem != SemanticClass::SignalSign && v.sem != SemanticClass::Static) continue;
+        for (const auto& sa : signAnchors) {
+            if (std::hypot(v.wx - sa.x, v.wz - sa.y) <= 2.2f) {
+                m.signPoleVoxels++;
                 break;
             }
         }
     }
 
     m.matchedGtObjects = matchedGt;
-    m.detRecall = static_cast<float>(matchedGt) / static_cast<float>(gtInRangeScratch_.size());
+    m.detRecall = (!gtInRangeScratch_.empty()) ? (static_cast<float>(matchedGt) / static_cast<float>(gtInRangeScratch_.size())) : 0.0f;
     m.detPrecision = (validDets > 0) ? (static_cast<float>(tpDets) / static_cast<float>(validDets)) : 0.0f;
     m.trackPosRmseM = (matchedGt > 0) ? static_cast<float>(std::sqrt(sqErrSum / matchedGt)) : 0.0f;
     return m;

@@ -28,15 +28,24 @@ layout(std430, binding = 3) readonly buffer TrackPriorsIn {
 // Persistent voxel grid updated via Bayesian log-odds across frames:
 //   state: vec4(float(semanticClass), confidence, vx_world, vz_world)
 //   uncert: vec4(epistemicSigma, obsWeight, flowSpeed, zWorld)
-layout(std430, binding = 4) buffer VoxelStateIO {
+layout(std430, binding = 4) writeonly buffer VoxelStateOut {
     vec4 state[];
 } uVoxelState;
 
-layout(std430, binding = 5) buffer VoxelUncertIO {
+layout(std430, binding = 5) writeonly buffer VoxelUncertOut {
     vec4 uncert[];
 } uVoxelUncert;
 
+layout(std430, binding = 6) readonly buffer PrevVoxelStateIn {
+    vec4 state[];
+} uPrevVoxelState;
+
+layout(std430, binding = 7) readonly buffer PrevVoxelUncertIn {
+    vec4 uncert[];
+} uPrevVoxelUncert;
+
 layout(push_constant) uniform OccPC {
+    mat4 prevEgoFromCurrEgo;
     uint nx;
     uint ny;
     uint nz;
@@ -56,24 +65,66 @@ layout(push_constant) uniform OccPC {
 } pc;
 
 void main() {
-    uint ix = gl_GlobalInvocationID.x;
-    uint iy = gl_GlobalInvocationID.y;
-    uint iz = gl_GlobalInvocationID.z;
+    const uint ix = gl_GlobalInvocationID.x;
+    const uint iy = gl_GlobalInvocationID.y;
+    const uint iz = gl_GlobalInvocationID.z;
     if (ix >= pc.nx || iy >= pc.ny || iz >= pc.nz) return;
 
-    float stepX = (pc.maxX - pc.minX) / float(pc.nx);
-    float stepY = (pc.maxY - pc.minY) / float(pc.ny);
-    float stepZ = (pc.maxZ - pc.minZ) / float(pc.nz);
+    const float stepX = (pc.maxX - pc.minX) / float(pc.nx);
+    const float stepY = (pc.maxY - pc.minY) / float(pc.ny);
+    const float stepZ = (pc.maxZ - pc.minZ) / float(pc.nz);
 
-    float egoX = pc.minX + (float(ix) + 0.5) * stepX;
-    float egoY = pc.minY + (float(iy) + 0.5) * stepY;
-    float wy = pc.minZ + (float(iz) + 0.5) * stepZ;
+    const float egoX = pc.minX + (float(ix) + 0.5) * stepX;
+    const float egoY = pc.minY + (float(iy) + 0.5) * stepY;
+    const float wy = pc.minZ + (float(iz) + 0.5) * stepZ;
 
-    uint vIdx = (ix * pc.ny + iy) * pc.nz + iz;
-    uint bevCell = iy * pc.nx + ix;
+    const uint vIdx = (ix * pc.ny + iy) * pc.nz + iz;
+    const uint bevCell = iy * pc.nx + ix;
 
-    const vec4 prevState = uVoxelState.state[vIdx];
-    const uint prevSem = uint(round(prevState.x));
+    // Sub-cell bilinear ego-motion warp from previous occupancy grid into current ISO ego frame
+    // (prevents sub-step ego motion < 0.5*stepX from dragging static voxels forward with the ego car).
+    const vec4 pPrev = pc.prevEgoFromCurrEgo * vec4(egoX, egoY, 0.0, 1.0);
+    const float fx = (pPrev.x - pc.minX) / stepX - 0.5;
+    const float fy = (pPrev.y - pc.minY) / stepY - 0.5;
+    const int x0 = int(floor(fx));
+    const int y0 = int(floor(fy));
+    const float ax = fx - float(x0);
+    const float ay = fy - float(y0);
+
+    float classScore[8];
+    vec2 classVel[8];
+    for (int s = 0; s < 8; ++s) { classScore[s] = 0.0; classVel[s] = vec2(0.0); }
+    for (int dy = 0; dy <= 1; ++dy) {
+        const int pyIdx = y0 + dy;
+        if (pyIdx < 0 || pyIdx >= int(pc.ny)) continue;
+        const float wyB = (dy == 0) ? (1.0 - ay) : ay;
+        for (int dx = 0; dx <= 1; ++dx) {
+            const int pxIdx = x0 + dx;
+            if (pxIdx < 0 || pxIdx >= int(pc.nx)) continue;
+            const float wxB = (dx == 0) ? (1.0 - ax) : ax;
+            const float w = wxB * wyB;
+            if (w <= 1e-4) continue;
+            const uint prevVIdx = (uint(pxIdx) * pc.ny + uint(pyIdx)) * pc.nz + iz;
+            const vec4 st = uPrevVoxelState.state[prevVIdx];
+            const uint sIdx = uint(round(st.x));
+            if (sIdx > 0u && sIdx < 7u && st.y > 0.0) {
+                classScore[sIdx] += w * st.y;
+                classVel[sIdx] += (w * st.y) * st.zw;
+            }
+        }
+    }
+    uint prevSem = 0u;
+    float advConf = 0.0;
+    vec4 prevState = vec4(0.0);
+    for (uint s = 1u; s < 7u; ++s) {
+        if (classScore[s] > advConf) {
+            advConf = classScore[s];
+            prevSem = s;
+        }
+    }
+    if (prevSem > 0u && advConf > 1e-4) {
+        prevState = vec4(float(prevSem), advConf, classVel[prevSem] / advConf);
+    }
     const float prevConf = (prevSem == 7u || prevSem == 0u) ? 0.0 : max(0.0, prevState.y - pc.dt * pc.decayRate);
 
     // Exclude Cybercab's own hull + close bumper shear margin
@@ -106,10 +157,20 @@ void main() {
         zScore = zResp.w * 0.7;
     }
 
-    // Visual occupancy score from BEVFormer features (f1 is already per-pixel road-masked; avoid crushing small agents on road)
-    const float skyRoadMask = clamp(1.0 - f2.x * 1.5 - f1.w * 0.35 - f2.y * 0.65, 0.15, 1.0);
-    const float structMask = smoothstep(0.008, 0.035, f0.z + f2.z * 0.5);
-    const float visualOcc = clamp((zScore * 1.25 + f1.x * 0.85 + f1.y * 1.15 + f1.z * 0.70) * skyRoadMask * structMask * obsWeight, 0.0, 1.0);
+    // Visual occupancy score from BEVFormer features (include smooth uniform vehicle walls & sky-backed signs/poles)
+    const float skyRoadMaskDyn = clamp(1.0 - f2.x * 1.5 - f1.w * 0.35 - f2.y * 0.65, 0.15, 1.0);
+    const float fSig = max(f1.z, f2.w);
+    const bool isSigPillar = (f2.w > 0.08 && fSig >= f1.x * 0.70 && fSig >= f1.y * 1.15 && f1.y < 0.08);
+    const float skyRoadMask = isSigPillar ? max(skyRoadMaskDyn, clamp(0.50 + fSig * 0.85, 0.50, 1.0)) : skyRoadMaskDyn;
+    const float structMask = max(smoothstep(0.008, 0.035, f0.z + f2.z * 0.5),
+                                 max(smoothstep(0.32, 0.58, f1.x) * 0.92,
+                                     smoothstep(0.08, 0.22, f2.w) * 0.95));
+    // Reject tall-obstacle & pole upper-ray projection artifacts onto empty road in front of vehicles/signs:
+    // a real vehicle or grounded pole pillar must also occupy its ground-level anchor zResp.x (y=0.45m).
+    const bool isVehDominant = (f1.x >= f1.y && f1.x >= fSig && wy < 3.4);
+    const float vehGroundGate = isVehDominant ? smoothstep(0.04, 0.20, zResp.x)
+                                              : (isSigPillar ? smoothstep(0.02, 0.10, zResp.x) : 1.0);
+    const float visualOcc = clamp((zScore * 1.25 + f1.x * 0.85 + f1.y * 1.15 + max(f1.z * 0.70, f2.w * 1.45)) * skyRoadMask * structMask * obsWeight * vehGroundGate, 0.0, 1.0);
 
     uint sem = (prevConf > 0.08) ? prevSem : 0u;
     float newConf = prevConf;
@@ -118,15 +179,18 @@ void main() {
     float sigma = sqrt(bevVar);
 
     // Dense BEV visual semantic classification
-    if (visualOcc > max(pc.occThresh, 0.46) && wy < 3.5 && zScore > 0.15) {
+    const bool sigPillarCol = (fSig > f1.x && fSig >= f1.y && f2.w > 0.12);
+    const float occGate = sigPillarCol ? pc.occThresh : max(pc.occThresh, 0.46);
+    if (visualOcc > occGate && wy < 3.5 && (zScore > 0.15 || (sigPillarCol && zScore > 0.09))) {
         newConf = max(newConf, clamp(visualOcc * 1.15, 0.35, 0.95));
-        if (f1.y > f1.x && f1.y > f1.z && wy <= 1.9) {
+        const bool tallVehPillar = (f1.x > 0.14 && (zResp.w > 0.16 || zResp.z > 0.22)) || (f1.x > 0.22 && zResp.y > 0.20);
+        if (f1.y > f1.x * 1.08 + 0.02 && f1.y > fSig && wy <= 1.9 && !tallVehPillar) {
             sem = 2u; // Pedestrian
-        } else if (f1.z > f1.x && wy > 1.2) {
-            sem = 3u; // Signal / Sign
-        } else if (wy > 3.2 && zResp.w > zResp.x * 1.4) {
+        } else if (fSig > f1.x && fSig >= f1.y && ((wy >= 0.35 && f2.w > 0.08) || wy > 1.2)) {
+            sem = 3u; // Signal / Sign / Pole
+        } else if (wy > 3.2 && zResp.w > zResp.x * 1.4 && f1.x < 0.25) {
             sem = 5u; // Overhang
-        } else if (f1.x > 0.25 && wy < 2.5) {
+        } else if (f1.x > 0.25 && wy < (tallVehPillar ? 3.2 : 2.5)) {
             sem = 1u; // Vehicle
         } else if (wy > 0.9) {
             sem = 4u; // Static structure
@@ -155,7 +219,8 @@ void main() {
         float cy = cos(relYaw), sy = sin(relYaw);
         float lx = dx * cy + dy * sy;
         float ly = -dx * sy + dy * cy;
-        float maxH = (tr.sizeMeta.z > 1.5 && tr.sizeMeta.z < 2.5) ? 1.8 : 2.2;
+        const bool isTruckPrior = (tr.sizeMeta.z < 1.5 && tr.sizeMeta.x > 1.10 && tr.sizeMeta.y > 2.50);
+        float maxH = (tr.sizeMeta.z > 1.5 && tr.sizeMeta.z < 2.5) ? 1.8 : (isTruckPrior ? 3.2 : 2.2);
 
         if (abs(lx) <= hz && abs(ly) <= hx && wy <= maxH) {
             uint trSem = uint(round(tr.sizeMeta.z));

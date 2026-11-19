@@ -400,7 +400,8 @@ void CameraRigRenderer::renderAllCameras(const WorldEngine& world, const SimConf
             intr.fx, intr.fy, intr.cx, intr.cy,
             static_cast<float>(camWidth_), static_cast<float>(camHeight_), 0.25f, spec.maxRangeM);
 
-        camMats_[c] = {worldFromCam, camFromWorld, projNominal, projNominal * camFromWorld, intr, renderScale};
+        camMats_[c] = {worldFromCam, camFromWorld, projNominal, projNominal * camFromWorld,
+                       intr, spec.distortion, renderScale};
 
         VkClearValue clears[2]{};
         clears[0].color = {{0.545f, 0.722f, 0.910f, 1.0f}}; // SKY_DAY_COLOR
@@ -477,13 +478,14 @@ void CameraRigRenderer::renderAllCameras(const WorldEngine& world, const SimConf
 
 bool CameraRigRenderer::projectWorldToPixel(int camIdx, const Vec3& worldPt, Vec2& outPx, float& outDepth) const {
     const auto& cm = camMats_.at(camIdx);
-    Vec3 pc = cm.camFromWorld.transformPoint(worldPt);
+    const Vec3 pc = cm.camFromWorld.transformPoint(worldPt);
     outDepth = pc.z;
     if (pc.z <= 0.1f) return false;
-    float xn = pc.x / pc.z;
-    float yn = pc.y / pc.z;
-    outPx.x = cm.intr.fx * xn + cm.intr.cx;
-    outPx.y = cm.intr.fy * yn + cm.intr.cy;
+    const float xn = pc.x / pc.z;
+    const float yn = pc.y / pc.z;
+    const Vec2 dist = distortNormalized(xn, yn, cm.distortion);
+    outPx.x = cm.intr.fx * dist.x + cm.intr.cx;
+    outPx.y = cm.intr.fy * dist.y + cm.intr.cy;
     return true;
 }
 

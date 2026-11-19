@@ -28,6 +28,9 @@ private:
         Track3D pub;
         std::array<float, 4> x{};
         std::array<float, 16> P{};
+        Vec3 lastDetPos{};
+        int lastCamIndex = -1;
+        float lastDt = 1.0f / 36.0f;
     };
 
     struct HungarianWorkspace {
@@ -53,7 +56,7 @@ private:
     HungarianWorkspace hungarian_;
 
     void predictTrack(InternalTrack& tr, float dt) const;
-    void updateTrack(InternalTrack& tr, const Detection3D& det, bool lowConfMatch);
+    void updateTrack(InternalTrack& tr, const EgoState& ego, const Detection3D& det, bool lowConfMatch);
     void spawnTrack(const Detection3D& det);
     static void refreshTrackPose(InternalTrack& tr, const EgoState& ego);
 };

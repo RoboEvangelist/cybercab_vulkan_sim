@@ -76,6 +76,65 @@ void appendBoxLines(std::vector<LineVertex>& out, Vec3 center, Vec3 he, float ya
     }
 }
 
+void appendCurvedCarpet(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx,
+                        const std::vector<Vec3>& pts, float halfW, float halfH,
+                        Vec3 color, float alpha, float emissive) {
+    if (pts.size() < 2) return;
+    const size_t n = pts.size();
+    std::vector<Vec3> leftEdge(n), rightEdge(n), tang(n);
+    for (size_t i = 0; i < n; ++i) {
+        const Vec3& prev = (i > 0) ? pts[i - 1] : pts[i];
+        const Vec3& next = (i + 1 < n) ? pts[i + 1] : pts[i];
+        const float dx = next.x - prev.x, dz = next.z - prev.z;
+        const float len = std::max(std::hypot(dx, dz), 1e-4f);
+        tang[i] = {dx / len, 0.0f, dz / len};
+        // Local lateral right axis (matches appendCube yaw convention)
+        const Vec3 right{tang[i].z, 0.0f, -tang[i].x};
+        leftEdge[i] = {pts[i].x - right.x * halfW, pts[i].y, pts[i].z - right.z * halfW};
+        rightEdge[i] = {pts[i].x + right.x * halfW, pts[i].y, pts[i].z + right.z * halfW};
+    }
+
+    auto pushQuad = [&](Vec3 a, Vec3 b, Vec3 c, Vec3 d, Vec3 nrm) {
+        const uint32_t base = static_cast<uint32_t>(verts.size());
+        for (const Vec3& p : {a, b, c, d}) {
+            verts.push_back({p.x, p.y, p.z, nrm.x, nrm.y, nrm.z, color.x, color.y, color.z, alpha, emissive, 0, 0, 0});
+        }
+        idx.push_back(base + 0); idx.push_back(base + 1); idx.push_back(base + 2);
+        idx.push_back(base + 0); idx.push_back(base + 2); idx.push_back(base + 3);
+    };
+
+    for (size_t i = 0; i + 1 < n; ++i) {
+        const Vec3 l0b{leftEdge[i].x, pts[i].y - halfH, leftEdge[i].z};
+        const Vec3 r0b{rightEdge[i].x, pts[i].y - halfH, rightEdge[i].z};
+        const Vec3 l0t{leftEdge[i].x, pts[i].y + halfH, leftEdge[i].z};
+        const Vec3 r0t{rightEdge[i].x, pts[i].y + halfH, rightEdge[i].z};
+        const Vec3 l1b{leftEdge[i + 1].x, pts[i + 1].y - halfH, leftEdge[i + 1].z};
+        const Vec3 r1b{rightEdge[i + 1].x, pts[i + 1].y - halfH, rightEdge[i + 1].z};
+        const Vec3 l1t{leftEdge[i + 1].x, pts[i + 1].y + halfH, leftEdge[i + 1].z};
+        const Vec3 r1t{rightEdge[i + 1].x, pts[i + 1].y + halfH, rightEdge[i + 1].z};
+
+        const Vec3 segT{(pts[i + 1].x - pts[i].x), 0.0f, (pts[i + 1].z - pts[i].z)};
+        const float segLen = std::max(segT.norm(), 1e-4f);
+        const Vec3 rightN{segT.z / segLen, 0.0f, -segT.x / segLen};
+        const Vec3 leftN{-rightN.x, 0.0f, -rightN.z};
+
+        pushQuad(l1t, r1t, r0t, l0t, {0.0f, 1.0f, 0.0f});
+        pushQuad(l0b, r0b, r1b, l1b, {0.0f, -1.0f, 0.0f});
+        pushQuad(r1b, r0b, r0t, r1t, rightN);
+        pushQuad(l0b, l1b, l1t, l0t, leftN);
+    }
+    const Vec3 backN{-tang[0].x, 0.0f, -tang[0].z};
+    pushQuad({rightEdge[0].x, pts[0].y - halfH, rightEdge[0].z},
+             {leftEdge[0].x, pts[0].y - halfH, leftEdge[0].z},
+             {leftEdge[0].x, pts[0].y + halfH, leftEdge[0].z},
+             {rightEdge[0].x, pts[0].y + halfH, rightEdge[0].z}, backN);
+    const size_t eIdx = n - 1;
+    pushQuad({leftEdge[eIdx].x, pts[eIdx].y - halfH, leftEdge[eIdx].z},
+             {rightEdge[eIdx].x, pts[eIdx].y - halfH, rightEdge[eIdx].z},
+             {rightEdge[eIdx].x, pts[eIdx].y + halfH, rightEdge[eIdx].z},
+             {leftEdge[eIdx].x, pts[eIdx].y + halfH, leftEdge[eIdx].z}, tang[eIdx]);
+}
+
 Vec3 semanticColor(SemanticClass sem) {
     switch (sem) {
         case SemanticClass::Vehicle:    return {0.220f, 0.741f, 0.973f};
@@ -694,7 +753,7 @@ bool VulkanViewer::pollEvents(SimConfig& cfg, WorldEngine& world, CameraRigRende
 }
 
 void VulkanViewer::buildVoxelAndGhostGeometry(const WorldEngine& world, const PerceptionFrameOutput& perc,
-                                              const ViewerToggleState& toggles) {
+                                              const PlannerCommand& cmd, const ViewerToggleState& toggles) {
     voxelVertsScratch_.clear();
     voxelIdxScratch_.clear();
 
@@ -727,11 +786,9 @@ void VulkanViewer::buildVoxelAndGhostGeometry(const WorldEngine& world, const Pe
         }
     }
 
-    // RSS Safety Carpet
+    // RSS Safety Carpet (follows curved road / planned trajectory polyline from front bumper)
     if (toggles.showRss) {
         const EgoState& ego = world.ego();
-        const float envLen = std::max(1.2f, std::min(ego.rssSafeDist, ego.minObstacleDist + 0.5f));
-        const float sinE = std::sin(ego.yaw), cosE = std::cos(ego.yaw);
         Vec3 rssCol{0.024f, 0.714f, 0.831f};
         float alpha = 0.24f;
         if (ego.aebActive || ego.behaviorState == "COLLISION_CONTACT") {
@@ -740,14 +797,28 @@ void VulkanViewer::buildVoxelAndGhostGeometry(const WorldEngine& world, const Pe
                    ego.behaviorState == "STOP_SIGN_HOLD" || ego.behaviorState == "FOLLOWING_LEAD") {
             rssCol = {0.961f, 0.620f, 0.043f}; alpha = 0.32f;
         }
-        const float centerFwd = 3.45f + envLen * 0.5f;
-        appendCube(voxelVertsScratch_, voxelIdxScratch_,
-                   {ego.pos.x + sinE * centerFwd, 0.08f, ego.pos.z + cosE * centerFwd},
-                   {2.15f, 0.04f, envLen}, ego.yaw, rssCol, alpha, 0.35f);
-        const float barFwd = 3.45f + envLen;
-        appendCube(voxelVertsScratch_, voxelIdxScratch_,
-                   {ego.pos.x + sinE * barFwd, 0.12f, ego.pos.z + cosE * barFwd},
-                   {2.35f, 0.14f, 0.22f}, ego.yaw, rssCol, 0.88f, 0.75f);
+        if (cmd.rssCarpetPoints.size() >= 2) {
+            appendCurvedCarpet(voxelVertsScratch_, voxelIdxScratch_, cmd.rssCarpetPoints,
+                               cmd.rssCarpetHalfWidth, 0.02f, rssCol, alpha, 0.35f);
+            const size_t nPts = cmd.rssCarpetPoints.size();
+            const Vec3& pPrev = cmd.rssCarpetPoints[nPts - 2];
+            const Vec3& pTip = cmd.rssCarpetPoints[nPts - 1];
+            const float endYaw = std::atan2(pTip.x - pPrev.x, pTip.z - pPrev.z);
+            appendCube(voxelVertsScratch_, voxelIdxScratch_,
+                       {pTip.x, 0.12f, pTip.z},
+                       {cmd.rssCarpetHalfWidth * 2.18f, 0.14f, 0.22f}, endYaw, rssCol, 0.88f, 0.75f);
+        } else {
+            const float envLen = std::max(1.2f, std::min(ego.rssSafeDist, ego.minObstacleDist + 0.5f));
+            const float sinE = std::sin(ego.yaw), cosE = std::cos(ego.yaw);
+            const float centerFwd = 3.45f + envLen * 0.5f;
+            appendCube(voxelVertsScratch_, voxelIdxScratch_,
+                       {ego.pos.x + sinE * centerFwd, 0.08f, ego.pos.z + cosE * centerFwd},
+                       {2.15f, 0.04f, envLen}, ego.yaw, rssCol, alpha, 0.35f);
+            const float barFwd = 3.45f + envLen;
+            appendCube(voxelVertsScratch_, voxelIdxScratch_,
+                       {ego.pos.x + sinE * barFwd, 0.12f, ego.pos.z + cosE * barFwd},
+                       {2.35f, 0.14f, 0.22f}, ego.yaw, rssCol, 0.88f, 0.75f);
+        }
     }
 
     if (!voxelVertsScratch_.empty() && voxelVertsScratch_.size() <= 120000 && voxelIdxScratch_.size() <= 200000) {
@@ -1303,7 +1374,7 @@ void VulkanViewer::renderFrame(const SimConfig& cfg, const WorldEngine& world, c
         dynWorldIB_.upload(dynIdxScratch_.data(), dynIdxScratch_.size() * sizeof(uint32_t));
     }
 
-    buildVoxelAndGhostGeometry(world, perc, toggles);
+    buildVoxelAndGhostGeometry(world, perc, cmd, toggles);
     build3DLines(cfg, world, perc, cmd, toggles);
     buildUiOverlay(cfg, world, rig, perc, cmd, toggles, toastMsg);
 

@@ -5,6 +5,41 @@
 #include <limits>
 
 namespace cybercab {
+namespace {
+
+struct RayDelta {
+    bool valid = false;
+    float rx = 0.0f;
+    float rz = 0.0f;
+    float dRad = 0.0f;
+    float dLat = 0.0f;
+    float minRange = 0.0f;
+    float maxRange = 0.0f;
+};
+
+// Decompose detection-to-track offset into ego viewing ray (radial/lateral) components.
+RayDelta computeRayDelta(const EgoState& ego, float tx, float tz, float dx, float dz) {
+    RayDelta r;
+    const float trRelX = tx - ego.pos.x;
+    const float trRelZ = tz - ego.pos.z;
+    const float trRange = std::hypot(trRelX, trRelZ);
+    const float detRelX = dx - ego.pos.x;
+    const float detRelZ = dz - ego.pos.z;
+    const float detRange = std::hypot(detRelX, detRelZ);
+    if (trRange <= 1.0f || detRange <= 1.0f) return r;
+    r.valid = true;
+    r.rx = trRelX / trRange;
+    r.rz = trRelZ / trRange;
+    const float dX = dx - tx;
+    const float dZ = dz - tz;
+    r.dRad = std::abs(dX * r.rx + dZ * r.rz);
+    r.dLat = std::abs(-dX * r.rz + dZ * r.rx);
+    r.minRange = std::min(trRange, detRange);
+    r.maxRange = std::max(trRange, detRange);
+    return r;
+}
+
+} // namespace
 
 ByteTracker::ByteTracker(const SimConfig& cfg) : cfg_(cfg) {
     const size_t maxTr = static_cast<size_t>(std::max(64, cfg_.btMaxTracks));
@@ -122,6 +157,8 @@ std::vector<int> ByteTracker::solveHungarian(const std::vector<std::vector<float
 }
 
 void ByteTracker::predictTrack(InternalTrack& tr, float dt) const {
+    if (!std::isfinite(dt) || dt <= 0.0f) return;
+    tr.lastDt = dt;
     tr.x[0] += tr.x[2] * dt;
     tr.x[1] += tr.x[3] * dt;
 
@@ -156,15 +193,38 @@ void ByteTracker::predictTrack(InternalTrack& tr, float dt) const {
     tr.pub.timeSinceUpdateSec += dt;
 }
 
-void ByteTracker::updateTrack(InternalTrack& tr, const Detection3D& det, bool lowConfMatch) {
+void ByteTracker::updateTrack(InternalTrack& tr, const EgoState& ego, const Detection3D& det, bool lowConfMatch) {
     const float soilScale = 1.0f / std::max(det.camWeight, cfg_.soilMinTokenWeight);
     const float measStd = cfg_.btBaseMeasNoiseM * soilScale + det.epistemicSigma;
-    const float Rdiag = measStd * measStd;
+    const RayDelta ray = computeRayDelta(ego, tr.x[0], tr.x[1], det.worldPos.x, det.worldPos.z);
+    const bool isVehTrack = (tr.pub.semantic == SemanticClass::Vehicle && det.semantic == SemanticClass::Vehicle);
+    float sigmaRad = measStd;
+    float radExcess = 0.0f;
+    if (ray.valid && isVehTrack && tr.pub.hits >= 2) {
+        // Measure sudden single-step radial jumps vs previous detection (predicted by current track velocity),
+        // rather than innovation against tr.x which would starve smooth moving targets during warmup.
+        const float elapsed = std::max(tr.lastDt, tr.pub.timeSinceUpdateSec);
+        const float detDx = det.worldPos.x - tr.lastDetPos.x;
+        const float detDz = det.worldPos.z - tr.lastDetPos.z;
+        const float vRad = tr.x[2] * ray.rx + tr.x[3] * ray.rz;
+        const float detJumpRad = std::abs((detDx * ray.rx + detDz * ray.rz) - vRad * elapsed);
+        const float radThresh = ((tr.lastCamIndex >= 0 && det.camIndex != tr.lastCamIndex) ? 0.45f : 0.65f)
+            + 4.0f * std::max(0.0f, elapsed - 0.05f);
+        radExcess = std::max(0.0f, detJumpRad - radThresh);
+        if (radExcess > 0.0f) {
+            sigmaRad += std::min(1.0f, 1.5f * radExcess);
+        }
+    }
+    const float rLat = measStd * measStd;
+    const float rRad = sigmaRad * sigmaRad;
+    const float R00 = ray.valid ? (rRad * ray.rx * ray.rx + rLat * ray.rz * ray.rz) : rLat;
+    const float R01 = ray.valid ? ((rRad - rLat) * ray.rx * ray.rz) : 0.0f;
+    const float R11 = ray.valid ? (rRad * ray.rz * ray.rz + rLat * ray.rx * ray.rx) : rLat;
 
-    const float S00 = tr.P[0] + Rdiag;
-    const float S01 = tr.P[1];
-    const float S10 = tr.P[4];
-    const float S11 = tr.P[5] + Rdiag;
+    const float S00 = tr.P[0] + R00;
+    const float S01 = tr.P[1] + R01;
+    const float S10 = tr.P[4] + R01;
+    const float S11 = tr.P[5] + R11;
     const float detS = S00 * S11 - S01 * S10;
     if (std::abs(detS) < 1e-6f) return;
 
@@ -181,9 +241,21 @@ void ByteTracker::updateTrack(InternalTrack& tr, const Detection3D& det, bool lo
 
     const float y0 = det.worldPos.x - tr.x[0];
     const float y1 = det.worldPos.z - tr.x[1];
-    for (int r = 0; r < 4; ++r) {
-        tr.x[r] += K[r][0] * y0 + K[r][1] * y1;
+    tr.x[0] += K[0][0] * y0 + K[0][1] * y1;
+    tr.x[1] += K[1][0] * y0 + K[1][1] * y1;
+    float dvx = K[2][0] * y0 + K[2][1] * y1;
+    float dvz = K[3][0] * y0 + K[3][1] * y1;
+    const float innovRadAbs = ray.valid ? std::abs(y0 * ray.rx + y1 * ray.rz) : 0.0f;
+    if (ray.valid && isVehTrack && tr.pub.hits >= 3 && (radExcess > 0.0f || innovRadAbs > 0.65f)) {
+        const float dvRad = dvx * ray.rx + dvz * ray.rz;
+        const float dvLat = -dvx * ray.rz + dvz * ray.rx;
+        const float maxDvRad = std::max(0.06f, 2.2f * tr.lastDt);
+        const float clampedRad = std::clamp(dvRad, -maxDvRad, maxDvRad);
+        dvx = clampedRad * ray.rx - dvLat * ray.rz;
+        dvz = clampedRad * ray.rz + dvLat * ray.rx;
     }
+    tr.x[2] += dvx;
+    tr.x[3] += dvz;
 
     std::array<float, 16> I_KH{};
     I_KH[0] = 1.0f - K[0][0]; I_KH[1] = -K[0][1];
@@ -209,9 +281,21 @@ void ByteTracker::updateTrack(InternalTrack& tr, const Detection3D& det, bool lo
         tr.pub.semantic = det.semantic;
         tr.pub.halfExtents = det.halfExtents;
     }
+    const float maxSpeed = (tr.pub.semantic == SemanticClass::Pedestrian) ? 2.6f : 22.0f;
+    const float spd = std::hypot(tr.x[2], tr.x[3]);
+    if (spd > maxSpeed) {
+        const float s = maxSpeed / spd;
+        tr.x[2] *= s;
+        tr.x[3] *= s;
+    }
     if (tr.pub.hits >= 2 || det.score >= cfg_.rtdetrHighConfThresh) {
         tr.pub.state = TrackState::Tracked;
     }
+    const float alpha = (radExcess > 0.0f) ? 0.35f : 1.0f;
+    tr.lastDetPos.x += alpha * (det.worldPos.x - tr.lastDetPos.x);
+    tr.lastDetPos.y = det.worldPos.y;
+    tr.lastDetPos.z += alpha * (det.worldPos.z - tr.lastDetPos.z);
+    tr.lastCamIndex = det.camIndex;
 }
 
 void ByteTracker::spawnTrack(const Detection3D& det) {
@@ -225,6 +309,8 @@ void ByteTracker::spawnTrack(const Detection3D& det) {
     tr.pub.hits = 1;
     tr.pub.timeSinceUpdateSec = 0.0f;
     tr.pub.yaw = det.yaw;
+    tr.lastDetPos = det.worldPos;
+    tr.lastCamIndex = det.camIndex;
 
     tr.x = {det.worldPos.x, det.worldPos.z, 0.0f, 0.0f};
     const float pPos = std::max(0.4f, det.epistemicSigma * det.epistemicSigma);
@@ -251,8 +337,9 @@ void ByteTracker::refreshTrackPose(InternalTrack& tr, const EgoState& ego) {
 }
 
 void ByteTracker::update(float dt, const EgoState& ego, const std::vector<Detection3D>& detections) {
+    const float safeDt = (std::isfinite(dt) && dt > 0.0f) ? dt : 0.0f;
     for (auto& tr : tracks_) {
-        predictTrack(tr, dt);
+        predictTrack(tr, safeDt);
         tr.pub.matchedLowConf = false;
     }
 
@@ -270,6 +357,18 @@ void ByteTracker::update(float dt, const EgoState& ego, const std::vector<Detect
     trackMatchedScratch_.assign(tracks_.size(), 0);
     highDetMatchedScratch_.assign(highIdxScratch_.size(), 0);
 
+    auto effectiveMatchDist = [&](int trackIdx, const Detection3D& det) -> float {
+        const auto& tr = tracks_[trackIdx];
+        const float dist = std::hypot(tr.x[0] - det.worldPos.x, tr.x[1] - det.worldPos.z);
+        if (tr.pub.semantic == det.semantic && tr.pub.state != TrackState::Tentative) {
+            const RayDelta ray = computeRayDelta(ego, tr.x[0], tr.x[1], det.worldPos.x, det.worldPos.z);
+            if (ray.valid && ray.minRange >= 4.0f && ray.dLat <= 0.90f && ray.dRad <= 5.2f) {
+                return std::min(dist, std::hypot(ray.dLat, 0.55f * ray.dRad));
+            }
+        }
+        return dist;
+    };
+
     // Stage 1: High-Confidence matching
     if (!tracks_.empty() && !highIdxScratch_.empty()) {
         const int nRows = static_cast<int>(tracks_.size());
@@ -278,7 +377,7 @@ void ByteTracker::update(float dt, const EgoState& ego, const std::vector<Detect
         for (int t = 0; t < nRows; ++t) {
             for (int d = 0; d < nCols; ++d) {
                 const auto& det = detections[highIdxScratch_[d]];
-                const float dist = std::hypot(tracks_[t].x[0] - det.worldPos.x, tracks_[t].x[1] - det.worldPos.z);
+                const float dist = effectiveMatchDist(t, det);
                 const float classPen = (tracks_[t].pub.semantic == det.semantic) ? 0.0f : 1.5f;
                 costFlatScratch_[static_cast<size_t>(t) * nCols + d] = dist + classPen;
             }
@@ -287,7 +386,7 @@ void ByteTracker::update(float dt, const EgoState& ego, const std::vector<Detect
         for (int t = 0; t < nRows; ++t) {
             const int d = hungarian_.assign[t];
             if (d >= 0) {
-                updateTrack(tracks_[t], detections[highIdxScratch_[d]], false);
+                updateTrack(tracks_[t], ego, detections[highIdxScratch_[d]], false);
                 trackMatchedScratch_[t] = 1;
                 highDetMatchedScratch_[d] = 1;
             }
@@ -309,8 +408,10 @@ void ByteTracker::update(float dt, const EgoState& ego, const std::vector<Detect
             const int t = unmatchedScratch_[r];
             for (int d = 0; d < nCols; ++d) {
                 const auto& det = detections[lowIdxScratch_[d]];
-                costFlatScratch_[static_cast<size_t>(r) * nCols + d] =
-                    std::hypot(tracks_[t].x[0] - det.worldPos.x, tracks_[t].x[1] - det.worldPos.z);
+                const float dist = effectiveMatchDist(t, det);
+                // Enforce semantic class consistency in Stage-2 association so pedestrians cannot hijack lost vehicles.
+                const float classGate = (tracks_[t].pub.semantic == det.semantic) ? 0.0f : (cfg_.btLowMatchDistM + 100.0f);
+                costFlatScratch_[static_cast<size_t>(r) * nCols + d] = dist + classGate;
             }
         }
         hungarian_.solve(costFlatScratch_.data(), nRows, nCols, nCols, cfg_.btLowMatchDistM);
@@ -318,7 +419,7 @@ void ByteTracker::update(float dt, const EgoState& ego, const std::vector<Detect
             const int d = hungarian_.assign[r];
             if (d >= 0) {
                 const int t = unmatchedScratch_[r];
-                updateTrack(tracks_[t], detections[lowIdxScratch_[d]], true);
+                updateTrack(tracks_[t], ego, detections[lowIdxScratch_[d]], true);
                 trackMatchedScratch_[t] = 1;
             }
         }
@@ -326,12 +427,18 @@ void ByteTracker::update(float dt, const EgoState& ego, const std::vector<Detect
 
     for (size_t t = 0; t < tracks_.size(); ++t) {
         if (!trackMatchedScratch_[t]) {
+            const float maxLostForTrack = (tracks_[t].pub.hits <= 3)
+                ? std::min(cfg_.btMaxTimeLostSec, 0.38f)
+                : cfg_.btMaxTimeLostSec;
             if (tracks_[t].pub.state == TrackState::Tentative) {
                 tracks_[t].pub.state = TrackState::Removed;
-            } else if (tracks_[t].pub.timeSinceUpdateSec > cfg_.btMaxTimeLostSec) {
+            } else if (tracks_[t].pub.timeSinceUpdateSec > maxLostForTrack) {
                 tracks_[t].pub.state = TrackState::Removed;
             } else {
                 tracks_[t].pub.state = TrackState::Lost;
+                const float damp = std::exp(-safeDt * 1.4f);
+                tracks_[t].x[2] *= damp;
+                tracks_[t].x[3] *= damp;
             }
         }
         refreshTrackPose(tracks_[t], ego);
@@ -344,8 +451,49 @@ void ByteTracker::update(float dt, const EgoState& ego, const std::vector<Detect
 
     for (size_t d = 0; d < highIdxScratch_.size(); ++d) {
         if (!highDetMatchedScratch_[d]) {
-            spawnTrack(detections[highIdxScratch_[d]]);
-            refreshTrackPose(tracks_.back(), ego);
+            const auto& det = detections[highIdxScratch_[d]];
+            const float sameClassDupRadius = (det.semantic == SemanticClass::Pedestrian) ? 1.2f : 2.2f;
+            bool duplicateOfExisting = false;
+            for (const auto& tr : tracks_) {
+                const float dist = std::hypot(tr.x[0] - det.worldPos.x, tr.x[1] - det.worldPos.z);
+                if ((tr.pub.semantic == det.semantic && dist <= sameClassDupRadius) || dist <= 1.5f) {
+                    duplicateOfExisting = true;
+                    break;
+                }
+                const RayDelta ray = computeRayDelta(ego, tr.x[0], tr.x[1], det.worldPos.x, det.worldPos.z);
+                if (ray.valid) {
+                    if (tr.pub.semantic != det.semantic) {
+                        const float maxJumpRad = std::min(8.5f, std::max(6.0f, 0.92f * ray.minRange));
+                        if (ray.dLat <= 1.25f && ray.dRad <= maxJumpRad) {
+                            duplicateOfExisting = true;
+                            break;
+                        }
+                    } else if (det.semantic == SemanticClass::Pedestrian &&
+                               tr.pub.state != TrackState::Tentative &&
+                               ray.minRange > 12.0f && ray.minRange < 55.0f) {
+                        const float pedSpreadRad = std::min(9.0f, 0.32f * ray.maxRange);
+                        if (ray.dLat <= 1.25f && ray.dRad <= pedSpreadRad) {
+                            duplicateOfExisting = true;
+                            break;
+                        }
+                    } else if (det.semantic == SemanticClass::Vehicle &&
+                               tr.pub.state != TrackState::Tentative &&
+                               ray.minRange > 4.5f && ray.minRange < 55.0f) {
+                        const float vehSpreadRad = std::min(11.5f, std::max(8.8f, 0.38f * ray.maxRange));
+                        if (ray.dLat <= 1.60f && ray.dRad <= vehSpreadRad) {
+                            duplicateOfExisting = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!duplicateOfExisting) {
+                const size_t before = tracks_.size();
+                spawnTrack(det);
+                if (tracks_.size() > before) {
+                    refreshTrackPose(tracks_.back(), ego);
+                }
+            }
         }
     }
 }

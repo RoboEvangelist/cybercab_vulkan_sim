@@ -32,6 +32,12 @@ layout(push_constant) uniform DetrEncPC {
 shared vec4 s_tokens[300][2]; // Compact 8-dim token state for AIFI attention
 shared float s_scores[300];
 
+vec4 s5PosEnc(uint x, uint y, uint w, uint h) {
+    const float px = (float(x) + 0.5) / float(w);
+    const float py = (float(y) + 0.5) / float(h);
+    return vec4(sin(px * 6.28318), cos(px * 6.28318), sin(py * 6.28318), cos(py * 6.28318)) * 0.25;
+}
+
 void main() {
     uint cam = gl_WorkGroupID.z;
     uint tx = gl_LocalInvocationID.x;
@@ -44,37 +50,54 @@ void main() {
     vec4 f2 = uFeatS5.feat[s5Base + 2u];
     vec4 f3 = uFeatS5.feat[s5Base + 3u];
 
-    // 2D sinusoidal positional encoding added to S5 token representation
-    float px = (float(tx) + 0.5) / float(pc.s5W);
-    float py = (float(ty) + 0.5) / float(pc.s5H);
-    vec4 posEnc = vec4(sin(px * 6.28318), cos(px * 6.28318), sin(py * 6.28318), cos(py * 6.28318)) * 0.25;
+    const float px = (float(tx) + 0.5) / float(pc.s5W);
+    const float py = (float(ty) + 0.5) / float(pc.s5H);
+    const vec4 posEnc = s5PosEnc(tx, ty, pc.s5W, pc.s5H);
 
-    // 8-dim projected AIFI token embedding: [edge, veh, ped, sig, sky, mot, vPrior, obj]
-    vec4 qkA = vec4(f0.z, f1.x, f1.y, f1.z) + posEnc;
-    vec4 qkB = vec4(f2.x, f2.z, f3.x, f3.w);
-    s_tokens[tid][0] = qkA;
-    s_tokens[tid][1] = qkB;
+    // Store clean semantic values in s_tokens (posEnc is applied only to Q/K, never to Values or localEdge!)
+    const vec4 valA = vec4(f0.z, f1.x, f1.y, f1.z);
+    const vec4 valB = vec4(f2.x, f2.z, f3.x, f3.w);
+    s_tokens[tid][0] = valA;
+    s_tokens[tid][1] = valB;
+    const vec4 qA = valA + posEnc;
 
-    // Uncertainty-minimal objectness score (f1 already masked background per pixel; only suppress pure sky/upper-bldg tiles)
+    // Propagate 3x3 boundary edge support in shared memory so solid painted vehicle interiors score cleanly at centers
+    barrier();
+    float localEdge = f0.z + f2.z * 0.5;
+    for (int oy = -1; oy <= 1; ++oy) {
+        for (int ox = -1; ox <= 1; ++ox) {
+            const int nx = int(tx) + ox;
+            const int ny = int(ty) + oy;
+            if (nx >= 0 && nx < int(pc.s5W) && ny >= 0 && ny < int(pc.s5H)) {
+                localEdge = max(localEdge, s_tokens[uint(ny) * pc.s5W + uint(nx)][0].x);
+            }
+        }
+    }
+
+    // Uncertainty-minimal objectness score (f1 already weighted by patchW; avoid double-squaring f3.y)
     const float skyBldgSuppress = clamp(1.0 - f2.x * 1.4 - f2.y * 0.75, 0.10, 1.0);
-    const float s5EdgeGate = smoothstep(0.008, 0.032, f0.z + f2.z * 0.5);
-    float rawObj = (f1.y * 2.40 + f1.x * 1.65 + f1.z * 1.15) * skyBldgSuppress * s5EdgeGate * f3.y;
-    if (py < 0.28 || py > 0.86) rawObj *= 0.08;
+    const float s5EdgeGate = smoothstep(0.008, 0.032, localEdge);
+    const float groundVertGate = (py < 0.28 || py > 0.86) ? 0.08 : 1.0;
+    const float sigVertGate = (py > 0.52) ? 0.05 : 1.0;
+    const float rawObj = ((f1.y * 2.15 + f1.x * 1.95) * groundVertGate + f1.z * 1.65 * sigVertGate) * skyBldgSuppress * s5EdgeGate;
     s_scores[tid] = rawObj;
 
     barrier();
 
-    // AIFI: Scaled Dot-Product Self-Attention over S5 tokens (with spatial locality bias)
+    // AIFI: Scaled Dot-Product Self-Attention over S5 tokens (Q/K use sinusoidal positional encoding; V stays clean)
     vec4 vA = vec4(0.0);
     vec4 vB = vec4(0.0);
     float wSum = 0.0;
     const float invSqrtD = 0.35355339; // 1/sqrt(8)
 
     for (uint j = 0u; j < 300u; ++j) {
-        vec4 oA = s_tokens[j][0];
-        vec4 oB = s_tokens[j][1];
-        float logit = (dot(qkA, oA) + dot(qkB, oB)) * invSqrtD;
-        float attn = exp(clamp(logit, -8.0, 8.0));
+        const vec4 oA = s_tokens[j][0];
+        const vec4 oB = s_tokens[j][1];
+        const uint jx = j % pc.s5W;
+        const uint jy = j / pc.s5W;
+        const vec4 kA = oA + s5PosEnc(jx, jy, pc.s5W, pc.s5H);
+        const float logit = (dot(qA, kA) + dot(valB, oB)) * invSqrtD;
+        const float attn = exp(clamp(logit, -8.0, 8.0));
         vA += attn * oA;
         vB += attn * oB;
         wSum += attn;
@@ -99,9 +122,10 @@ void main() {
                 vec4 s4_3 = uFeatS4.feat[idx4 + 3u];
 
                 uEncMemory.feat[idx4 + 0u] = mix(s4_0, ctx0, 0.25);
-                uEncMemory.feat[idx4 + 1u] = mix(s4_1, ctx1, 0.25);
+                const vec4 safeCtx1 = vec4(ctx1.x, min(s4_1.y, ctx1.y), ctx1.z, ctx1.w);
+                uEncMemory.feat[idx4 + 1u] = mix(s4_1, safeCtx1, 0.25);
                 uEncMemory.feat[idx4 + 2u] = s4_2;
-                uEncMemory.feat[idx4 + 3u] = vec4(s4_3.x, s4_3.y, s4_3.z, s_scores[tid]);
+                uEncMemory.feat[idx4 + 3u] = vec4(s4_0.w, s4_3.y, s4_3.z, s_scores[tid]);
             }
         }
     }

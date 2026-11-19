@@ -190,7 +190,7 @@ private:
     void createSyncObjects();
 
     void buildVoxelAndGhostGeometry(const WorldEngine& world, const PerceptionFrameOutput& perc,
-                                    const ViewerToggleState& toggles);
+                                    const PlannerCommand& cmd, const ViewerToggleState& toggles);
     void build3DLines(const SimConfig& cfg, const WorldEngine& world, const PerceptionFrameOutput& perc,
                       const PlannerCommand& cmd, const ViewerToggleState& toggles);
     void buildUiOverlay(const SimConfig& cfg, const WorldEngine& world, const CameraRigRenderer& rig,

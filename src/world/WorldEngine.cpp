@@ -515,6 +515,21 @@ float WorldEngine::findClosestLoopU(const Vec3& pos) const {
             }
         }
     }
+    float step = 0.002f;
+    for (int pass = 0; pass < 3; ++pass) {
+        const float centerU = bestU;
+        for (int i = -4; i <= 4; ++i) {
+            float u = std::fmod(centerU + static_cast<float>(i) * step, 1.0f);
+            if (u < 0.0f) u += 1.0f;
+            const Vec3 pt = centerline_.getPointAt(u);
+            const float dSq = (pt.x - pos.x) * (pt.x - pos.x) + (pt.z - pos.z) * (pt.z - pos.z);
+            if (dSq < bestDistSq) {
+                bestDistSq = dSq;
+                bestU = u;
+            }
+        }
+        step *= 0.25f;
+    }
     return bestU;
 }
 
@@ -998,7 +1013,7 @@ void WorldEngine::stepEgoAndPhysics(float dt, const PlannerCommand& cmd, const M
     ego_.loopProgressU = findClosestLoopU(ego_.pos);
     Vec3 curCenter = centerline_.getPointAt(ego_.loopProgressU);
     Vec3 curTan = centerline_.getTangentAt(ego_.loopProgressU);
-    Vec3 curLeft{-curTan.z, 0.0f, curTan.x};
+    Vec3 curLeft{curTan.z, 0.0f, -curTan.x};
     ego_.currentLateralOffset = (ego_.pos - curCenter).dot(curLeft);
 }
 

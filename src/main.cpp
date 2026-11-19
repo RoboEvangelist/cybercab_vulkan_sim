@@ -5,6 +5,7 @@
 #include "core/VulkanContext.hpp"
 #include "core/VulkanPipeline.hpp"
 #include "perception/PerceptionPipeline.hpp"
+#include "planning/SimulationSync.hpp"
 #include "planning/TrajectoryPlanner.hpp"
 #include "sensors/CameraRigRenderer.hpp"
 #include "world/WorldEngine.hpp"
@@ -111,22 +112,26 @@ int main(int argc, char** argv) {
                 rig.dumpEgoShowcaseBMP(world, args.carDumpPath);
             }
 
-            float simTime = 0.0f;
+            cybercab::SimulationSyncClock clock;
             for (int step = 0; step < args.steps; ++step) {
-                world.stepAgents(dtControl);
-                rig.renderAllCameras(world, cfg, simTime, &profiler);
-                perception.runFrame(ctx, rig, world, dtControl, cfg.occEnableShadows, percOut, &profiler);
-                planner.plan(world, percOut, planCmd);
-                world.stepEgoAndPhysics(dtControl, planCmd, cybercab::ManualInput{});
-
-                if (tracer.isOpen()) {
-                    tracer.logFrame(step, simTime, cfg, world.ego(), planCmd, percOut, world.lastContact());
-                }
-                if (!args.dumpDir.empty() && (step == 0 || step == args.steps / 2 || step == args.steps - 1)) {
-                    char ppmName[256];
-                    std::snprintf(ppmName, sizeof(ppmName), "%s/cam_grid_step_%04d.ppm", args.dumpDir.c_str(), step);
-                    rig.dumpCameraGridPPM(ppmName);
-                }
+                clock.stepFrame(dtControl, dtControl, dtControl * 2.0f,
+                    [&](float simTime, float percDt) {
+                        rig.renderAllCameras(world, cfg, simTime, &profiler);
+                        perception.runFrame(ctx, rig, world, percDt, cfg.occEnableShadows, percOut, &profiler);
+                    },
+                    [&](int tickIdx, float simTime, float tickDt) {
+                        planner.plan(world, percOut, planCmd);
+                        if (tracer.isOpen()) {
+                            tracer.logFrame(tickIdx, simTime, cfg, world.ego(), planCmd, percOut, world.lastContact());
+                        }
+                        if (!args.dumpDir.empty() && (tickIdx == 0 || tickIdx == args.steps / 2 || tickIdx == args.steps - 1)) {
+                            char ppmName[256];
+                            std::snprintf(ppmName, sizeof(ppmName), "%s/cam_grid_step_%04d.ppm", args.dumpDir.c_str(), tickIdx);
+                            rig.dumpCameraGridPPM(ppmName);
+                        }
+                        world.stepAgents(tickDt);
+                        world.stepEgoAndPhysics(tickDt, planCmd, cybercab::ManualInput{});
+                    });
 
                 if (step % 20 == 0 || step == args.steps - 1) {
                     double totGpuMs = 0.0;
@@ -142,7 +147,6 @@ int main(int argc, char** argv) {
                               << " shad=" << percOut.shadowVoxels.size()
                               << " gpu=" << totGpuMs << "ms\n";
                 }
-                simTime += dtControl;
             }
 
             profiler.destroy();
@@ -168,34 +172,26 @@ int main(int argc, char** argv) {
         cybercab::ManualInput manual;
         std::string toastMsg = "Vulkan 8-Cam Perception Ready (" + ctx.deviceName() + ")";
         auto lastTime = std::chrono::steady_clock::now();
-        float accum = 0.0f;
-        float simTime = 0.0f;
-        int step = 0;
+        cybercab::SimulationSyncClock clock;
 
         while (viewer.pollEvents(cfg, world, rig, perception, manual, toggles, toastMsg)) {
             const auto now = std::chrono::steady_clock::now();
             const float rawDt = std::chrono::duration<float>(now - lastTime).count();
             lastTime = now;
-            const float dt = std::min(rawDt, 0.05f);
 
-            world.stepAgents(dt);
-            accum += dt;
-            bool ranControl = false;
-            while (accum >= dtControl) {
-                if (!ranControl) {
+            clock.stepFrame(rawDt, dtControl, 0.05f,
+                [&](float simTime, float percDt) {
                     rig.renderAllCameras(world, cfg, simTime, &profiler);
-                    perception.runFrame(ctx, rig, world, dtControl, toggles.showShadows, percOut, &profiler);
-                    ranControl = true;
-                }
-                planner.plan(world, percOut, planCmd);
-                world.stepEgoAndPhysics(dtControl, planCmd, manual);
-                if (tracer.isOpen()) {
-                    tracer.logFrame(step, simTime, cfg, world.ego(), planCmd, percOut, world.lastContact());
-                }
-                accum -= dtControl;
-                simTime += dtControl;
-                step++;
-            }
+                    perception.runFrame(ctx, rig, world, percDt, toggles.showShadows, percOut, &profiler);
+                },
+                [&](int tickIdx, float simTime, float tickDt) {
+                    planner.plan(world, percOut, planCmd);
+                    if (tracer.isOpen()) {
+                        tracer.logFrame(tickIdx, simTime, cfg, world.ego(), planCmd, percOut, world.lastContact());
+                    }
+                    world.stepAgents(tickDt);
+                    world.stepEgoAndPhysics(tickDt, planCmd, manual);
+                });
 
             viewer.renderFrame(cfg, world, rig, percOut, planCmd, toggles, toastMsg);
         }

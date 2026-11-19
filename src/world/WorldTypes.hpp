@@ -134,6 +134,8 @@ struct PlannerCommand {
     std::vector<std::vector<Vec3>> candidateTrajectories;
     std::vector<bool> candidateBlocked;
     std::vector<Vec3> optimalTrajectory;
+    std::vector<Vec3> rssCarpetPoints;
+    float rssCarpetHalfWidth = 1.08f;
 };
 
 struct ContactEvent {

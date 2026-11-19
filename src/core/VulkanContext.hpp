@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -39,8 +40,12 @@ public:
     std::string deviceName() const { return deviceProps_.deviceName; }
     float timestampPeriodNs() const { return deviceProps_.limits.timestampPeriod; }
     bool validationEnabled() const { return validationEnabled_; }
+    uint32_t validationIssueCount() const { return validationIssueCount_.load(std::memory_order_relaxed); }
 
 private:
+    friend VKAPI_ATTR VkBool32 VKAPI_CALL vulkanDebugCallback(
+        VkDebugUtilsMessageSeverityFlagBitsEXT, VkDebugUtilsMessageTypeFlagsEXT,
+        const VkDebugUtilsMessengerCallbackDataEXT*, void*);
     VkInstance instance_ = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
@@ -53,6 +58,7 @@ private:
     VkPhysicalDeviceProperties deviceProps_{};
     bool validationEnabled_ = false;
     bool initialized_ = false;
+    std::atomic<uint32_t> validationIssueCount_{0};
 
     void createInstance(bool enableValidation, SDL_Window* window);
     void pickPhysicalDevice(bool requireSurface);

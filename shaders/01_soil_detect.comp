@@ -24,6 +24,7 @@ layout(push_constant) uniform SoilPC {
 
 const uint kPatches = 80u;
 shared vec4 s_patch[kPatches];
+shared float s_mud[kPatches];
 
 vec3 fetchRgb(uint cam, int x, int y) {
     const int cx = clamp(x, 0, int(pc.width) - 1);
@@ -43,7 +44,7 @@ void main() {
     const int y1 = int(((py + 1u) * pc.height) / pc.patchRows);
 
     float sumEdge = 0.0, sumLum = 0.0, sumLumSq = 0.0;
-    float sumMud = 0.0, sumGlare = 0.0, sumCleanBg = 0.0, count = 0.0;
+    float sumMud = 0.0, sumGlare = 0.0, sumCleanBg = 0.0, sumDark = 0.0, count = 0.0;
 
     for (int y = y0; y < y1; y += 2) {
         for (int x = x0; x < x1; x += 2) {
@@ -55,13 +56,20 @@ void main() {
             sumLum += lum;
             sumLumSq += lum * lum;
 
-            // Mud/brown occlusion signature (R > G > B earthy tone)
-            const bool isMud = (c.r > c.g + 0.025) && (c.g > c.b + 0.025) && (c.r < 0.62) && (c.b < 0.36);
+            // Pitch-black lens cover / dead sensor region
+            if (lum < 0.05) sumDark += 1.0;
+
+            // Earthy brown mud/sludge signature (warm brown R-G ~ G-B, distinct from yellow buildings & amber curbs)
+            const bool isMud = (c.r > c.g + 0.025) && (c.g > c.b + 0.025) &&
+                               ((c.r - c.g) >= 0.65 * (c.g - c.b)) &&
+                               (c.r < 0.62) && (c.b > 0.10) && (c.b < 0.36) && (c.r < c.b * 3.0);
             if (isMud) sumMud += 1.0;
 
-            // Clean sky (blue-dominant) or clean dark asphalt (neutral low-luma)
+            // Clean sky (blue-dominant) or clean asphalt / cool slate pavement (exclude mud & pitch-black dead/covered lens)
             const bool isSky = (c.b > c.r + 0.05) && (lum > 0.35);
-            const bool isAsphalt = (lum < 0.24) && (abs(c.r - c.b) < 0.045);
+            const bool isAsphalt = (lum > 0.06) && (lum < 0.34) &&
+                                   (c.b >= c.g - 0.015) && (c.g >= c.r - 0.015) &&
+                                   ((c.b - c.r) < 0.16);
             if (isSky || isAsphalt) sumCleanBg += 1.0;
 
             // Milky haze / glare (warm desaturated bright wash)
@@ -82,12 +90,14 @@ void main() {
     const float fFlat  = (1.0 - clamp(lumVar / 0.012, 0.0, 1.0)) * (1.0 - 0.85 * cleanBgRatio);
     const float fMud   = clamp((sumMud / count) * 2.4, 0.0, 1.0);
     const float fGlare = clamp((sumGlare / count) * 2.2, 0.0, 1.0);
+    const float fDark  = clamp((sumDark / count) * 2.2, 0.0, 1.0);
 
     // Calibrated 2-layer MLP head
     const float hMud  = relu(3.6 * fMud + 1.2 * fBlur - 0.6);
     const float hHaze = relu(2.8 * fGlare + 1.1 * fFlat - 0.8);
     const float hBlur = relu(1.5 * fBlur + 1.3 * fFlat - 1.3);
-    const float soilProb = sigmoid(1.7 * hMud + 1.4 * hHaze + 1.1 * hBlur - 3.1);
+    const float hDark = relu(3.2 * fDark * (0.4 + 0.6 * fFlat) - 0.5);
+    const float soilProb = sigmoid(1.7 * hMud + 1.4 * hHaze + 1.1 * hBlur + 1.5 * hDark - 3.1);
 
     const float patchW = mix(1.0, pc.minTokenWeight, smoothstep(0.28, 0.78, soilProb));
     const float patchVar = pc.baseEpistemicVar + pc.soilVarGain * soilProb * soilProb;
@@ -95,13 +105,28 @@ void main() {
 
     uSoilPatch.patches[cam * kPatches + patchIdx] = patchOut;
     s_patch[patchIdx] = patchOut;
+    s_mud[patchIdx] = fMud;
     barrier();
 
     if (patchIdx == 0u) {
         vec4 acc = vec4(0.0);
-        for (uint i = 0u; i < kPatches; ++i) acc += s_patch[i];
+        // Track localized central-FOV mud occlusion (rows 1..5, excluding ego hood/fender periphery)
+        // so partial-lens mud attenuates camera weight cleanly without false alarms on clean scenes.
+        float highSoilSum = 0.0;
+        float highSoilCount = 0.0;
+        for (uint i = 0u; i < kPatches; ++i) {
+            const vec4 sp = s_patch[i];
+            acc += sp;
+            const uint row = i / pc.patchCols;
+            if (row >= 1u && row <= 5u && sp.x > 0.65 && s_mud[i] > 0.45) {
+                highSoilSum += sp.x;
+                highSoilCount += 1.0;
+            }
+        }
         acc /= float(kPatches);
-        const float camW = mix(1.0, pc.minTokenWeight, clamp((acc.x - 0.22) / 0.45, 0.0, 1.0));
+        const float topAvg = (highSoilCount >= 5.0) ? (highSoilSum / highSoilCount) : acc.x;
+        const float effSoil = max(acc.x, 0.55 * acc.x + 0.45 * topAvg);
+        const float camW = mix(1.0, pc.minTokenWeight, clamp((effSoil - 0.22) / 0.45, 0.0, 1.0));
         uCamSummary.summary[cam] = vec4(acc.x, camW, acc.z, acc.w);
     }
 }

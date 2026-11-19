@@ -16,7 +16,13 @@ public:
 
 private:
     const SimConfig& cfg_;
+    mutable std::vector<Vec3> corridorScratch_;
+    mutable std::vector<float> corridorArcScratch_;
+
     static float quinticLateralOffset(float d0, float d1, float tNorm);
+    void buildRssCorridor(const EgoState& ego, const ClosedCatmullRomCurve3& centerline,
+                          float loopLen, float loopU, float lookaheadDist,
+                          float currentLat, float targetLat, float maxLen) const;
 };
 
 } // namespace cybercab

@@ -37,6 +37,31 @@ vec4 readMem(uint cam, int x, int y, uint slot) {
     return uEncMemory.feat[idx];
 }
 
+bool cellHasVeh(uint cam, int x, int y) {
+    if (x < 0 || x >= int(pc.featW) || y < 0 || y >= int(pc.featH)) return false;
+    const vec4 m1 = readMem(cam, x, y, 1u);
+    const vec4 m2 = readMem(cam, x, y, 2u);
+    const vec4 m3 = readMem(cam, x, y, 3u);
+    const float mask = clamp(1.0 - m2.x * 1.2 - m1.w * 0.25, 0.20, 1.0);
+    return (m3.x >= 0.0) && (m1.x * mask > 0.16) && (m1.x >= m1.y * 0.85);
+}
+
+float calcIoa(vec4 a, vec4 b) {
+    const float ax1 = a.x - a.z * 0.5, ay1 = a.y - a.w * 0.5;
+    const float ax2 = a.x + a.z * 0.5, ay2 = a.y + a.w * 0.5;
+    const float bx1 = b.x - b.z * 0.5, by1 = b.y - b.w * 0.5;
+    const float bx2 = b.x + b.z * 0.5, by2 = b.y + b.w * 0.5;
+    const float inter = max(0.0, min(ax2, bx2) - max(ax1, bx1)) * max(0.0, min(ay2, by2) - max(ay1, by1));
+    const float areaA = max(1e-5, a.z * a.w);
+    return inter / areaA;
+}
+
+uint domClsIdx(vec3 cls) {
+    if (cls.y > cls.x && cls.y >= cls.z) return 1u;
+    if (cls.z > cls.x && cls.z > cls.y) return 2u;
+    return 0u;
+}
+
 void main() {
     uint cam = gl_WorkGroupID.z;
     uint q = gl_LocalInvocationID.x;
@@ -45,115 +70,321 @@ void main() {
     const vec4 initA = uQueryInit.anchors[cam * pc.numQueries + q];
     float cx = initA.x;
     float cy = initA.y;
-    float w = 0.08;
-    float h = 0.12;
+    float w = 0.035;
+    float h = 0.044;
     float objSeed = initA.z;
     const float patchW = initA.w;
-    if (objSeed <= 0.05) {
-        const uint outBase = (cam * pc.numQueries + q) * 2u;
+    const bool activeQ = (objSeed > 0.05);
+
+    s_qPos[q] = activeQ ? vec4(cx, cy, w, h) : vec4(-10.0);
+    s_qFeat[q] = vec4(0.0);
+    barrier();
+
+    // Iterative Decoder Refinement Layers (uniform barrier participation across all threads!)
+    for (uint layer = 0u; layer < pc.numLayers; ++layer) {
+        float sumW = 0.0;
+        if (activeQ) {
+            const int gx = int(clamp(cx * float(pc.featW), 0.0, float(pc.featW) - 1.0));
+            const int gy = int(clamp(cy * float(pc.featH), 0.0, float(pc.featH) - 1.0));
+
+            // Multi-scale Deformable Cross-Attention: layer 0 uses stride-2 (radius 32px),
+            // subsequent layers keep stride-1 while expanding seamlessly across connected vehicle components.
+            const int step = (layer == 0u) ? 2 : 1;
+            const vec4 prevQF = s_qFeat[q];
+            const bool vehQuery = (prevQF.x > prevQF.y * 1.15) && (prevQF.x >= prevQF.z * 0.90) && (prevQF.x > 0.04);
+            const bool expandVeh = (layer > 0u) && vehQuery && (w > 0.20 || h > 0.22);
+
+            int scanMinDx = -4, scanMaxDx = 4;
+            int scanMinDy = -4, scanMaxDy = 4;
+            if (layer > 0u) {
+                if (expandVeh) {
+                    // Step A: Find full vertical span at query column gx (+/- 1 col) so lower bumper/undercarriage seeds reach tall upper cargo.
+                    const int seedXLo = max(0, gx - 1);
+                    const int seedXHi = min(int(pc.featW) - 1, gx + 1);
+                    int yUp = 0, yDn = 0, gap = 0;
+                    const int maxUpGap = (gy >= 17) ? 3 : 2;
+                    for (int dy = 1; dy <= 24; ++dy) {
+                        if (gy - dy < 0) break;
+                        bool hit = false;
+                        for (int xx = seedXLo; xx <= seedXHi; ++xx) {
+                            if (cellHasVeh(cam, xx, gy - dy)) { hit = true; break; }
+                        }
+                        if (hit) { yUp = -dy; gap = 0; }
+                        else if (++gap > maxUpGap) break;
+                    }
+                    gap = 0;
+                    const int maxDnGap = (yUp <= -3) ? 3 : 2;
+                    for (int dy = 1; dy <= 24; ++dy) {
+                        if (gy + dy >= int(pc.featH)) break;
+                        bool hit = false;
+                        for (int xx = seedXLo; xx <= seedXHi; ++xx) {
+                            if (cellHasVeh(cam, xx, gy + dy)) { hit = true; break; }
+                        }
+                        if (hit) { yDn = dy; gap = 0; }
+                        else if (++gap > maxDnGap) break;
+                    }
+                    const int yLo = max(0, gy + min(-6, yUp));
+                    const int yHi = min(int(pc.featH) - 1, gy + max(6, yDn));
+
+                    // Step B: Walk left & right across full connected vertical band [yLo, yHi].
+                    int lastAct = 0;
+                    gap = 0;
+                    for (int dx = 1; dx <= 32; ++dx) {
+                        if (gx - dx < 0) break;
+                        bool hit = false;
+                        for (int yy = yLo; yy <= yHi; ++yy) {
+                            if (cellHasVeh(cam, gx - dx, yy)) { hit = true; break; }
+                        }
+                        if (hit) { lastAct = -dx; gap = 0; }
+                        else if (++gap > 1) break;
+                    }
+                    scanMinDx = min(-2, lastAct);
+                    lastAct = 0; gap = 0;
+                    for (int dx = 1; dx <= 32; ++dx) {
+                        if (gx + dx >= int(pc.featW)) break;
+                        bool hit = false;
+                        for (int yy = yLo; yy <= yHi; ++yy) {
+                            if (cellHasVeh(cam, gx + dx, yy)) { hit = true; break; }
+                        }
+                        if (hit) { lastAct = dx; gap = 0; }
+                        else if (++gap > 1) break;
+                    }
+                    scanMaxDx = max(2, lastAct);
+
+                    // Step C: Re-scan full vertical extent across [scanMinDx, scanMaxDx].
+                    const int xLo = max(0, gx + scanMinDx);
+                    const int xHi = min(int(pc.featW) - 1, gx + scanMaxDx);
+                    lastAct = 0; gap = 0;
+                    for (int dy = 1; dy <= 24; ++dy) {
+                        if (gy - dy < 0) break;
+                        bool hit = false;
+                        for (int xx = xLo; xx <= xHi; ++xx) {
+                            if (cellHasVeh(cam, xx, gy - dy)) { hit = true; break; }
+                        }
+                        if (hit) { lastAct = -dy; gap = 0; }
+                        else if (++gap > maxUpGap) break;
+                    }
+                    scanMinDy = min(-2, lastAct);
+                    lastAct = 0; gap = 0;
+                    for (int dy = 1; dy <= 24; ++dy) {
+                        if (gy + dy >= int(pc.featH)) break;
+                        bool hit = false;
+                        for (int xx = xLo; xx <= xHi; ++xx) {
+                            if (cellHasVeh(cam, xx, gy + dy)) { hit = true; break; }
+                        }
+                        if (hit) { lastAct = dy; gap = 0; }
+                        else if (++gap > maxDnGap) break;
+                    }
+                    scanMaxDy = max(2, lastAct);
+                } else {
+                    const int rad = (w > 0.21 || h > 0.24) ? 6 : 2;
+                    scanMinDx = -rad; scanMaxDx = rad;
+                    scanMinDy = -rad; scanMaxDy = rad;
+                }
+            }
+            const bool wideConn = (layer > 0u) && expandVeh && ((scanMaxDx - scanMinDx) > 7 || (scanMaxDy - scanMinDy) > 7);
+            if (layer > 0u && expandVeh && !wideConn) {
+                const int rad = (w > 0.21 || h > 0.24) ? 6 : 2;
+                scanMinDx = -rad; scanMaxDx = rad;
+                scanMinDy = -rad; scanMaxDy = rad;
+            }
+
+            vec2 weightedPos = vec2(0.0);
+            vec2 weightedBoxPos = vec2(0.0);
+            vec2 weightedBoxPos2 = vec2(0.0);
+            vec2 subMin = vec2(1.0);
+            vec2 subMax = vec2(0.0);
+            bool hasSub = false;
+            float sumVeh = 0.0, sumPed = 0.0, sumSig = 0.0;
+            float sumBoxW = 0.0, maxClsSal = 0.0;
+            int minDx = 99, maxDx = -99, minDy = 99, maxDy = -99;
+
+            vec2 seedMin = vec2(1.0), seedMax = vec2(0.0);
+            bool hasSeed = false;
+            if (layer > 0u) {
+                float bestSeedSal = -1.0;
+                for (int sy = -1; sy <= 1; ++sy) {
+                    for (int sx = -1; sx <= 1; ++sx) {
+                        const vec4 sm1 = readMem(cam, gx + sx, gy + sy, 1u);
+                        const vec4 sm2 = readMem(cam, gx + sx, gy + sy, 2u);
+                        const vec4 sm3 = readMem(cam, gx + sx, gy + sy, 3u);
+                        if (sm3.x < 0.0 || sm3.z < 0.0) continue;
+                        const float sMask = clamp(1.0 - sm2.x * 1.2 - sm1.w * 0.25, 0.20, 1.0);
+                        const float sSal = (sm1.x * 1.25 + sm1.y * 1.45 + sm1.z * 1.35) * sMask;
+                        if (sSal > bestSeedSal) {
+                            bestSeedSal = sSal;
+                            seedMin = vec2(floor(sm3.x / 2048.0), mod(sm3.x, 2048.0)) / 2047.0;
+                            seedMax = vec2(floor(sm3.z / 2048.0), mod(sm3.z, 2048.0)) / 2047.0;
+                            hasSeed = true;
+                        }
+                    }
+                }
+            }
+            const vec2 subPad = vec2(3.5 / (float(pc.featW) * 8.0), 3.5 / (float(pc.featH) * 8.0));
+
+            for (int dy = scanMinDy; dy <= scanMaxDy; dy += step) {
+                for (int dx = scanMinDx; dx <= scanMaxDx; dx += step) {
+                    const vec4 m0 = readMem(cam, gx + dx, gy + dy, 0u);
+                    const vec4 m1 = readMem(cam, gx + dx, gy + dy, 1u);
+                    const vec4 m2 = readMem(cam, gx + dx, gy + dy, 2u);
+                    const vec4 m3 = readMem(cam, gx + dx, gy + dy, 3u);
+
+                    const float mask = clamp(1.0 - m2.x * 1.2 - m1.w * 0.25, 0.20, 1.0);
+                    const float clsSal = (m1.x * 1.25 + m1.y * 1.45 + m1.z * 1.35) * mask;
+                    const float sal = clsSal + m0.z * 0.15 * mask;
+                    const float ndx = float(dx) / float(step);
+                    const float ndy = float(dy) / float(step);
+                    const float kernScale = wideConn ? 0.045 : 0.18;
+                    const float spatialKern = exp(-kernScale * (ndx * ndx + ndy * ndy));
+                    const float a = sal * spatialKern;
+                    const vec2 cPos = vec2((float(gx + dx) + 0.5) / float(pc.featW),
+                                           (float(gy + dy) + 0.5) / float(pc.featH));
+                    sumW += a;
+                    weightedPos += a * cPos;
+                    sumVeh += a * m1.x;
+                    sumPed += a * m1.y;
+                    sumSig += a * m1.z;
+
+                    if (clsSal > 0.18 || (!wideConn && sal > 0.25)) {
+                        const float ab = pow(max(clsSal - 0.14, 0.02), 1.35);
+                        sumBoxW += ab;
+                        weightedBoxPos += ab * cPos;
+                        weightedBoxPos2 += ab * cPos * cPos;
+                        minDx = min(minDx, dx);
+                        maxDx = max(maxDx, dx);
+                        minDy = min(minDy, dy);
+                        maxDy = max(maxDy, dy);
+                    }
+                    const bool vehSubMatch = !wideConn || (m1.x * mask > 0.15 && m1.x >= m1.y * 0.85);
+                    if (layer > 0u && m3.x >= 0.0 && m3.z >= 0.0 && vehSubMatch &&
+                        (clsSal > 0.18 || (abs(dx) <= 1 && abs(dy) <= 1))) {
+                        const vec2 cMin = vec2(floor(m3.x / 2048.0), mod(m3.x, 2048.0)) / 2047.0;
+                        const vec2 cMax = vec2(floor(m3.z / 2048.0), mod(m3.z, 2048.0)) / 2047.0;
+                        const bool touchesSeed = hasSeed &&
+                                                 cMax.x >= seedMin.x - subPad.x && cMin.x <= seedMax.x + subPad.x &&
+                                                 cMax.y >= seedMin.y - subPad.y && cMin.y <= seedMax.y + subPad.y;
+                        if (wideConn || clsSal > 0.18 || touchesSeed) {
+                            subMin = min(subMin, cMin);
+                            subMax = max(subMax, cMax);
+                            hasSub = true;
+                        }
+                    }
+                    maxClsSal = max(maxClsSal, clsSal);
+                }
+            }
+
+            if (sumW > 1e-4) {
+                const vec2 refined = weightedPos / sumW;
+                cx = mix(cx, refined.x, (layer == 0u) ? 0.80 : 0.65);
+                cy = mix(cy, refined.y, (layer == 0u) ? 0.80 : 0.65);
+            }
+
+            if (layer > 0u && hasSub && (wideConn || ((maxDx - minDx) < 4 && (maxDy - minDy) < 4)) &&
+                subMax.x > subMin.x && subMax.y > subMin.y) {
+                cx = 0.5 * (subMin.x + subMax.x);
+                cy = 0.5 * (subMin.y + subMax.y);
+                w = clamp(subMax.x - subMin.x, 0.008, wideConn ? 0.92 : 0.45);
+                h = clamp(subMax.y - subMin.y, 0.010, wideConn ? 0.92 : 0.55);
+            } else if (layer > 0u && sumBoxW > 1e-4 && (maxDx - minDx) < 4 && (maxDy - minDy) < 4) {
+                const vec2 meanB = weightedBoxPos / sumBoxW;
+                const vec2 varB = max(weightedBoxPos2 / sumBoxW - meanB * meanB, vec2(0.0));
+                const vec2 cell = vec2(1.0 / float(pc.featW), 1.0 / float(pc.featH));
+                const float fill = clamp(maxClsSal * 1.15, 0.35, 1.0);
+                w = clamp(sqrt(12.0 * varB.x + cell.x * cell.x * fill) * 1.04, 0.015, 0.45);
+                h = clamp(sqrt(12.0 * varB.y + cell.y * cell.y * fill) * 1.04, 0.020, 0.55);
+                cx = mix(cx, meanB.x, 0.70);
+                cy = mix(cy, meanB.y, 0.70);
+            } else if (maxDx >= minDx && maxDy >= minDy) {
+                const float estW = float(maxDx - minDx + step) / float(pc.featW);
+                const float estH = float(maxDy - minDy + step) / float(pc.featH);
+                const float boxBlend = (layer == 0u) ? 1.0 : 0.75;
+                w = mix(w, clamp(estW * 1.02, 0.025, 0.85), boxBlend);
+                h = mix(h, clamp(estH * 1.02, 0.030, 0.85), boxBlend);
+            }
+
+            const float normMass = min(1.0, sumW / 0.65) / max(sumW, 1e-4);
+            s_qPos[q] = vec4(cx, cy, w, h);
+            s_qFeat[q] = vec4(sumVeh * normMass, sumPed * normMass, sumSig * normMass, sumW);
+        } else {
+            s_qPos[q] = vec4(-10.0);
+            s_qFeat[q] = vec4(0.0);
+        }
+        barrier();
+
+        // Query-to-Query Self-Attention duplicate suppression (co-located + containment inside expanded same-class objects)
+        if (activeQ) {
+            float selfSuppress = 1.0;
+            const vec2 mySpan = max(vec2(w, h), vec2(0.05));
+            const uint myCls = domClsIdx(s_qFeat[q].xyz);
+            for (uint o = 0u; o < pc.numQueries; ++o) {
+                if (o == q) continue;
+                const vec4 oPos = s_qPos[o];
+                const vec4 oFeat = s_qFeat[o];
+                if (oFeat.w <= 0.0) continue;
+                const bool sameCls = (domClsIdx(oFeat.xyz) == myCls);
+                const bool largeO = (oPos.z > 0.25 || oPos.w > 0.25);
+                const vec2 refSpan = min(mySpan, max(oPos.zw, vec2(0.05)));
+                const float d = length((oPos.xy - vec2(cx, cy)) / refSpan);
+                const float ioaInO = (sameCls && (largeO || w > 0.25 || h > 0.25)) ? calcIoa(vec4(cx, cy, w, h), oPos) : 0.0;
+                const float horInter = max(0.0, min(cx + w * 0.5, oPos.x + oPos.z * 0.5) - max(cx - w * 0.5, oPos.x - oPos.z * 0.5));
+                const float horIoa = horInter / max(1e-5, min(w, oPos.z));
+                const bool underTallCargo = sameCls && (oPos.w > 0.35) && (h < 0.14) && (horIoa > 0.55) &&
+                                            ((cy - h * 0.5) >= (oPos.y - oPos.w * 0.5)) &&
+                                            ((cy - h * 0.5) <= (oPos.y + oPos.w * 0.5 + 0.13));
+                const bool oDominates = (oFeat.w > sumW || (oFeat.w == sumW && o < q));
+                if ((d < 0.75 && oDominates) ||
+                    underTallCargo ||
+                    (ioaInO > 0.35 && oPos.z * oPos.w >= w * h && (oDominates || oPos.z * oPos.w > w * h * 1.2))) {
+                    selfSuppress *= ((ioaInO > 0.35 || underTallCargo) ? 0.04 : 0.25);
+                }
+            }
+            objSeed *= selfSuppress;
+        }
+        barrier();
+    }
+
+    const uint outBase = (cam * pc.numQueries + q) * 2u;
+    if (!activeQ) {
         uDetrOut.dets[outBase + 0u] = vec4(0.5, 0.5, 0.0, 0.0);
         uDetrOut.dets[outBase + 1u] = vec4(0.0, 1.0, patchW, 1.0);
         return;
     }
 
-    s_qPos[q] = vec4(cx, cy, w, h);
-    s_qFeat[q] = vec4(0.0);
-    barrier();
+    // Classification Head using pixel aspect ratio (featW : featH) rather than normalized ratio
+    const vec4 qf = s_qFeat[q];
+    float vScore = qf.x * 1.25;
+    float pScore = qf.y * 1.25;
+    float sScore = qf.z * 1.40;
 
-    // Iterative Decoder Refinement Layers (Cross-Attention + Query Self-Attention + Box FFN)
-    for (uint layer = 0u; layer < pc.numLayers; ++layer) {
-        int gx = int(clamp(cx * float(pc.featW), 0.0, float(pc.featW) - 1.0));
-        int gy = int(clamp(cy * float(pc.featH), 0.0, float(pc.featH) - 1.0));
-
-        // Deformable Cross-Attention sampling 5x5 local window in uEncMemory
-        float sumW = 0.0;
-        vec2 weightedPos = vec2(0.0);
-        float sumVeh = 0.0, sumPed = 0.0, sumSig = 0.0, sumEdge = 0.0;
-        int minDx = 99, maxDx = -99, minDy = 99, maxDy = -99;
-
-        for (int dy = -2; dy <= 2; ++dy) {
-            for (int dx = -2; dx <= 2; ++dx) {
-                vec4 m0 = readMem(cam, gx + dx, gy + dy, 0u);
-                vec4 m1 = readMem(cam, gx + dx, gy + dy, 1u);
-                vec4 m2 = readMem(cam, gx + dx, gy + dy, 2u);
-                vec4 m3 = readMem(cam, gx + dx, gy + dy, 3u);
-
-                float sal = (m1.x * 1.15 + m1.y * 1.85 + m1.z * 1.1 + m0.z * 0.25)
-                          * clamp(1.0 - m2.x * 1.2 - m1.w * 0.25, 0.20, 1.0);
-                float spatialKern = exp(-0.18 * float(dx * dx + dy * dy));
-                float a = sal * spatialKern;
-                sumW += a;
-                weightedPos += a * vec2((float(gx + dx) + 0.5) / float(pc.featW),
-                                        (float(gy + dy) + 0.5) / float(pc.featH));
-                sumVeh += a * m1.x;
-                sumPed += a * m1.y;
-                sumSig += a * m1.z;
-                sumEdge += a * m0.z;
-
-                if (sal > 0.14) {
-                    minDx = min(minDx, dx);
-                    maxDx = max(maxDx, dx);
-                    minDy = min(minDy, dy);
-                    maxDy = max(maxDy, dy);
-                }
-            }
-        }
-
-        if (sumW > 1e-4) {
-            vec2 refined = weightedPos / sumW;
-            cx = mix(cx, refined.x, 0.65);
-            cy = mix(cy, refined.y, 0.65);
-        }
-
-        if (maxDx >= minDx && maxDy >= minDy) {
-            float estW = float(maxDx - minDx + 1) / float(pc.featW);
-            float estH = float(maxDy - minDy + 1) / float(pc.featH);
-            w = mix(w, clamp(estW * 1.25, 0.035, 0.45), 0.7);
-            h = mix(h, clamp(estH * 1.25, 0.050, 0.55), 0.7);
-        }
-
-        s_qPos[q] = vec4(cx, cy, w, h);
-        s_qFeat[q] = vec4(sumVeh, sumPed, sumSig, sumW);
-        barrier();
-
-        // Query-to-Query Self-Attention duplicate suppression (keeps highest scoring query per cluster)
-        float selfSuppress = 1.0;
-        for (uint o = 0u; o < pc.numQueries; ++o) {
-            if (o == q) continue;
-            vec4 oPos = s_qPos[o];
-            vec4 oFeat = s_qFeat[o];
-            float d = length((oPos.xy - vec2(cx, cy)) / max(vec2(w, h), vec2(0.05)));
-            if (d < 0.85 && oFeat.w > sumW) {
-                selfSuppress *= 0.30;
-            }
-        }
-        objSeed *= selfSuppress;
-        barrier();
-    }
-
-    // Classification Head
-    vec4 qf = s_qFeat[q];
-    float vScore = qf.x * 1.15;
-    float pScore = qf.y * 1.55;
-    float sScore = qf.z * 1.25;
+    const float wPx = w * float(pc.featW);
+    const float hPx = h * float(pc.featH);
 
     // Aspect-ratio & vertical-position geometric inductive bias in FFN head
-    if (cy < 0.42 && sScore > 0.08) sScore *= 1.45;
-    if (h > w * 1.25 && pScore > 0.05) pScore *= 1.35;
-    if (w >= h * 0.95 && vScore > 0.05) vScore *= 1.25;
+    if (cy < 0.45 && sScore > 0.05) sScore *= 1.55;
+    if (wPx >= hPx * 1.18 && w > 0.060 && vScore >= pScore * 0.90 && vScore > 0.04) {
+        vScore *= 1.45;
+        pScore *= 0.75;
+    } else if (((hPx > wPx * 1.01 && w <= 0.095 && h < 0.135 && pScore >= vScore * 0.88) ||
+                (hPx > wPx * 1.05 && pScore >= vScore * 0.88) ||
+                (w <= 0.062 && hPx >= wPx * 0.90 && pScore >= vScore * 0.92)) &&
+               h > 0.024 && pScore > 0.08) {
+        pScore *= 1.45;
+        vScore *= 0.75;
+    } else if (cy < 0.505 && h <= 0.024 && wPx >= hPx * 0.85 && vScore > 0.04) {
+        vScore *= 1.15;
+    }
 
     float clsId = 1.0;
     float maxCls = vScore;
     if (pScore > maxCls) { maxCls = pScore; clsId = 2.0; }
     if (sScore > maxCls) { maxCls = sScore; clsId = 3.0; }
 
-    const float logit = objSeed * 5.0 + maxCls * 2.2 - 2.35;
+    const float logit = objSeed * 4.5 + maxCls * 2.2 - 2.20;
     const float rawConf = 1.0 / (1.0 + exp(-clamp(logit, -8.0, 8.0)));
     // Propagate soil confidence into detection confidence (soiled lens drops score to ByteTrack Stage-2 tier!)
     const float finalConf = clamp(rawConf * mix(0.32, 1.0, patchW), 0.0, 0.99);
     const float boxSigma = 0.05 + (1.0 - patchW) * 0.65 + (1.0 - finalConf) * 0.25;
 
-    uint outBase = (cam * pc.numQueries + q) * 2u;
     uDetrOut.dets[outBase + 0u] = vec4(cx, cy, w, h);
     uDetrOut.dets[outBase + 1u] = vec4(finalConf, clsId, patchW, boxSigma);
 }

@@ -110,6 +110,13 @@ struct EvalMetrics {
     float trackPosRmseM = 0.0f;
     int matchedGtObjects = 0;
     int totalGtDynamic = 0;
+    int ghostPedDetections = 0;
+    int ghostVehDetections = 0;
+    int misclassifiedTrucks = 0;
+    int truckVehVoxels = 0;
+    int truckPedVoxels = 0;
+    int signPoleVoxels = 0;
+    double totalPipelineMs = 0.0;
 };
 
 struct PerceptionFrameOutput {

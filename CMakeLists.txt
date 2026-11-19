@@ -121,6 +121,12 @@ add_executable(cybercab_tests
     tests/test_physics_sat.cpp
     tests/test_planning_tracking_trace.cpp
     tests/test_vulkan_pipeline.cpp
+    tests/test_system_sync.cpp
+    tests/test_bytetrack.cpp
+    tests/test_rtdetr.cpp
+    tests/test_occupancy_net.cpp
+    tests/test_fmea_suite.cpp
+    tests/test_fmea_perception_safety.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
 target_link_libraries(cybercab_tests PRIVATE

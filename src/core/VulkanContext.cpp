@@ -9,18 +9,21 @@
 
 namespace cybercab {
 
-namespace {
-
-VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
+VKAPI_ATTR VkBool32 VKAPI_CALL vulkanDebugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT severity,
     VkDebugUtilsMessageTypeFlagsEXT,
     const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-    void*) {
+    void* pUserData) {
     if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+        if (auto* ctx = static_cast<VulkanContext*>(pUserData)) {
+            ctx->validationIssueCount_.fetch_add(1, std::memory_order_relaxed);
+        }
         std::cerr << "[VulkanValidation] " << pCallbackData->pMessage << "\n";
     }
     return VK_FALSE;
 }
+
+namespace {
 
 bool checkValidationLayerSupport(const char* layerName) {
     uint32_t count = 0;
@@ -41,6 +44,7 @@ VulkanContext::~VulkanContext() {
 
 void VulkanContext::init(bool enableValidation, SDL_Window* window) {
     if (initialized_) return;
+    validationIssueCount_.store(0, std::memory_order_relaxed);
     createInstance(enableValidation, window);
     if (window) {
         if (!SDL_Vulkan_CreateSurface(window, instance_, &surface_)) {
@@ -143,7 +147,8 @@ void VulkanContext::createInstance(bool enableValidation, SDL_Window* window) {
             dci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
                               VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                               VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-            dci.pfnUserCallback = debugCallback;
+            dci.pfnUserCallback = vulkanDebugCallback;
+            dci.pUserData = this;
             fn(instance_, &dci, nullptr, &debugMessenger_);
         }
     }

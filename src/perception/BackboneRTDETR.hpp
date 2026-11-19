@@ -6,6 +6,7 @@
 #include "core/VulkanPipeline.hpp"
 #include "perception/PerceptionTypes.hpp"
 #include "sensors/CameraRigRenderer.hpp"
+#include <array>
 #include <vector>
 
 namespace cybercab {
@@ -18,6 +19,8 @@ public:
     void init(const VulkanContext& ctx, const SimConfig& cfg,
               const VulkanBuffer& camTensorSSBO, const VulkanBuffer& soilPatchSSBO);
     void updateCameraTensorBinding(const VulkanBuffer& camTensorSSBO, int camW, int camH);
+    void updateHorizonFromRig(const CameraRigRenderer& rig);
+    void resetHistory();
     void destroy();
 
     void recordBackbone(VkCommandBuffer cmd, int camW, int camH) const;
@@ -69,10 +72,15 @@ private:
 
     const VulkanBuffer* currCamTensorRef_ = nullptr;
     const VulkanBuffer* soilPatchRef_ = nullptr;
+    mutable bool hasPrevTensor_ = false;
+    std::array<float, 8> camHorizonV_{0.462f, 0.462f, 0.476f, 0.465f, 0.465f, 0.469f, 0.469f, 0.464f};
+    std::array<float, 8> camHorizonSlope_{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
 
     mutable std::vector<Vec4> detrRawScratch_;
     mutable std::vector<Detection2D> camCandsScratch_;
     mutable std::vector<Detection2D> keptScratch_;
+    mutable std::vector<Detection3D> raw3dScratch_;
+    mutable std::vector<uint8_t> suppressed3dScratch_;
 };
 
 } // namespace cybercab
