@@ -1,0 +1,180 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+// Stage 2: Multi-Scale Spatial-Temporal Convolutional Backbone + FPN Neck
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer CamTensorIn { vec4 pixels[]; } uCamTensor;
+layout(std430, binding = 1) readonly buffer PrevCamTensorIn { vec4 pixels[]; } uPrevCamTensor;
+layout(std430, binding = 2) readonly buffer SoilPatchIn { vec4 patches[]; } uSoilPatch;
+layout(std430, binding = 3) writeonly buffer FeatS4Out { vec4 feat[]; } uFeatS4;
+layout(std430, binding = 4) writeonly buffer FeatS5Out { vec4 feat[]; } uFeatS5;
+
+layout(push_constant) uniform BackbonePC {
+    uint camWidth;
+    uint camHeight;
+    uint featWidth;
+    uint featHeight;
+    uint patchCols;
+    uint patchRows;
+} pc;
+
+vec3 fetchCurr(uint cam, int x, int y) {
+    const int cx = clamp(x, 0, int(pc.camWidth) - 1);
+    const int cy = clamp(y, 0, int(pc.camHeight) - 1);
+    return uCamTensor.pixels[(cam * pc.camHeight + uint(cy)) * pc.camWidth + uint(cx)].rgb;
+}
+
+vec3 fetchPrev(uint cam, int x, int y) {
+    const int cx = clamp(x, 0, int(pc.camWidth) - 1);
+    const int cy = clamp(y, 0, int(pc.camHeight) - 1);
+    return uPrevCamTensor.pixels[(cam * pc.camHeight + uint(cy)) * pc.camWidth + uint(cx)].rgb;
+}
+
+shared vec4 s_block[8][8][4];
+
+void main() {
+    const uint fx = gl_GlobalInvocationID.x;
+    const uint fy = gl_GlobalInvocationID.y;
+    const uint cam = gl_GlobalInvocationID.z;
+    if (fx >= pc.featWidth || fy >= pc.featHeight) return;
+
+    const int strideX = int(pc.camWidth / pc.featWidth);
+    const int strideY = int(pc.camHeight / pc.featHeight);
+    const int x0 = int(fx) * strideX;
+    const int y0 = int(fy) * strideY;
+
+    float gxAcc = 0.0, gyAcc = 0.0, motAcc = 0.0;
+    float vehScoreAcc = 0.0, pedScoreAcc = 0.0, sigScoreAcc = 0.0, roadScoreAcc = 0.0;
+    float skyScoreAcc = 0.0, bldgScoreAcc = 0.0, lumAcc = 0.0;
+    float samples = 0.0;
+
+    for (int dy = 0; dy < strideY; dy += 2) {
+        for (int dx = 0; dx < strideX; dx += 2) {
+            const int px = x0 + dx;
+            const int py = y0 + dy;
+            const vec3 c = fetchCurr(cam, px, py);
+            const vec3 p = fetchPrev(cam, px, py);
+            const float vFrac = float(py) / float(pc.camHeight);
+
+            const float lC = luma(c);
+            const float lL = luma(fetchCurr(cam, px - 2, py));
+            const float lR = luma(fetchCurr(cam, px + 2, py));
+            const float lU = luma(fetchCurr(cam, px, py - 2));
+            const float lD = luma(fetchCurr(cam, px, py + 2));
+
+            const float gx = abs(lR - lL);
+            const float gy = abs(lD - lU);
+            const float mot = length(c - p);
+
+            const float maxC = max(c.r, max(c.g, c.b));
+            const float minC = min(c.r, min(c.g, c.b));
+            const float sat = (maxC > 1e-4) ? ((maxC - minC) / maxC) : 0.0;
+
+            const float isSky = clamp((c.b - c.r) * 3.5, 0.0, 1.0) * clamp((lC - 0.42) * 3.0, 0.0, 1.0);
+            const float isAsphalt = clamp(1.0 - sat * 3.5, 0.0, 1.0) * clamp(1.0 - abs(lC - 0.16) * 5.0, 0.0, 1.0);
+            const float isSlateGround = (vFrac > 0.47 && c.b >= c.g && c.g >= c.r && sat < 0.60 && lC < 0.34) ? 1.0 : 0.0;
+            const float isWhiteStripe = (vFrac > 0.49) ? (clamp(1.0 - sat * 5.0, 0.0, 1.0) * clamp((lC - 0.54) * 3.5, 0.0, 1.0)) : 0.0;
+            const float isAmberCurb = (vFrac > 0.47 && c.r > c.g * 1.08 && c.r < c.g * 1.80 && c.g > c.b * 1.22 && (c.r - c.b) > 0.12) ? 1.0 : 0.0;
+            const float isRoad = clamp(isAsphalt + isSlateGround + isWhiteStripe + isAmberCurb, 0.0, 1.0);
+
+            // Emissive red/amber/green signal lenses or taillights
+            const float isRedSig = clamp((c.r - 0.62) * 3.0, 0.0, 1.0) * clamp((c.r - c.g) * 2.5, 0.0, 1.0);
+            const float isGrnSig = clamp((c.g - 0.58) * 3.0, 0.0, 1.0) * clamp((c.g - c.r) * 2.0, 0.0, 1.0) * (vFrac < 0.45 ? 1.0 : 0.2);
+            const float isSig = (vFrac < 0.47) ? clamp(isRedSig + isGrnSig, 0.0, 1.0) : 0.0;
+
+            // Mask out ego vehicle's own gold hood/nose/fenders in camera views
+            const float uFrac = float(px) / float(pc.camWidth);
+            const bool isEgoSelf = (cam == 0u && vFrac > 0.78) ||
+                                   (cam == 2u && vFrac > 0.68 && uFrac > 0.15 && uFrac < 0.85) ||
+                                   (cam == 5u && uFrac > 0.66 && vFrac > 0.45) ||
+                                   (cam == 6u && uFrac < 0.34 && vFrac > 0.45) ||
+                                   (vFrac > 0.84);
+
+            // Pedestrian chromaticity (saturated shirt in road/sidewalk band, exclude slate/road/curb/ego)
+            const float roadBand = smoothstep(0.40, 0.46, vFrac) * (1.0 - smoothstep(0.76, 0.86, vFrac));
+            const float isPedColor = isEgoSelf ? 0.0 : (clamp((sat - 0.48) * 2.8, 0.0, 1.0) * clamp((lC - 0.19) * 3.5, 0.0, 1.0) * (1.0 - isSky) * (1.0 - isRoad));
+            const float isPed = isPedColor * roadBand;
+
+            // Vehicle chassis: mid-frame painted car body / red taillight / truck cargo box (strictly upper vertical band to avoid flat white crosswalks)
+            const float isTail = isRedSig * smoothstep(0.44, 0.54, vFrac);
+            const float isVehPaint = isEgoSelf ? 0.0 : (clamp((sat - 0.42) * 2.5, 0.0, 1.0) * clamp((lC - 0.19) * 3.5, 0.0, 1.0) * (1.0 - isSky) * (1.0 - isRoad) * roadBand);
+            const float isTruckBox = (!isEgoSelf && vFrac > 0.34 && vFrac < 0.495 && sat < 0.16 && lC > 0.33 && c.b >= c.r * 0.95 && (1.0 - isSky) > 0.5) ? 0.85 : 0.0;
+            const float isVeh = clamp(isVehPaint * 0.78 + isTail * 1.4 + isTruckBox, 0.0, 1.0);
+
+            const float isBldg = (1.0 - isSky) * (1.0 - isRoad) * (vFrac < 0.41 ? 0.95 : 0.0);
+
+            gxAcc += gx;
+            gyAcc += gy;
+            motAcc += mot;
+            vehScoreAcc += isVeh;
+            pedScoreAcc += isPed;
+            sigScoreAcc += isSig;
+            roadScoreAcc += isRoad;
+            skyScoreAcc += isSky;
+            bldgScoreAcc += isBldg;
+            lumAcc += lC;
+            samples += 1.0;
+        }
+    }
+
+    samples = max(samples, 1.0);
+    const float mGx = gxAcc / samples;
+    const float mGy = gyAcc / samples;
+    const float mMot = motAcc / samples;
+    const float mVeh = vehScoreAcc / samples;
+    const float mPed = pedScoreAcc / samples;
+    const float mSig = sigScoreAcc / samples;
+    const float mRoad = roadScoreAcc / samples;
+    const float mSky = skyScoreAcc / samples;
+    const float mBldg = bldgScoreAcc / samples;
+    const float mLum = lumAcc / samples;
+
+    const uint pCol = min(pc.patchCols - 1u, (fx * pc.patchCols) / pc.featWidth);
+    const uint pRow = min(pc.patchRows - 1u, (fy * pc.patchRows) / pc.featHeight);
+    const vec4 soilInfo = uSoilPatch.patches[cam * (pc.patchCols * pc.patchRows) + pRow * pc.patchCols + pCol];
+    const float wPatch = soilInfo.y;
+    const float sigmaSoil = sqrt(soilInfo.z);
+
+    const float nx = (float(fx) + 0.5) / float(pc.featWidth) - 0.5;
+    const float ny = (float(fy) + 0.5) / float(pc.featHeight) - 0.5;
+    const float fovea = 1.0 + 0.35 * exp(-(nx * nx + ny * ny) * 6.0);
+    const float vPrior = clamp((float(fy) + 0.5) / float(pc.featHeight), 0.0, 1.0);
+
+    const float objEnergy = clamp((mVeh * 0.75 + mPed * 1.15 + mSig * 0.85) * fovea * wPatch, 0.0, 1.5);
+
+    const vec4 c0 = vec4(mGx, mGy, clamp((mGx + mGy) * fovea, 0.0, 2.0), silu(mGx + mGy - 0.05));
+    const vec4 c1 = vec4(mVeh * wPatch, mPed * wPatch, mSig * wPatch, mRoad);
+    const vec4 c2 = vec4(mSky, mBldg, mMot, mLum);
+    const vec4 c3 = vec4(vPrior, wPatch, sigmaSoil, objEnergy);
+
+    const uint baseIdx = ((cam * pc.featHeight + fy) * pc.featWidth + fx) * 4u;
+    uFeatS4.feat[baseIdx + 0u] = c0;
+    uFeatS4.feat[baseIdx + 1u] = c1;
+    uFeatS4.feat[baseIdx + 2u] = c2;
+    uFeatS4.feat[baseIdx + 3u] = c3;
+
+    const uint lx = gl_LocalInvocationID.x;
+    const uint ly = gl_LocalInvocationID.y;
+    s_block[ly][lx][0] = c0;
+    s_block[ly][lx][1] = c1;
+    s_block[ly][lx][2] = c2;
+    s_block[ly][lx][3] = c3;
+    barrier();
+
+    if ((lx & 1u) == 0u && (ly & 1u) == 0u && (fx + 1u) < pc.featWidth && (fy + 1u) < pc.featHeight) {
+        const uint s5W = pc.featWidth / 2u;
+        const uint s5H = pc.featHeight / 2u;
+        const uint s5Idx = ((cam * s5H + (fy / 2u)) * s5W + (fx / 2u)) * 4u;
+        for (int k = 0; k < 4; ++k) {
+            const vec4 avg = 0.25 * (
+                s_block[ly][lx][k] +
+                s_block[ly][lx + 1u][k] +
+                s_block[ly + 1u][lx][k] +
+                s_block[ly + 1u][lx + 1u][k]
+            );
+            uFeatS5.feat[s5Idx + uint(k)] = avg;
+        }
+    }
+}
