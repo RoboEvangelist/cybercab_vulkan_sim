@@ -108,3 +108,96 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
             cfg.btProcessNoisePos = readOr(bt, "process_noise_pos", cfg.btProcessNoisePos);
             cfg.btProcessNoiseVel = readOr(bt, "process_noise_vel", cfg.btProcessNoiseVel);
             cfg.btBaseMeasNoiseM = readOr(bt, "base_meas_noise_m", cfg.btBaseMeasNoiseM);
+        }
+        if (const auto bev = perc["bevformer"]) {
+            cfg.bevNx = readOr(bev, "grid_nx", cfg.bevNx);
+            cfg.bevNy = readOr(bev, "grid_ny", cfg.bevNy);
+            cfg.bevMinX = readOr(bev, "min_x", cfg.bevMinX);
+            cfg.bevMaxX = readOr(bev, "max_x", cfg.bevMaxX);
+            cfg.bevMinY = readOr(bev, "min_y", cfg.bevMinY);
+            cfg.bevMaxY = readOr(bev, "max_y", cfg.bevMaxY);
+            cfg.bevChannels = readOr(bev, "channels", cfg.bevChannels);
+            cfg.bevTemporalBlend = readOr(bev, "temporal_blend", cfg.bevTemporalBlend);
+            if (bev["z_anchors"] && bev["z_anchors"].IsSequence()) {
+                cfg.bevZAnchors.clear();
+                for (const auto& z : bev["z_anchors"]) {
+                    cfg.bevZAnchors.push_back(z.as<float>());
+                }
+            }
+        }
+        if (const auto occ = perc["occupancy_flow"]) {
+            cfg.occMinX = readOr(occ, "min_x", cfg.occMinX);
+            cfg.occMaxX = readOr(occ, "max_x", cfg.occMaxX);
+            cfg.occStepX = readOr(occ, "step_x", cfg.occStepX);
+            cfg.occMinY = readOr(occ, "min_y", cfg.occMinY);
+            cfg.occMaxY = readOr(occ, "max_y", cfg.occMaxY);
+            cfg.occStepY = readOr(occ, "step_y", cfg.occStepY);
+            cfg.occMinZ = readOr(occ, "min_z", cfg.occMinZ);
+            cfg.occMaxZ = readOr(occ, "max_z", cfg.occMaxZ);
+            cfg.occStepZ = readOr(occ, "step_z", cfg.occStepZ);
+            cfg.occDecayRate = readOr(occ, "confidence_decay_rate", cfg.occDecayRate);
+            cfg.occThreshold = readOr(occ, "occ_threshold", cfg.occThreshold);
+            cfg.occEnableShadows = readOr(occ, "enable_shadows", cfg.occEnableShadows);
+        }
+        if (const auto wm = perc["world_model"]) {
+            cfg.wmUncertaintyGrowthRate = readOr(wm, "uncertainty_growth_rate", cfg.wmUncertaintyGrowthRate);
+            if (wm["horizons_sec"] && wm["horizons_sec"].IsSequence()) {
+                cfg.wmHorizonsSec.clear();
+                for (const auto& h : wm["horizons_sec"]) {
+                    cfg.wmHorizonsSec.push_back(h.as<float>());
+                }
+            }
+        }
+    }
+
+    if (const auto pl = root["planning"]) {
+        cfg.targetCruiseSpeedMs = readOr(pl, "target_cruise_speed_ms", cfg.targetCruiseSpeedMs);
+        cfg.numPlannerCandidates = readOr(pl, "num_candidates", cfg.numPlannerCandidates);
+        cfg.trajSteps = readOr(pl, "traj_steps", cfg.trajSteps);
+        if (const auto rss = pl["rss"]) {
+            cfg.rssTReactSec = readOr(rss, "t_react_sec", cfg.rssTReactSec);
+            cfg.rssABrakeMs2 = readOr(rss, "a_brake_rss_ms2", cfg.rssABrakeMs2);
+            cfg.rssABrakeAebMs2 = readOr(rss, "a_brake_aeb_ms2", cfg.rssABrakeAebMs2);
+            cfg.rssDBufferM = readOr(rss, "d_buffer_m", cfg.rssDBufferM);
+            cfg.rssUncertaintyBufferGain = readOr(rss, "uncertainty_buffer_gain", cfg.rssUncertaintyBufferGain);
+        }
+    }
+
+    if (const auto veh = root["vehicle"]) {
+        cfg.wheelbaseM = readOr(veh, "wheelbase_m", cfg.wheelbaseM);
+        cfg.maxSteerRad = readOr(veh, "max_steer_rad", cfg.maxSteerRad);
+        cfg.egoHx = readOr(veh, "half_width_m", cfg.egoHx);
+        cfg.egoHy = readOr(veh, "half_height_m", cfg.egoHy);
+        cfg.egoHz = readOr(veh, "half_length_m", cfg.egoHz);
+        cfg.egoCenterOffsetFwd = readOr(veh, "center_offset_fwd_m", cfg.egoCenterOffsetFwd);
+        cfg.suspensionKSpring = readOr(veh, "suspension_k_spring", cfg.suspensionKSpring);
+        cfg.suspensionCDamper = readOr(veh, "suspension_c_damper", cfg.suspensionCDamper);
+    }
+
+    if (root["cameras"] && root["cameras"].IsSequence()) {
+        cfg.cameras.clear();
+        for (const auto& c : root["cameras"]) {
+            CameraSpec spec;
+            spec.id = readOr<std::string>(c, "id", "CAM");
+            spec.shortName = readOr<std::string>(c, "short_name", spec.id);
+            spec.desc = readOr<std::string>(c, "desc", "");
+            spec.hfovDeg = readOr(c, "hfov_deg", 50.0f);
+            spec.maxRangeM = readOr(c, "max_range_m", 50.0f);
+            spec.posIso = readVec3Or(c, "pos_iso", {0.0f, 0.0f, 1.2f});
+            spec.rpyDeg = readVec3Or(c, "rpy_deg", {0.0f, 0.0f, 0.0f});
+            if (c["distortion"] && c["distortion"].IsSequence() && c["distortion"].size() == 4) {
+                for (int k = 0; k < 4; ++k) spec.distortion[k] = c["distortion"][k].as<float>();
+            }
+            spec.uiColor = readVec3Or(c, "color", {0.22f, 0.74f, 0.97f});
+            spec.soiled = readOr(c, "soiled", false);
+            cfg.cameras.push_back(spec);
+        }
+        if (cfg.cameras.size() != 8) {
+            throw std::runtime_error("Expected exactly 8 cameras in config YAML");
+        }
+    }
+
+    return cfg;
+}
+
+} // namespace cybercab
