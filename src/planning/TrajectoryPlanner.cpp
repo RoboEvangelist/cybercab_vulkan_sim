@@ -138,3 +138,116 @@ void TrajectoryPlanner::plan(WorldEngine& world, const PerceptionFrameOutput& pe
         const float latDistFut = std::abs(rxFut * cosEgo - rzFut * sinEgo);
         const float trSpd = std::hypot(tr.worldVel.x, tr.worldVel.z);
 
+        const float latCorridorNow = (tr.semantic == SemanticClass::Pedestrian) ? 1.55f : 1.35f;
+        const float latCorridorFut = (tr.semantic == SemanticClass::Pedestrian) ? 1.45f : 1.30f;
+        const bool inNow = (latDist < latCorridorNow);
+        const bool approachingCorridor = (latDistFut < latCorridorFut && latDistFut < latDist - 0.12f && trSpd > 0.35f);
+
+        if (fwdDist > -0.6f && fwdDist < 30.0f && (inNow || approachingCorridor)) {
+            minForwardObsDist = std::min(minForwardObsDist, std::max(0.0f, fwdDist));
+            if (tr.semantic == SemanticClass::Pedestrian) {
+                if (fwdDist <= rssDist + 1.5f) {
+                    behavior = "YIELDING_PEDESTRIAN";
+                    desiredSpeed = 0.0f;
+                    if (fwdDist <= rssDist * 0.85f && ego.speed > 0.4f) {
+                        aebTriggered = true;
+                    }
+                } else {
+                    behavior = "YIELDING_PEDESTRIAN";
+                    desiredSpeed = std::min(desiredSpeed, std::sqrt(2.0f * 2.5f * std::max(0.0f, fwdDist - rssDist)));
+                }
+            } else {
+                const float vSpd = trSpd;
+                if (fwdDist <= rssDist) {
+                    if (bestLeadGap < 12.0f || latDist < 1.25f) {
+                        desiredSpeed = 0.0f;
+                        behavior = "FOLLOWING_LEAD";
+                        if (fwdDist < rssDist * 0.72f && ego.speed > vSpd + 1.2f) {
+                            aebTriggered = true;
+                        }
+                    }
+                } else if (bestLeadGap < 18.0f) {
+                    behavior = "FOLLOWING_LEAD";
+                    desiredSpeed = std::min(desiredSpeed, vSpd + std::max(0.0f, (fwdDist - rssDist) * 0.45f));
+                }
+            }
+        }
+    }
+
+    for (const auto& v : perc.activeVoxels) {
+        if (v.wy > 2.1f || v.sem == SemanticClass::Overhang || v.sem == SemanticClass::Static ||
+            v.sem == SemanticClass::SignalSign || v.sem == SemanticClass::Curb) {
+            continue;
+        }
+        const float fwd = v.egoX - 3.50f;
+        const float lat = std::abs(v.egoY);
+        const float corr = (v.sem == SemanticClass::Pedestrian) ? 1.50f : 1.25f;
+        if (fwd > 0.25f && fwd < rssDist + 4.0f && lat < corr && v.confidence > 0.52f) {
+            minForwardObsDist = std::min(minForwardObsDist, std::max(0.0f, fwd));
+            if (fwd <= rssDist * 0.88f && ego.speed > 0.5f) {
+                aebTriggered = true;
+                desiredSpeed = 0.0f;
+                behavior = (v.sem == SemanticClass::Pedestrian) ? "YIELDING_PEDESTRIAN" : "FOLLOWING_LEAD";
+            } else if (fwd <= rssDist + 1.5f) {
+                desiredSpeed = std::min(desiredSpeed, 2.5f);
+            }
+        }
+    }
+
+    if (ego.pos.z > 36.0f && ego.pos.x < WorldEngine::kStopLineX + 1.5f && ego.pos.x > WorldEngine::kStopLineX - 36.0f) {
+        const float distToStopBar = WorldEngine::kStopLineX - frontBumperX;
+        if (world.signalPhase() == SignalPhase::Red || world.signalPhase() == SignalPhase::Yellow) {
+            minForwardObsDist = std::min(minForwardObsDist, std::max(0.0f, distToStopBar));
+            behavior = "RED_LIGHT_HOLD";
+            if (distToStopBar <= 2.4f) {
+                desiredSpeed = 0.0f;
+            } else {
+                desiredSpeed = std::min(desiredSpeed, std::sqrt(2.0f * 2.4f * std::max(0.0f, distToStopBar - 1.5f)));
+            }
+        }
+    }
+
+    EgoState& mutEgo = world.mutableEgo();
+    if (mutEgo.passedStopSignCooldown > 0.0f) {
+        mutEgo.passedStopSignCooldown -= 1.0f / cfg_.controlHz;
+    }
+    if (ego.pos.z < -36.0f && ego.pos.x > 13.0f && ego.pos.x < 40.0f && mutEgo.passedStopSignCooldown <= 0.0f) {
+        const float distToSign = frontBumperX - 14.5f;
+        minForwardObsDist = std::min(minForwardObsDist, std::max(0.0f, distToSign));
+        if (distToSign <= 2.2f && ego.speed < 0.35f) {
+            mutEgo.stopSignHoldTimer += 1.0f / cfg_.controlHz;
+            behavior = "STOP_SIGN_HOLD";
+            desiredSpeed = 0.0f;
+            if (mutEgo.stopSignHoldTimer >= 1.2f) {
+                mutEgo.stopSignHoldTimer = 0.0f;
+                mutEgo.passedStopSignCooldown = 8.0f;
+            }
+        } else {
+            behavior = "STOP_SIGN_HOLD";
+            desiredSpeed = std::min(desiredSpeed, (distToSign < 1.5f) ? 0.0f : std::sqrt(2.0f * 2.2f * std::max(0.0f, distToSign - 1.0f)));
+        }
+    }
+
+    cmd.minObstacleDist = minForwardObsDist;
+    cmd.aebActive = cfg_.aebEnabled && aebTriggered;
+
+    if (cmd.aebActive) {
+        behavior = "AEB_EMERGENCY_BRAKE";
+        desiredSpeed = 0.0f;
+    } else if (ego.collisionHoldTimer > 0.0f) {
+        behavior = "COLLISION_CONTACT";
+    } else if (cfg_.driveMode == "manual") {
+        behavior = "MANUAL_DRIVE";
+    }
+
+    cmd.targetSpeed = desiredSpeed;
+    cmd.behaviorState = behavior;
+}
+
+PlannerCommand TrajectoryPlanner::plan(WorldEngine& world, const PerceptionFrameOutput& perc) const {
+    PlannerCommand cmd;
+    plan(world, perc, cmd);
+    return cmd;
+}
+
+} // namespace cybercab
