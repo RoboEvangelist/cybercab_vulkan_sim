@@ -168,3 +168,173 @@ void appendSphere(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx,
             const Vec3 wn = xform.transformVector(nLocal).normalized();
             verts.push_back({wp.x, wp.y, wp.z, wn.x, wn.y, wn.z, color.x, color.y, color.z, alpha, emissive, semF, 0, 0});
         }
+    }
+    const int rowStride = slices + 1;
+    for (int i = 0; i < stacks; ++i) {
+        for (int j = 0; j < slices; ++j) {
+            const uint32_t a = base + static_cast<uint32_t>(i * rowStride + j);
+            const uint32_t b = a + static_cast<uint32_t>(rowStride);
+            idx.push_back(a); idx.push_back(a + 1); idx.push_back(b + 1);
+            idx.push_back(a); idx.push_back(b + 1); idx.push_back(b);
+        }
+    }
+}
+
+void appendWheelAssembly(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx,
+                         const Mat4& wheelMat, float tireRadius, float tireWidth,
+                         Vec3 tireCol, Vec3 rimCol, SemanticClass sem) {
+    const Mat4 axMat = wheelMat * Mat4::rotZ(kPi * 0.5f);
+    appendCylinderY(verts, idx, axMat, tireRadius, tireRadius, tireWidth, 24, tireCol, 1.0f, 0.0f, sem);
+    appendCylinderY(verts, idx, axMat, tireRadius * 0.78f, tireRadius * 0.78f, tireWidth + 0.016f, 24, rimCol, 1.0f, 0.0f, sem);
+    appendCylinderY(verts, idx, axMat, tireRadius * 0.28f, tireRadius * 0.28f, tireWidth + 0.028f, 16, {0.10f, 0.12f, 0.15f}, 1.0f, 0.0f, sem);
+}
+
+// Solid champagne-gold shallow-dished Cybercab aero wheel cover (32-segment circular profile)
+void appendCybercabAeroWheel(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx,
+                             const Mat4& wheelMat, float sideSign,
+                             Vec3 tireCol, Vec3 rimGold, Vec3 centerDimpleCol, SemanticClass sem) {
+    const float tireR = 0.365f;
+    const float tireW = 0.245f;
+    const Mat4 axMat = wheelMat * Mat4::rotZ(kPi * 0.5f);
+    // Main round tire + black inner bezel ring
+    appendCylinderY(verts, idx, axMat, tireR, tireR, tireW, 32, tireCol, 1.0f, 0.0f, sem);
+    appendCylinderY(verts, idx, axMat, 0.334f, 0.334f, tireW + 0.008f, 32, {0.035f, 0.040f, 0.055f}, 1.0f, 0.0f, sem);
+    // Giant solid champagne-gold outer collar covering 90% of wheel diameter
+    appendCylinderY(verts, idx, axMat, 0.324f, 0.324f, tireW + 0.016f, 32, rimGold, 1.0f, 0.0f, sem);
+    // Shallow aerodynamic dished cone on outboard wheel face + tiny recessed dimple pin
+    const Mat4 dishRot = (sideSign > 0.0f) ? Mat4::rotZ(-kPi * 0.5f) : Mat4::rotZ(kPi * 0.5f);
+    const Mat4 outboardMat = wheelMat * Mat4::translation({sideSign * (tireW * 0.5f + 0.014f), 0.0f, 0.0f}) * dishRot;
+    appendCylinderY(verts, idx, outboardMat, 0.038f, 0.318f, 0.018f, 32, rimGold, 1.0f, 0.0f, sem);
+    appendCylinderY(verts, idx, wheelMat * Mat4::translation({sideSign * (tireW * 0.5f + 0.022f), 0.0f, 0.0f}) * dishRot,
+                    0.030f, 0.038f, 0.006f, 16, centerDimpleCol, 1.0f, 0.0f, sem);
+}
+
+// Emits a smooth longitudinally-lofted strip grid (`stations x cols`) without heap allocations.
+template <int MaxS, int MaxC>
+void emitSmoothStripGrid(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx,
+                         const Mat4& xform,
+                         const Vec3 (&pos)[MaxS][MaxC], int nStations, int nCols,
+                         Vec3 color, float alpha, float emissive, SemanticClass sem, bool flipWinding = false) {
+    Vec3 nrm[MaxS][MaxC]{};
+    for (int s = 0; s < nStations - 1; ++s) {
+        for (int c = 0; c < nCols - 1; ++c) {
+            const Vec3 p00 = pos[s][c];
+            const Vec3 p10 = pos[s][c + 1];
+            const Vec3 p11 = pos[s + 1][c + 1];
+            const Vec3 p01 = pos[s + 1][c];
+            Vec3 fn = flipWinding ? (p01 - p00).cross(p11 - p00) : (p10 - p00).cross(p11 - p00);
+            const float l2 = fn.normSq();
+            if (l2 > 1e-10f) {
+                fn = fn * (1.0f / std::sqrt(l2));
+                nrm[s][c] += fn;
+                nrm[s][c + 1] += fn;
+                nrm[s + 1][c + 1] += fn;
+                nrm[s + 1][c] += fn;
+            }
+        }
+    }
+
+    const float semF = static_cast<float>(static_cast<int>(sem));
+    const uint32_t base = static_cast<uint32_t>(verts.size());
+    for (int s = 0; s < nStations; ++s) {
+        for (int c = 0; c < nCols; ++c) {
+            const Vec3 wp = xform.transformPoint(pos[s][c]);
+            const Vec3 wn = xform.transformVector(nrm[s][c].normalized()).normalized();
+            verts.push_back({wp.x, wp.y, wp.z, wn.x, wn.y, wn.z, color.x, color.y, color.z, alpha, emissive, semF, 0.0f, 0.0f});
+        }
+    }
+    for (int s = 0; s < nStations - 1; ++s) {
+        for (int c = 0; c < nCols - 1; ++c) {
+            const uint32_t i00 = base + static_cast<uint32_t>(s * nCols + c);
+            const uint32_t i10 = base + static_cast<uint32_t>(s * nCols + c + 1);
+            const uint32_t i01 = base + static_cast<uint32_t>((s + 1) * nCols + c);
+            const uint32_t i11 = base + static_cast<uint32_t>((s + 1) * nCols + c + 1);
+            if (!flipWinding) {
+                idx.push_back(i00); idx.push_back(i10); idx.push_back(i11);
+                idx.push_back(i00); idx.push_back(i11); idx.push_back(i01);
+            } else {
+                idx.push_back(i00); idx.push_back(i11); idx.push_back(i10);
+                idx.push_back(i00); idx.push_back(i01); idx.push_back(i11);
+            }
+        }
+    }
+}
+
+void appendQuadXZ(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx,
+                  Vec3 center, float w, float len, float yaw, Vec3 color, float emissive, SemanticClass sem) {
+    float c = std::cos(yaw), s = std::sin(yaw);
+    float hw = w * 0.5f, hl = len * 0.5f;
+    auto xf = [&](float lx, float lz) -> Vec3 {
+        return {center.x + lx * c + lz * s, center.y, center.z - lx * s + lz * c};
+    };
+    Vec3 p0 = xf(-hw, -hl);
+    Vec3 p1 = xf( hw, -hl);
+    Vec3 p2 = xf( hw,  hl);
+    Vec3 p3 = xf(-hw,  hl);
+    float semF = static_cast<float>(static_cast<int>(sem));
+    uint32_t base = static_cast<uint32_t>(verts.size());
+    verts.push_back({p0.x, p0.y, p0.z, 0, 1, 0, color.x, color.y, color.z, 1.0f, emissive, semF, 0, 0});
+    verts.push_back({p1.x, p1.y, p1.z, 0, 1, 0, color.x, color.y, color.z, 1.0f, emissive, semF, 0, 0});
+    verts.push_back({p2.x, p2.y, p2.z, 0, 1, 0, color.x, color.y, color.z, 1.0f, emissive, semF, 0, 0});
+    verts.push_back({p3.x, p3.y, p3.z, 0, 1, 0, color.x, color.y, color.z, 1.0f, emissive, semF, 0, 0});
+    idx.push_back(base + 0); idx.push_back(base + 2); idx.push_back(base + 1);
+    idx.push_back(base + 0); idx.push_back(base + 3); idx.push_back(base + 2);
+}
+
+struct BuildingDef {
+    float x, z, w, h, d;
+    Vec3 baseCol, winCol;
+};
+
+const std::vector<BuildingDef>& buildingDefs() {
+    static const std::vector<BuildingDef> defs = {
+        {-24, -16, 24, 18, 22, {0.20f, 0.25f, 0.33f}, {0.22f, 0.74f, 0.97f}},
+        { 22, -15, 26, 24, 22, {0.12f, 0.16f, 0.23f}, {0.99f, 0.90f, 0.54f}},
+        {-25,  18, 22, 16, 20, {0.25f, 0.25f, 0.27f}, {0.58f, 0.77f, 0.99f}},
+        { 24,  18, 24, 20, 20, {0.20f, 0.25f, 0.33f}, {0.22f, 0.74f, 0.97f}},
+        {-16,  62, 18, 15, 18, {0.12f, 0.16f, 0.23f}, {0.99f, 0.90f, 0.54f}},
+        { 18,  62, 20, 19, 18, {0.25f, 0.25f, 0.27f}, {0.58f, 0.77f, 0.99f}},
+        {-76,  22, 18, 14, 26, {0.20f, 0.25f, 0.33f}, {0.22f, 0.74f, 0.97f}},
+        {-76, -22, 18, 18, 26, {0.12f, 0.16f, 0.23f}, {0.99f, 0.90f, 0.54f}},
+        { 76,  22, 18, 16, 26, {0.25f, 0.25f, 0.27f}, {0.58f, 0.77f, 0.99f}},
+        { 76, -22, 18, 21, 26, {0.20f, 0.25f, 0.33f}, {0.22f, 0.74f, 0.97f}},
+        {  0, -64, 46, 16, 16, {0.12f, 0.16f, 0.23f}, {0.99f, 0.90f, 0.54f}},
+    };
+    return defs;
+}
+
+} // namespace
+
+WorldEngine::WorldEngine(const SimConfig& cfg)
+    : cfg_(cfg),
+      centerline_(buildCybercabLoopPath(0.0f)),
+      laneCurves_{buildCybercabLoopPath(-1.9f), buildCybercabLoopPath(1.9f)} {
+    initStaticOBBs();
+    reset();
+}
+
+void WorldEngine::initStaticOBBs() {
+    staticOBBs_.clear();
+    staticOBBs_.push_back({"SIGNAL_MAST", 6.5f, 3.1f, kLoopHalfZ - 6.2f, 0.4f, 3.1f, 0.4f, 0.0f, 0, 0, SemanticClass::SignalSign, "SIGNAL"});
+    staticOBBs_.push_back({"GANTRY_LEG_L", kLoopHalfX - 6.0f, 2.5f, 0.0f, 0.55f, 2.5f, 0.7f, 0.0f, 0, 0, SemanticClass::Static, ""});
+    staticOBBs_.push_back({"GANTRY_LEG_R", kLoopHalfX + 6.0f, 2.5f, 0.0f, 0.55f, 2.5f, 0.7f, 0.0f, 0, 0, SemanticClass::Static, ""});
+    staticOBBs_.push_back({"GANTRY_OVERHANG", kLoopHalfX, 4.1f, 0.0f, 6.5f, 0.45f, 0.85f, 0.0f, 0, 0, SemanticClass::Overhang, ""});
+    staticOBBs_.push_back({"SIGN_STOP", 12.5f, 1.5f, -kLoopHalfZ - 5.6f, 0.45f, 1.5f, 0.45f, kPi * 0.5f, 0, 0, SemanticClass::SignalSign, "STOP"});
+    staticOBBs_.push_back({"SIGN_SPEED35", -34.0f, 1.5f, kLoopHalfZ + 5.6f, 0.45f, 1.5f, 0.45f, -kPi * 0.5f, 0, 0, SemanticClass::SignalSign, "LIMIT 35"});
+
+    for (size_t i = 0; i < buildingDefs().size(); ++i) {
+        const auto& b = buildingDefs()[i];
+        staticOBBs_.push_back({
+            "BLDG_" + std::to_string(i),
+            b.x, std::min(b.h * 0.5f, 2.2f), b.z,
+            b.w * 0.5f, std::min(b.h * 0.5f, 2.2f), b.d * 0.5f,
+            0.0f, 0, 0, SemanticClass::Static, ""
+        });
+    }
+
+    for (float z = -22.0f; z <= 22.0f; z += 4.5f) {
+        const float bx = -kLoopHalfX - 5.4f;
+        staticOBBs_.push_back({"BARRIER", bx, 0.45f, z, 0.35f, 0.45f, 1.9f, 0.0f, 0, 0, SemanticClass::Curb, ""});
+    }
+}
+
