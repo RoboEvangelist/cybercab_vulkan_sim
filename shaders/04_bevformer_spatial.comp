@@ -1,0 +1,100 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+// Stage 5b: BEVFormer Spatial Cross-Attention across all 8 Calibrated Cameras
+// Projects 3D pillar points (x_ego, y_ego, z_k) into all 8 cameras via K_c * T_{cam<-ego},
+// applies Brown-Conrady distortion lookup, samples encoder memory features, and weights each
+// camera's contribution by its SoilDetector patch confidence w_c(u, v).
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+struct CamProjGpu {
+    mat4 camFromEgoISO;   // 4x4 transform ISO Ego -> CV Camera frame
+    vec4 intr;            // fx, fy, cx, cy
+    vec4 dist;            // k1, k2, p1, p2
+    vec4 dims;            // width, height, maxRange, camSummaryWeight
+};
+
+layout(std430, binding = 0) readonly buffer CamProjBuf {
+    CamProjGpu cams[8];
+} uCamProj;
+
+layout(std430, binding = 1) readonly buffer EncMemoryIn {
+    vec4 feat[]; // 8 * 30 * 40 * 4
+} uEncMemory;
+
+layout(std430, binding = 2) readonly buffer SoilPatchIn {
+    vec4 patches[]; // 8 * 80
+} uSoilPatch;
+
+layout(std430, binding = 3) readonly buffer WarpedBevFeatIn {
+    vec4 feat[];
+} uWarpedBevFeat;
+
+layout(std430, binding = 4) readonly buffer WarpedBevMetaIn {
+    vec4 meta[];
+} uWarpedBevMeta;
+
+layout(std430, binding = 5) writeonly buffer CurrBevFeatOut {
+    vec4 feat[];
+} uCurrBevFeat;
+
+layout(std430, binding = 6) writeonly buffer CurrBevMetaOut {
+    vec4 meta[]; // vec4(obsWeight, epistemicVar, camHitCount, temporalDelta)
+} uCurrBevMeta;
+
+layout(std430, binding = 7) writeonly buffer BevPillarHeightOut {
+    vec4 zResponses[]; // 4 Z-anchor activations per (ix, iy) cell
+} uBevPillarHeight;
+
+layout(push_constant) uniform BevSpatialPC {
+    vec4 zAnchors;
+    uint nx;
+    uint ny;
+    uint featW;
+    uint featH;
+    uint patchCols;
+    uint patchRows;
+    float minX;
+    float maxX;
+    float minY;
+    float maxY;
+} pc;
+
+vec4 sampleEncMem(uint cam, float uNorm, float vNorm, uint slot) {
+    float fx = clamp(uNorm * float(pc.featW) - 0.5, 0.0, float(pc.featW - 1u));
+    float fy = clamp(vNorm * float(pc.featH) - 0.5, 0.0, float(pc.featH - 1u));
+    int x0 = int(floor(fx));
+    int y0 = int(floor(fy));
+    int x1 = min(x0 + 1, int(pc.featW) - 1);
+    int y1 = min(y0 + 1, int(pc.featH) - 1);
+    float ax = fx - float(x0);
+    float ay = fy - float(y0);
+
+    vec4 v00 = uEncMemory.feat[((cam * pc.featH + uint(y0)) * pc.featW + uint(x0)) * 4u + slot];
+    vec4 v10 = uEncMemory.feat[((cam * pc.featH + uint(y0)) * pc.featW + uint(x1)) * 4u + slot];
+    vec4 v01 = uEncMemory.feat[((cam * pc.featH + uint(y1)) * pc.featW + uint(x0)) * 4u + slot];
+    vec4 v11 = uEncMemory.feat[((cam * pc.featH + uint(y1)) * pc.featW + uint(x1)) * 4u + slot];
+    return mix(mix(v00, v10, ax), mix(v01, v11, ax), ay);
+}
+
+void main() {
+    uint ix = gl_GlobalInvocationID.x;
+    uint iy = gl_GlobalInvocationID.y;
+    if (ix >= pc.nx || iy >= pc.ny) return;
+
+    float stepX = (pc.maxX - pc.minX) / float(pc.nx);
+    float stepY = (pc.maxY - pc.minY) / float(pc.ny);
+    float egoX = pc.minX + (float(ix) + 0.5) * stepX;
+    float egoY = pc.minY + (float(iy) + 0.5) * stepY;
+
+    float zList[4] = float[4](pc.zAnchors.x, pc.zAnchors.y, pc.zAnchors.z, pc.zAnchors.w);
+    vec4 agg[4];
+    for (int s = 0; s < 4; ++s) agg[s] = vec4(0.0);
+
+    float totalWeight = 0.0;
+    float camHits = 0.0;
+    float varWeightedSum = 0.0;
+    vec4 zAct = vec4(0.0);
+
+    // Ego footprint mask (ignore inside Cybercab body itself)
