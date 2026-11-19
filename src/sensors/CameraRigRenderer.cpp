@@ -478,3 +478,151 @@ void CameraRigRenderer::renderAllCameras(const WorldEngine& world, const SimConf
 bool CameraRigRenderer::projectWorldToPixel(int camIdx, const Vec3& worldPt, Vec2& outPx, float& outDepth) const {
     const auto& cm = camMats_.at(camIdx);
     Vec3 pc = cm.camFromWorld.transformPoint(worldPt);
+    outDepth = pc.z;
+    if (pc.z <= 0.1f) return false;
+    float xn = pc.x / pc.z;
+    float yn = pc.y / pc.z;
+    outPx.x = cm.intr.fx * xn + cm.intr.cx;
+    outPx.y = cm.intr.fy * yn + cm.intr.cy;
+    return true;
+}
+
+std::vector<uint8_t> CameraRigRenderer::downloadCameraRGBA(int camIdx) const {
+    return distortedImages_.at(camIdx).downloadRGBA8();
+}
+
+void CameraRigRenderer::dumpCameraGridPPM(const std::string& path) const {
+    const int cols = 4;
+    const int rows = 2;
+    const int totalW = cols * camWidth_;
+    const int totalH = rows * camHeight_;
+    std::vector<uint8_t> rgb(static_cast<size_t>(totalW) * totalH * 3, 0);
+
+    for (int c = 0; c < kNumCams; ++c) {
+        auto pixels = downloadCameraRGBA(c);
+        int gx = c % cols;
+        int gy = c / cols;
+        for (int y = 0; y < camHeight_; ++y) {
+            for (int x = 0; x < camWidth_; ++x) {
+                size_t si = (static_cast<size_t>(y) * camWidth_ + x) * 4;
+                size_t di = (static_cast<size_t>(gy * camHeight_ + y) * totalW + (gx * camWidth_ + x)) * 3;
+                rgb[di + 0] = pixels[si + 0];
+                rgb[di + 1] = pixels[si + 1];
+                rgb[di + 2] = pixels[si + 2];
+            }
+        }
+    }
+
+    std::ofstream out(path, std::ios::binary);
+    out << "P6\n" << totalW << " " << totalH << "\n255\n";
+    out.write(reinterpret_cast<const char*>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
+}
+
+void CameraRigRenderer::dumpEgoShowcaseBMP(const WorldEngine& world, const std::string& path) {
+    uploadDynamicWorld(world, true);
+
+    const EgoState& ego = world.ego();
+    const float sinY = std::sin(ego.yaw), cosY = std::cos(ego.yaw);
+    const Vec3 fwd{sinY, 0.0f, cosY};
+    const Vec3 right{-cosY, 0.0f, sinY};
+    const Vec3 carCenter = ego.pos + fwd * 1.25f + Vec3{0.0f, 0.72f, 0.0f};
+
+    // View 0: Pure side profile matching Cybercab studio side shot (car faces +X right)
+    // View 1: Elevated 3/4 rear chase perspective matching 3D Twin viewport
+    const Vec3 eyes[2] = {
+        carCenter + right * 4.9f + Vec3{0.0f, 0.08f, 0.0f},
+        carCenter - fwd * 4.8f - right * 3.1f + Vec3{0.0f, 1.85f, 0.0f}
+    };
+
+    const float aspect = static_cast<float>(camWidth_) / static_cast<float>(camHeight_);
+    const float fy = static_cast<float>(camHeight_) / (2.0f * std::tan(degToRad(46.0f) * 0.5f));
+    const float fx = fy;
+    const Mat4 proj = Mat4::vulkanPerspectiveCV(
+        fx, fy, static_cast<float>(camWidth_) * 0.5f, static_cast<float>(camHeight_) * 0.5f,
+        static_cast<float>(camWidth_), static_cast<float>(camHeight_), 0.25f, 200.0f);
+    (void)aspect;
+
+    VkCommandBuffer cmd = ctx_->beginSingleTimeCommands();
+    VkViewport vp{0.0f, 0.0f, static_cast<float>(camWidth_), static_cast<float>(camHeight_), 0.0f, 1.0f};
+    VkRect2D sc{{0, 0}, {static_cast<uint32_t>(camWidth_), static_cast<uint32_t>(camHeight_)}};
+
+    for (int vIdx = 0; vIdx < 2; ++vIdx) {
+        VkClearValue clears[2]{};
+        clears[0].color = {{0.545f, 0.722f, 0.910f, 1.0f}};
+        clears[1].depthStencil = {1.0f, 0};
+        VkRenderPassBeginInfo rpbi{};
+        rpbi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rpbi.renderPass = offscreenPass_;
+        rpbi.framebuffer = framebuffers_[vIdx];
+        rpbi.renderArea = sc;
+        rpbi.clearValueCount = 2;
+        rpbi.pClearValues = clears;
+        vkCmdBeginRenderPass(cmd, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gfxPipeline_);
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        vkCmdSetScissor(cmd, 0, 1, &sc);
+
+        const Mat4 view = Mat4::lookAtVulkan(eyes[vIdx], carCenter);
+        ScenePushConstants pc{};
+        pc.viewProj = proj * view;
+        pc.sunDirIntensity = Vec4{Vec3{65.0f, 95.0f, 45.0f}.normalized(), 0.52f};
+        pc.fogColorDensity = Vec4{0.545f, 0.722f, 0.910f, 0.002f};
+        vkCmdPushConstants(cmd, gfxLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+
+        const VkDeviceSize off = 0;
+        const VkBuffer svb = staticVB_.handle();
+        vkCmdBindVertexBuffers(cmd, 0, 1, &svb, &off);
+        vkCmdBindIndexBuffer(cmd, staticIB_.handle(), 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, staticIndexCount_, 1, 0, 0, 0);
+
+        if (dynamicIndexCount_ > 0) {
+            const VkBuffer dvb = dynamicVB_.handle();
+            vkCmdBindVertexBuffers(cmd, 0, 1, &dvb, &off);
+            vkCmdBindIndexBuffer(cmd, dynamicIB_.handle(), 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, dynamicIndexCount_, 1, 0, 0, 0);
+        }
+        vkCmdEndRenderPass(cmd);
+        rawColorImages_[vIdx].setLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+    ctx_->endSingleTimeCommands(cmd);
+
+    const auto img0 = rawColorImages_[0].downloadRGBA8();
+    const auto img1 = rawColorImages_[1].downloadRGBA8();
+    const int outW = camWidth_ * 2;
+    const int outH = camHeight_;
+    const int rowStride = ((outW * 3 + 3) / 4) * 4;
+    std::vector<uint8_t> bmp(static_cast<size_t>(54 + rowStride * outH), 0);
+
+    const uint32_t fileSize = static_cast<uint32_t>(bmp.size());
+    const uint32_t imgBytes = static_cast<uint32_t>(rowStride * outH);
+    bmp[0] = 'B'; bmp[1] = 'M';
+    std::memcpy(&bmp[2], &fileSize, 4);
+    const uint32_t dataOff = 54;
+    std::memcpy(&bmp[10], &dataOff, 4);
+    const uint32_t hdrSz = 40;
+    std::memcpy(&bmp[14], &hdrSz, 4);
+    std::memcpy(&bmp[18], &outW, 4);
+    std::memcpy(&bmp[22], &outH, 4);
+    const uint16_t planes = 1, bpp = 24;
+    std::memcpy(&bmp[26], &planes, 2);
+    std::memcpy(&bmp[28], &bpp, 2);
+    std::memcpy(&bmp[34], &imgBytes, 4);
+
+    for (int y = 0; y < outH; ++y) {
+        const int dstY = outH - 1 - y; // BMP bottom-up rows
+        for (int side = 0; side < 2; ++side) {
+            const auto& src = (side == 0) ? img0 : img1;
+            for (int x = 0; x < camWidth_; ++x) {
+                const size_t si = (static_cast<size_t>(y) * camWidth_ + x) * 4;
+                const size_t di = static_cast<size_t>(54 + dstY * rowStride + (side * camWidth_ + x) * 3);
+                bmp[di + 0] = src[si + 2];
+                bmp[di + 1] = src[si + 1];
+                bmp[di + 2] = src[si + 0];
+            }
+        }
+    }
+    std::ofstream out(path, std::ios::binary);
+    out.write(reinterpret_cast<const char*>(bmp.data()), static_cast<std::streamsize>(bmp.size()));
+}
+
+} // namespace cybercab
