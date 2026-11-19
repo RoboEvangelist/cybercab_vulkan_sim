@@ -108,3 +108,101 @@ public:
                     PerceptionPipeline& pipeline, ManualInput& manual, ViewerToggleState& toggles,
                     std::string& toastMsg);
 
+    void renderFrame(const SimConfig& cfg, const WorldEngine& world, const CameraRigRenderer& rig,
+                     const PerceptionFrameOutput& perc, const PlannerCommand& cmd,
+                     const ViewerToggleState& toggles, const std::string& toastMsg);
+
+    SDL_Window* window() const { return window_; }
+    void refreshCameraDescriptors(const CameraRigRenderer& rig);
+
+private:
+    SDL_Window* window_ = nullptr;
+    const VulkanContext* ctx_ = nullptr;
+
+    VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
+    VkFormat swapFormat_ = VK_FORMAT_B8G8R8A8_UNORM;
+    VkExtent2D swapExtent_{1600, 920};
+    std::vector<VkImage> swapImages_;
+    std::vector<VkImageView> swapViews_;
+    std::vector<VkFramebuffer> swapFramebuffers_;
+    VulkanImage depthImage_;
+
+    VkRenderPass mainPass_ = VK_NULL_HANDLE;
+    VkPipelineLayout sceneLayout_ = VK_NULL_HANDLE;
+    VkPipeline scenePipeline_ = VK_NULL_HANDLE;
+    VkPipelineLayout linesLayout_ = VK_NULL_HANDLE;
+    VkPipeline linesPipeline_ = VK_NULL_HANDLE;
+
+    VkDescriptorSetLayout uiSetLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout uiLayout_ = VK_NULL_HANDLE;
+    VkPipeline uiPipeline_ = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, 8> uiSets_{};
+
+    VulkanImage fontAtlas_;
+
+    // Pre-allocated dynamic geometry & UI vertex/index buffers (zero hot-path allocations)
+    VulkanBuffer dynWorldVB_, dynWorldIB_;
+    VulkanBuffer voxelVB_, voxelIB_;
+    VulkanBuffer lineVB_;
+    VulkanBuffer uiVB_, uiIB_;
+
+    std::vector<SceneVertex> dynVertsScratch_;
+    std::vector<uint32_t> dynIdxScratch_;
+    std::vector<SceneVertex> voxelVertsScratch_;
+    std::vector<uint32_t> voxelIdxScratch_;
+    std::vector<LineVertex> lineVertsScratch_;
+    std::vector<UiVertex> uiVertsScratch_;
+    std::vector<uint32_t> uiIdxScratch_;
+
+    struct UiDrawBatch {
+        uint32_t indexOffset = 0;
+        uint32_t indexCount = 0;
+        int camSetIdx = 0;
+    };
+    std::vector<UiDrawBatch> uiBatchesScratch_;
+    std::vector<UiButton> uiButtonsScratch_;
+    struct PanelBounds { float x, y, w, h; };
+    std::vector<PanelBounds> uiPanelsScratch_;
+
+    VkSemaphore imageAvailSem_ = VK_NULL_HANDLE;
+    VkSemaphore renderDoneSem_ = VK_NULL_HANDLE;
+    VkFence inFlightFence_ = VK_NULL_HANDLE;
+    VkCommandBuffer frameCmd_ = VK_NULL_HANDLE;
+
+    // Orbit camera state
+    float orbitYaw_ = 0.0f;
+    float orbitPitch_ = 0.34f;
+    float orbitDist_ = 13.5f;
+    bool dragging_ = false;
+    int lastMouseX_ = 0;
+    int lastMouseY_ = 0;
+    bool framebufferResized_ = false;
+
+    void applyUiAction(UiAction action, int param, SimConfig& cfg, WorldEngine& world,
+                       CameraRigRenderer& rig, PerceptionPipeline& pipeline,
+                       ViewerToggleState& toggles, std::string& toastMsg);
+
+    void createSwapchain();
+    void cleanupSwapchain();
+    void recreateSwapchain();
+    void createMainRenderPass();
+    void createPipelines();
+    void createSyncObjects();
+
+    void buildVoxelAndGhostGeometry(const WorldEngine& world, const PerceptionFrameOutput& perc,
+                                    const ViewerToggleState& toggles);
+    void build3DLines(const SimConfig& cfg, const WorldEngine& world, const PerceptionFrameOutput& perc,
+                      const PlannerCommand& cmd, const ViewerToggleState& toggles);
+    void buildUiOverlay(const SimConfig& cfg, const WorldEngine& world, const CameraRigRenderer& rig,
+                        const PerceptionFrameOutput& perc, const PlannerCommand& cmd,
+                        const ViewerToggleState& toggles, const std::string& toastMsg);
+
+    // Immediate UI batch builders (write directly into uiVertsScratch_ / uiIdxScratch_)
+    void uiRect(float x, float y, float w, float h, Vec4 col);
+    void uiRectOutline(float x, float y, float w, float h, float t, Vec4 col);
+    void uiLine(float x0, float y0, float x1, float y1, float t, Vec4 col);
+    void uiText(float x, float y, float scale, Vec4 col, const std::string& text);
+    void uiTexQuad(float x, float y, float w, float h, Vec4 tint);
+};
+
+} // namespace cybercab
