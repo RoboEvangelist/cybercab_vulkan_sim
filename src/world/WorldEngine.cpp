@@ -508,3 +508,173 @@ float WorldEngine::findClosestLoopU(const Vec3& pos) const {
         for (int i = 0; i < 120; ++i) {
             float u = static_cast<float>(i) / 120.0f;
             Vec3 pt = centerline_.getPointAt(u);
+            float dSq = (pt.x - pos.x) * (pt.x - pos.x) + (pt.z - pos.z) * (pt.z - pos.z);
+            if (dSq < bestDistSq) {
+                bestDistSq = dSq;
+                bestU = u;
+            }
+        }
+    }
+    return bestU;
+}
+
+bool WorldEngine::resolvePedestrianVsVehicleOBB(Pedestrian& ped, const OBB& vehObb, EgoState* egoIfVehicle) {
+    float dx = ped.x - vehObb.cx;
+    float dz = ped.z - vehObb.cz;
+    float cosY = std::cos(vehObb.yaw);
+    float sinY = std::sin(vehObb.yaw);
+
+    float localZ = dx * sinY + dz * cosY;
+    float localX = dx * cosY - dz * sinY;
+
+    float hx = vehObb.hx + 0.14f;
+    float hz = vehObb.hz + 0.14f;
+
+    float clampedX = clampf(localX, -hx, hx);
+    float clampedZ = clampf(localZ, -hz, hz);
+
+    float diffX = localX - clampedX;
+    float diffZ = localZ - clampedZ;
+    float distSq = diffX * diffX + diffZ * diffZ;
+    float minRadius = ped.radius;
+
+    if (distSq < minRadius * minRadius) {
+        float penDepth = 0.0f;
+        float normLocalX = 0.0f;
+        float normLocalZ = 0.0f;
+
+        if (distSq > 1e-6f) {
+            float dist = std::sqrt(distSq);
+            penDepth = minRadius - dist + 0.04f;
+            normLocalX = diffX / dist;
+            normLocalZ = diffZ / dist;
+        } else {
+            float penX = hx - std::abs(localX);
+            float penZ = hz - std::abs(localZ);
+            if (penX < penZ) {
+                penDepth = penX + minRadius + 0.05f;
+                normLocalX = (localX >= 0.0f) ? 1.0f : -1.0f;
+            } else {
+                penDepth = penZ + minRadius + 0.05f;
+                normLocalZ = (localZ >= 0.0f) ? 1.0f : -1.0f;
+            }
+        }
+
+        float worldNormX = normLocalX * cosY + normLocalZ * sinY;
+        float worldNormZ = -normLocalX * sinY + normLocalZ * cosY;
+
+        ped.x += worldNormX * penDepth;
+        ped.z += worldNormZ * penDepth;
+
+        float vDotN = ped.vx * worldNormX + ped.vz * worldNormZ;
+        if (vDotN < 0.0f) {
+            ped.vx -= worldNormX * vDotN;
+            ped.vz -= worldNormZ * vDotN;
+        }
+
+        float tangSign = (localZ >= 0.0f) ? 1.0f : -1.0f;
+        ped.vx += -worldNormZ * tangSign * 1.1f;
+        ped.vz += worldNormX * tangSign * 1.1f;
+
+        if (egoIfVehicle && egoIfVehicle->speed > 0.2f) {
+            egoIfVehicle->speed = 0.0f;
+            egoIfVehicle->accel = -8.5f;
+            egoIfVehicle->pitchRate += 0.18f;
+            egoIfVehicle->collisionHoldTimer = 1.0f;
+        }
+        return true;
+    }
+    return false;
+}
+
+SatHit WorldEngine::checkSAT_OBB(const OBB& a, const OBB& b) {
+    float dx = b.cx - a.cx;
+    float dz = b.cz - a.cz;
+    float maxR = std::hypot(a.hx, a.hz) + std::hypot(b.hx, b.hz);
+    if (dx * dx + dz * dz > maxR * maxR) return {};
+
+    float sinA = std::sin(a.yaw), cosA = std::cos(a.yaw);
+    float sinB = std::sin(b.yaw), cosB = std::cos(b.yaw);
+
+    const Vec2 axes[4] = {
+        {cosA, -sinA},
+        {sinA,  cosA},
+        {cosB, -sinB},
+        {sinB,  cosB},
+    };
+
+    auto cornersOf = [](const OBB& obb, float s, float c) {
+        return std::array<Vec2, 4>{{
+            {obb.cx + c * obb.hx + s * obb.hz, obb.cz - s * obb.hx + c * obb.hz},
+            {obb.cx - c * obb.hx + s * obb.hz, obb.cz + s * obb.hx + c * obb.hz},
+            {obb.cx - c * obb.hx - s * obb.hz, obb.cz + s * obb.hx - c * obb.hz},
+            {obb.cx + c * obb.hx - s * obb.hz, obb.cz - s * obb.hx - c * obb.hz},
+        }};
+    };
+
+    auto vertsA = cornersOf(a, sinA, cosA);
+    auto vertsB = cornersOf(b, sinB, cosB);
+
+    float minOverlap = std::numeric_limits<float>::infinity();
+    Vec2 mtvAxis{};
+
+    for (int i = 0; i < 4; ++i) {
+        const Vec2& ax = axes[i];
+        float minA = std::numeric_limits<float>::infinity();
+        float maxA = -std::numeric_limits<float>::infinity();
+        float minB = std::numeric_limits<float>::infinity();
+        float maxB = -std::numeric_limits<float>::infinity();
+        for (int k = 0; k < 4; ++k) {
+            float pA = vertsA[k].x * ax.x + vertsA[k].y * ax.y;
+            minA = std::min(minA, pA);
+            maxA = std::max(maxA, pA);
+            float pB = vertsB[k].x * ax.x + vertsB[k].y * ax.y;
+            minB = std::min(minB, pB);
+            maxB = std::max(maxB, pB);
+        }
+        float overlap = std::min(maxA, maxB) - std::max(minA, minB);
+        if (overlap <= 0.0f) return {};
+        if (overlap < minOverlap) {
+            minOverlap = overlap;
+            float sign = ((dx * ax.x + dz * ax.y) >= 0.0f) ? -1.0f : 1.0f;
+            mtvAxis = {ax.x * sign, ax.y * sign};
+        }
+    }
+
+    return {true, minOverlap, mtvAxis};
+}
+
+void WorldEngine::stepMultiBodyCollisionSolver() {
+    OBB egoOBB = getEgoWorldOBB();
+    lastContact_ = {};
+
+    for (size_t i = 0; i < pedestrians_.size(); ++i) {
+        Pedestrian& p = pedestrians_[i];
+        if (resolvePedestrianVsVehicleOBB(p, egoOBB, &ego_)) {
+            lastContact_ = {true, {p.x, 0.3f, p.z}, p.id, p.radius};
+        }
+
+        for (auto& veh : vehicles_) {
+            const OBB vOBB{veh.id, veh.pos.x, veh.halfExtents.y, veh.pos.z,
+                           veh.halfExtents.x, veh.halfExtents.y, veh.halfExtents.z, veh.yaw,
+                           veh.vx, veh.vz, SemanticClass::Vehicle, ""};
+            if (resolvePedestrianVsVehicleOBB(p, vOBB, nullptr)) {
+                veh.speed = 0.0f;
+            }
+        }
+
+        for (size_t j = i + 1; j < pedestrians_.size(); ++j) {
+            Pedestrian& p2 = pedestrians_[j];
+            float dx = p2.x - p.x;
+            float dz = p2.z - p.z;
+            float dSq = dx * dx + dz * dz;
+            float minD = p.radius + p2.radius + 0.08f;
+            if (dSq < minD * minD && dSq > 1e-6f) {
+                float d = std::sqrt(dSq);
+                float push = (minD - d) * 0.5f;
+                float nx = dx / d, nz = dz / d;
+                p.x -= nx * push; p.z -= nz * push;
+                p2.x += nx * push; p2.z += nz * push;
+            }
+        }
+    }
