@@ -178,3 +178,183 @@ void VulkanViewer::refreshCameraDescriptors(const CameraRigRenderer& rig) {
 
 void VulkanViewer::destroy() {
     if (!ctx_) return;
+    vkDeviceWaitIdle(ctx_->device());
+    if (imageAvailSem_ != VK_NULL_HANDLE) vkDestroySemaphore(ctx_->device(), imageAvailSem_, nullptr);
+    if (renderDoneSem_ != VK_NULL_HANDLE) vkDestroySemaphore(ctx_->device(), renderDoneSem_, nullptr);
+    if (inFlightFence_ != VK_NULL_HANDLE) vkDestroyFence(ctx_->device(), inFlightFence_, nullptr);
+
+    dynWorldVB_.destroy(); dynWorldIB_.destroy();
+    voxelVB_.destroy(); voxelIB_.destroy();
+    lineVB_.destroy();
+    uiVB_.destroy(); uiIB_.destroy();
+    fontAtlas_.destroy();
+
+    if (uiPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(ctx_->device(), uiPipeline_, nullptr);
+    if (uiLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(ctx_->device(), uiLayout_, nullptr);
+    if (uiSetLayout_ != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx_->device(), uiSetLayout_, nullptr);
+    if (linesPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(ctx_->device(), linesPipeline_, nullptr);
+    if (linesLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(ctx_->device(), linesLayout_, nullptr);
+    if (scenePipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(ctx_->device(), scenePipeline_, nullptr);
+    if (sceneLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(ctx_->device(), sceneLayout_, nullptr);
+
+    cleanupSwapchain();
+    if (mainPass_ != VK_NULL_HANDLE) vkDestroyRenderPass(ctx_->device(), mainPass_, nullptr);
+
+    if (window_) {
+        SDL_DestroyWindow(window_);
+        window_ = nullptr;
+    }
+    SDL_Quit();
+    ctx_ = nullptr;
+}
+
+void VulkanViewer::createSwapchain() {
+    VkSurfaceCapabilitiesKHR caps{};
+    VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(ctx_->physicalDevice(), ctx_->surface(), &caps));
+
+    uint32_t fmtCount = 0;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(ctx_->physicalDevice(), ctx_->surface(), &fmtCount, nullptr);
+    std::vector<VkSurfaceFormatKHR> formats(fmtCount);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(ctx_->physicalDevice(), ctx_->surface(), &fmtCount, formats.data());
+
+    VkSurfaceFormatKHR chosen = formats[0];
+    for (const auto& f : formats) {
+        if (f.format == VK_FORMAT_B8G8R8A8_UNORM && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            chosen = f;
+            break;
+        }
+    }
+    swapFormat_ = chosen.format;
+
+    int winW = 1600, winH = 920;
+    SDL_Vulkan_GetDrawableSize(window_, &winW, &winH);
+    swapExtent_ = {
+        std::clamp(static_cast<uint32_t>(std::max(1, winW)), caps.minImageExtent.width, caps.maxImageExtent.width),
+        std::clamp(static_cast<uint32_t>(std::max(1, winH)), caps.minImageExtent.height, caps.maxImageExtent.height)
+    };
+    if (caps.currentExtent.width != UINT32_MAX) {
+        swapExtent_ = caps.currentExtent;
+    }
+
+    uint32_t imgCount = caps.minImageCount + 1;
+    if (caps.maxImageCount > 0 && imgCount > caps.maxImageCount) imgCount = caps.maxImageCount;
+
+    VkSwapchainCreateInfoKHR sci{};
+    sci.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    sci.surface = ctx_->surface();
+    sci.minImageCount = imgCount;
+    sci.imageFormat = chosen.format;
+    sci.imageColorSpace = chosen.colorSpace;
+    sci.imageExtent = swapExtent_;
+    sci.imageArrayLayers = 1;
+    sci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    sci.preTransform = caps.currentTransform;
+    sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    sci.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    sci.clipped = VK_TRUE;
+    VK_CHECK(vkCreateSwapchainKHR(ctx_->device(), &sci, nullptr, &swapchain_));
+
+    uint32_t actualCount = 0;
+    vkGetSwapchainImagesKHR(ctx_->device(), swapchain_, &actualCount, nullptr);
+    swapImages_.resize(actualCount);
+    vkGetSwapchainImagesKHR(ctx_->device(), swapchain_, &actualCount, swapImages_.data());
+
+    swapViews_.resize(actualCount);
+    for (uint32_t i = 0; i < actualCount; ++i) {
+        VkImageViewCreateInfo ivci{};
+        ivci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        ivci.image = swapImages_[i];
+        ivci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        ivci.format = swapFormat_;
+        ivci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(ctx_->device(), &ivci, nullptr, &swapViews_[i]));
+    }
+
+    depthImage_.create(*ctx_, swapExtent_.width, swapExtent_.height, ctx_->findDepthFormat(),
+                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT, false);
+}
+
+void VulkanViewer::createMainRenderPass() {
+    if (mainPass_ == VK_NULL_HANDLE) {
+        VkAttachmentDescription atts[2]{};
+        atts[0].format = swapFormat_;
+        atts[0].samples = VK_SAMPLE_COUNT_1_BIT;
+        atts[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        atts[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        atts[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        atts[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+        atts[1].format = ctx_->findDepthFormat();
+        atts[1].samples = VK_SAMPLE_COUNT_1_BIT;
+        atts[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        atts[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        atts[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        atts[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        VkAttachmentReference cRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkAttachmentReference dRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription sub{};
+        sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        sub.colorAttachmentCount = 1;
+        sub.pColorAttachments = &cRef;
+        sub.pDepthStencilAttachment = &dRef;
+
+        VkSubpassDependency dep{};
+        dep.srcSubpass = VK_SUBPASS_EXTERNAL;
+        dep.dstSubpass = 0;
+        dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+        VkRenderPassCreateInfo rpci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO, nullptr, 0, 2, atts, 1, &sub, 1, &dep};
+        VK_CHECK(vkCreateRenderPass(ctx_->device(), &rpci, nullptr, &mainPass_));
+    }
+
+    swapFramebuffers_.resize(swapViews_.size());
+    for (size_t i = 0; i < swapViews_.size(); ++i) {
+        VkImageView views[2] = {swapViews_[i], depthImage_.view()};
+        VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO, nullptr, 0, mainPass_,
+                                    2, views, swapExtent_.width, swapExtent_.height, 1};
+        VK_CHECK(vkCreateFramebuffer(ctx_->device(), &fci, nullptr, &swapFramebuffers_[i]));
+    }
+}
+
+void VulkanViewer::cleanupSwapchain() {
+    for (auto fb : swapFramebuffers_) {
+        if (fb != VK_NULL_HANDLE) vkDestroyFramebuffer(ctx_->device(), fb, nullptr);
+    }
+    swapFramebuffers_.clear();
+    depthImage_.destroy();
+    for (auto v : swapViews_) {
+        if (v != VK_NULL_HANDLE) vkDestroyImageView(ctx_->device(), v, nullptr);
+    }
+    swapViews_.clear();
+    if (swapchain_ != VK_NULL_HANDLE) {
+        vkDestroySwapchainKHR(ctx_->device(), swapchain_, nullptr);
+        swapchain_ = VK_NULL_HANDLE;
+    }
+}
+
+void VulkanViewer::recreateSwapchain() {
+    vkDeviceWaitIdle(ctx_->device());
+    cleanupSwapchain();
+    createSwapchain();
+    createMainRenderPass();
+}
+
+void VulkanViewer::createPipelines() {
+    // 1. Scene Pipeline (with alpha blending for voxels & ghosts)
+    {
+        VkPushConstantRange pcr{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ScenePC)};
+        VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, nullptr, 0, 0, nullptr, 1, &pcr};
+        VK_CHECK(vkCreatePipelineLayout(ctx_->device(), &plci, nullptr, &sceneLayout_));
+
+        auto vc = readSpirvFile(resolveAssetPath("shaders/scene.vert.spv"));
+        auto fc = readSpirvFile(resolveAssetPath("shaders/scene.frag.spv"));
+        VkShaderModule vm = createShaderModule(ctx_->device(), vc);
+        VkShaderModule fm = createShaderModule(ctx_->device(), fc);
+
+        VkPipelineShaderStageCreateInfo stages[2]{
+            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vm, "main", nullptr},
+            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fm, "main", nullptr},
