@@ -898,3 +898,183 @@ void VulkanViewer::uiRectOutline(float x, float y, float w, float h, float t, Ve
 
 void VulkanViewer::uiLine(float x0, float y0, float x1, float y1, float t, Vec4 col) {
     const float dx = x1 - x0, dy = y1 - y0;
+    const float len = std::hypot(dx, dy);
+    if (len < 0.5f) return;
+    const float nx = -dy / len * (t * 0.5f);
+    const float ny =  dx / len * (t * 0.5f);
+    const uint32_t b = static_cast<uint32_t>(uiVertsScratch_.size());
+    uiVertsScratch_.push_back({x0 + nx, y0 + ny, 0, 0, col.x, col.y, col.z, col.w, 0.0f});
+    uiVertsScratch_.push_back({x1 + nx, y1 + ny, 1, 0, col.x, col.y, col.z, col.w, 0.0f});
+    uiVertsScratch_.push_back({x1 - nx, y1 - ny, 1, 1, col.x, col.y, col.z, col.w, 0.0f});
+    uiVertsScratch_.push_back({x0 - nx, y0 - ny, 0, 1, col.x, col.y, col.z, col.w, 0.0f});
+    uiIdxScratch_.push_back(b + 0); uiIdxScratch_.push_back(b + 1); uiIdxScratch_.push_back(b + 2);
+    uiIdxScratch_.push_back(b + 0); uiIdxScratch_.push_back(b + 2); uiIdxScratch_.push_back(b + 3);
+}
+
+void VulkanViewer::uiText(float x, float y, float scale, Vec4 col, const std::string& text) {
+    float cx = x;
+    const float adv = 6.0f * scale;
+    const float cw = 7.0f * scale;
+    const float ch = 7.0f * scale;
+    for (char chRaw : text) {
+        if (chRaw == '\n') { cx = x; y += 9.0f * scale; continue; }
+        const int code = (chRaw >= 32 && chRaw <= 126) ? (chRaw - 32) : 0;
+        const int gx = (code % BitmapFontAtlas::kCols) * BitmapFontAtlas::kCellW;
+        const int gy = (code / BitmapFontAtlas::kCols) * BitmapFontAtlas::kCellH;
+        const float u0 = static_cast<float>(gx) / BitmapFontAtlas::kAtlasW;
+        const float v0 = static_cast<float>(gy) / BitmapFontAtlas::kAtlasH;
+        const float u1 = static_cast<float>(gx + 7) / BitmapFontAtlas::kAtlasW;
+        const float v1 = static_cast<float>(gy + 7) / BitmapFontAtlas::kAtlasH;
+
+        const uint32_t b = static_cast<uint32_t>(uiVertsScratch_.size());
+        uiVertsScratch_.push_back({cx,      y,      u0, v0, col.x, col.y, col.z, col.w, 2.0f});
+        uiVertsScratch_.push_back({cx + cw, y,      u1, v0, col.x, col.y, col.z, col.w, 2.0f});
+        uiVertsScratch_.push_back({cx + cw, y + ch, u1, v1, col.x, col.y, col.z, col.w, 2.0f});
+        uiVertsScratch_.push_back({cx,      y + ch, u0, v1, col.x, col.y, col.z, col.w, 2.0f});
+        uiIdxScratch_.push_back(b + 0); uiIdxScratch_.push_back(b + 1); uiIdxScratch_.push_back(b + 2);
+        uiIdxScratch_.push_back(b + 0); uiIdxScratch_.push_back(b + 2); uiIdxScratch_.push_back(b + 3);
+        cx += adv;
+    }
+}
+
+void VulkanViewer::uiTexQuad(float x, float y, float w, float h, Vec4 tint) {
+    const uint32_t b = static_cast<uint32_t>(uiVertsScratch_.size());
+    uiVertsScratch_.push_back({x,     y,     0, 0, tint.x, tint.y, tint.z, tint.w, 1.0f});
+    uiVertsScratch_.push_back({x + w, y,     1, 0, tint.x, tint.y, tint.z, tint.w, 1.0f});
+    uiVertsScratch_.push_back({x + w, y + h, 1, 1, tint.x, tint.y, tint.z, tint.w, 1.0f});
+    uiVertsScratch_.push_back({x,     y + h, 0, 1, tint.x, tint.y, tint.z, tint.w, 1.0f});
+    uiIdxScratch_.push_back(b + 0); uiIdxScratch_.push_back(b + 1); uiIdxScratch_.push_back(b + 2);
+    uiIdxScratch_.push_back(b + 0); uiIdxScratch_.push_back(b + 2); uiIdxScratch_.push_back(b + 3);
+}
+
+void VulkanViewer::buildUiOverlay(const SimConfig& cfg, const WorldEngine& world, const CameraRigRenderer& rig,
+                                  const PerceptionFrameOutput& perc, const PlannerCommand& cmd,
+                                  const ViewerToggleState& toggles, const std::string& toastMsg) {
+    (void)cmd;
+    uiVertsScratch_.clear();
+    uiIdxScratch_.clear();
+    uiBatchesScratch_.clear();
+    uiButtonsScratch_.clear();
+    uiPanelsScratch_.clear();
+
+    const float W = static_cast<float>(swapExtent_.width);
+    const float H = static_cast<float>(swapExtent_.height);
+    const float pad = 10.0f;
+    const float topBarH = 166.0f;
+
+    auto flushBatch = [&](int camIdx) {
+        const uint32_t endIdx = static_cast<uint32_t>(uiIdxScratch_.size());
+        uint32_t start = 0;
+        if (!uiBatchesScratch_.empty()) {
+            const auto& prev = uiBatchesScratch_.back();
+            start = prev.indexOffset + prev.indexCount;
+        }
+        if (endIdx > start) {
+            uiBatchesScratch_.push_back({start, endIdx - start, camIdx});
+        }
+    };
+
+    auto addChipButton = [&](float bx, float by, float bw, float bh, const std::string& label,
+                             bool active, Vec4 activeBg, Vec4 activeBorder, UiAction act, int param = 0) {
+        const Vec4 bg = active ? activeBg : Vec4{0.08f, 0.12f, 0.19f, 0.92f};
+        const Vec4 bd = active ? activeBorder : Vec4{0.24f, 0.30f, 0.40f, 0.90f};
+        const Vec4 fg = active ? Vec4{0.98f, 0.99f, 1.0f, 1.0f} : Vec4{0.76f, 0.82f, 0.89f, 1.0f};
+        uiRect(bx, by, bw, bh, bg);
+        uiRectOutline(bx, by, bw, bh, 1.0f, bd);
+        uiText(bx + 6.0f, by + (bh - 8.5f) * 0.5f, 1.15f, fg, label);
+        uiButtonsScratch_.push_back({bx, by, bw, bh, act, param});
+    };
+
+    auto addCheckbox = [&](float cxBox, float cyBox, float cwBox, const std::string& label,
+                           bool checked, Vec4 dotCol, UiAction act) {
+        const float ch = 18.0f;
+        uiRect(cxBox, cyBox, cwBox, ch, checked ? Vec4{0.06f, 0.14f, 0.21f, 0.78f} : Vec4{0.05f, 0.08f, 0.13f, 0.65f});
+        uiRectOutline(cxBox + 2.0f, cyBox + 3.0f, 12.0f, 12.0f, 1.0f,
+                      checked ? dotCol : Vec4{0.35f, 0.42f, 0.52f, 0.9f});
+        if (checked) {
+            uiRect(cxBox + 4.5f, cyBox + 5.5f, 7.0f, 7.0f, dotCol);
+        }
+        uiText(cxBox + 18.0f, cyBox + 4.5f, 1.15f,
+               checked ? Vec4{0.93f, 0.96f, 1.0f, 1.0f} : Vec4{0.58f, 0.65f, 0.74f, 1.0f}, label);
+        uiButtonsScratch_.push_back({cxBox, cyBox, cwBox, ch, act, 0});
+    };
+
+    // 1. Top glass bar background, title & clickable 2D sensor overlay pills
+    uiPanelsScratch_.push_back({pad, pad, W - 2.0f * pad, topBarH});
+    uiRect(pad, pad, W - 2.0f * pad, topBarH, {0.035f, 0.051f, 0.086f, 0.88f});
+    uiRectOutline(pad, pad, W - 2.0f * pad, topBarH, 1.0f, {0.20f, 0.25f, 0.33f, 0.85f});
+    const bool aebWarn = world.ego().aebActive || world.ego().behaviorState == "COLLISION_CONTACT";
+    uiRect(pad + 10.0f, pad + 10.0f, 8.0f, 8.0f, aebWarn ? Vec4{0.96f, 0.25f, 0.37f, 1.0f} : Vec4{0.20f, 0.83f, 0.60f, 1.0f});
+    uiText(pad + 24.0f, pad + 8.0f, 1.45f, {0.95f, 0.97f, 1.0f, 1.0f},
+           "TESLA CYBERCAB FSD VISION + SAT PHYSICS");
+
+    char resBadge[48];
+    std::snprintf(resBadge, sizeof(resBadge), "8x %dx%d @ %.0fHz", rig.camWidth(), rig.camHeight(), cfg.controlHz);
+    uiRect(pad + 440.0f, pad + 5.0f, 150.0f, 18.0f, {0.08f, 0.14f, 0.22f, 0.92f});
+    uiRectOutline(pad + 440.0f, pad + 5.0f, 150.0f, 18.0f, 1.0f, {0.20f, 0.35f, 0.50f, 0.8f});
+    uiText(pad + 447.0f, pad + 9.0f, 1.15f, {0.40f, 0.86f, 0.98f, 1.0f}, resBadge);
+
+    const char* ovNames[5] = {"[1]Neural+Box", "[2]Raw RGB", "[3]Calib Grid", "[4]Heat Map", "[5]Vox Reproj"};
+    const float pillW = 104.0f;
+    const float pillGap = 5.0f;
+    float pillX = W - pad - 10.0f - (5.0f * pillW + 4.0f * pillGap);
+    if (pillX > pad + 600.0f) {
+        for (int m = 0; m < 5; ++m) {
+            addChipButton(pillX, pad + 5.0f, pillW, 19.0f, ovNames[m],
+                          static_cast<int>(toggles.camOverlay) == m,
+                          {0.03f, 0.45f, 0.65f, 0.95f}, {0.22f, 0.78f, 0.98f, 1.0f},
+                          UiAction::SetCamOverlay, m);
+            pillX += pillW + pillGap;
+        }
+    }
+    flushBatch(0);
+
+    // 2. 8-Camera Matrix Cards (each draws its own texture quad!)
+    const float cardGap = 6.0f;
+    const float availW = W - 2.0f * pad - 20.0f;
+    const float cardW = (availW - 7.0f * cardGap) / 8.0f;
+    const float camImgH = std::min(106.0f, cardW * 0.75f);
+    const float cardY = pad + 29.0f;
+
+    for (int c = 0; c < 8; ++c) {
+        const float cx = pad + 10.0f + static_cast<float>(c) * (cardW + cardGap);
+        uiTexQuad(cx, cardY + 14.0f, cardW, camImgH, {1, 1, 1, 1});
+        flushBatch(c);
+    }
+
+    // 3. Camera Overlays, Clickable Card Registration, Titles & Soil Badges
+    for (int c = 0; c < 8; ++c) {
+        const float cx = pad + 10.0f + static_cast<float>(c) * (cardW + cardGap);
+        const float cy = cardY;
+        const float iy = cy + 14.0f;
+        const bool sel = (c == toggles.selectedCam);
+        uiButtonsScratch_.push_back({cx, cy, cardW, camImgH + 14.0f, UiAction::SelectCam, c});
+
+        uiRect(cx, cy, cardW, 14.0f, sel ? Vec4{0.06f, 0.22f, 0.34f, 0.96f} : Vec4{0.02f, 0.04f, 0.08f, 0.95f});
+        uiText(cx + 4.0f, cy + 3.0f, 1.15f, {0.88f, 0.92f, 0.96f, 1.0f},
+               cfg.cameras[c].shortName + " " + std::to_string(static_cast<int>(cfg.cameras[c].hfovDeg)) + "d");
+
+        const float wCam = perc.soilCameras[c].tokenWeight;
+        if (wCam < 0.70f || cfg.cameras[c].soiled) {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "SOIL w=%.2f", wCam);
+            uiRect(cx + cardW - 76.0f, iy + 3.0f, 73.0f, 12.0f, {0.91f, 0.35f, 0.05f, 0.92f});
+            uiText(cx + cardW - 73.0f, iy + 5.0f, 1.0f, {1, 1, 1, 1}, buf);
+        }
+
+        if (toggles.camOverlay == CamOverlayMode::Neural) {
+            for (const auto& d : perc.detections3D) {
+                if (d.camIndex != c) continue;
+                const auto& b2 = d.det2d;
+                const float bx = cx + (b2.cxNorm - b2.wNorm * 0.5f) * cardW;
+                const float by = iy + (b2.cyNorm - b2.hNorm * 0.5f) * camImgH;
+                const float bw = b2.wNorm * cardW;
+                const float bh = b2.hNorm * camImgH;
+                const Vec3 sc = semanticColor(d.semantic);
+                uiRectOutline(bx, by, bw, bh, 1.5f, {sc.x, sc.y, sc.z, 0.95f});
+                char tag[16];
+                const char* clsCh = (d.semantic == SemanticClass::Pedestrian) ? "P"
+                                  : (d.semantic == SemanticClass::SignalSign) ? "S" : "V";
+                std::snprintf(tag, sizeof(tag), "%s:%.0fm", clsCh, d.rangeM);
+                uiRect(bx, std::max(iy, by - 10.0f), 36.0f, 10.0f, {0.03f, 0.05f, 0.09f, 0.82f});
+                uiText(bx + 2.0f, std::max(iy, by - 9.0f), 0.95f, {sc.x, sc.y, sc.z, 1.0f}, tag);
