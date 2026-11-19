@@ -138,3 +138,143 @@ void ByteTracker::predictTrack(InternalTrack& tr, float dt) const {
             FP[r * 4 + c] = s;
         }
     }
+    std::array<float, 16> Pnew{};
+    for (int r = 0; r < 4; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            float s = 0.0f;
+            for (int k = 0; k < 4; ++k) s += FP[r * 4 + k] * F[c * 4 + k];
+            Pnew[r * 4 + c] = s;
+        }
+    }
+    const float qp = cfg_.btProcessNoisePos * cfg_.btProcessNoisePos * dt;
+    const float qv = cfg_.btProcessNoiseVel * cfg_.btProcessNoiseVel * dt;
+    Pnew[0] += qp;
+    Pnew[5] += qp;
+    Pnew[10] += qv;
+    Pnew[15] += qv;
+    tr.P = Pnew;
+    tr.pub.timeSinceUpdateSec += dt;
+}
+
+void ByteTracker::updateTrack(InternalTrack& tr, const Detection3D& det, bool lowConfMatch) {
+    const float soilScale = 1.0f / std::max(det.camWeight, cfg_.soilMinTokenWeight);
+    const float measStd = cfg_.btBaseMeasNoiseM * soilScale + det.epistemicSigma;
+    const float Rdiag = measStd * measStd;
+
+    const float S00 = tr.P[0] + Rdiag;
+    const float S01 = tr.P[1];
+    const float S10 = tr.P[4];
+    const float S11 = tr.P[5] + Rdiag;
+    const float detS = S00 * S11 - S01 * S10;
+    if (std::abs(detS) < 1e-6f) return;
+
+    const float invS00 = S11 / detS;
+    const float invS01 = -S01 / detS;
+    const float invS10 = -S10 / detS;
+    const float invS11 = S00 / detS;
+
+    float K[4][2]{};
+    for (int r = 0; r < 4; ++r) {
+        K[r][0] = tr.P[r * 4 + 0] * invS00 + tr.P[r * 4 + 1] * invS10;
+        K[r][1] = tr.P[r * 4 + 0] * invS01 + tr.P[r * 4 + 1] * invS11;
+    }
+
+    const float y0 = det.worldPos.x - tr.x[0];
+    const float y1 = det.worldPos.z - tr.x[1];
+    for (int r = 0; r < 4; ++r) {
+        tr.x[r] += K[r][0] * y0 + K[r][1] * y1;
+    }
+
+    std::array<float, 16> I_KH{};
+    I_KH[0] = 1.0f - K[0][0]; I_KH[1] = -K[0][1];
+    I_KH[4] = -K[1][0];       I_KH[5] = 1.0f - K[1][1];
+    I_KH[8] = -K[2][0];       I_KH[9] = -K[2][1]; I_KH[10] = 1.0f;
+    I_KH[12] = -K[3][0];      I_KH[13] = -K[3][1]; I_KH[15] = 1.0f;
+
+    std::array<float, 16> Pnew{};
+    for (int r = 0; r < 4; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            float s = 0.0f;
+            for (int k = 0; k < 4; ++k) s += I_KH[r * 4 + k] * tr.P[k * 4 + c];
+            Pnew[r * 4 + c] = s;
+        }
+    }
+    tr.P = Pnew;
+
+    tr.pub.hits += 1;
+    tr.pub.timeSinceUpdateSec = 0.0f;
+    tr.pub.score = det.score;
+    tr.pub.matchedLowConf = lowConfMatch;
+    if (det.camWeight > 0.45f) {
+        tr.pub.semantic = det.semantic;
+        tr.pub.halfExtents = det.halfExtents;
+    }
+    if (tr.pub.hits >= 2 || det.score >= cfg_.rtdetrHighConfThresh) {
+        tr.pub.state = TrackState::Tracked;
+    }
+}
+
+void ByteTracker::spawnTrack(const Detection3D& det) {
+    if (static_cast<int>(tracks_.size()) >= cfg_.btMaxTracks) return;
+    InternalTrack tr;
+    tr.pub.trackId = nextTrackId_++;
+    tr.pub.semantic = det.semantic;
+    tr.pub.state = TrackState::Tentative;
+    tr.pub.halfExtents = det.halfExtents;
+    tr.pub.score = det.score;
+    tr.pub.hits = 1;
+    tr.pub.timeSinceUpdateSec = 0.0f;
+    tr.pub.yaw = det.yaw;
+
+    tr.x = {det.worldPos.x, det.worldPos.z, 0.0f, 0.0f};
+    const float pPos = std::max(0.4f, det.epistemicSigma * det.epistemicSigma);
+    tr.P = {
+        pPos, 0, 0, 0,
+        0, pPos, 0, 0,
+        0, 0, 4.0f, 0,
+        0, 0, 0, 4.0f
+    };
+    tracks_.push_back(tr);
+}
+
+void ByteTracker::refreshTrackPose(InternalTrack& tr, const EgoState& ego) {
+    tr.pub.worldPos = {tr.x[0], tr.pub.halfExtents.y, tr.x[1]};
+    tr.pub.worldVel = {tr.x[2], 0.0f, tr.x[3]};
+    tr.pub.posSigmaM = std::sqrt(std::max(0.01f, tr.P[0] + tr.P[5]));
+    if (std::hypot(tr.x[2], tr.x[3]) > 0.35f) {
+        tr.pub.yaw = std::atan2(tr.x[2], tr.x[3]);
+    }
+    const float dx = tr.x[0] - ego.pos.x;
+    const float dz = tr.x[1] - ego.pos.z;
+    const float s = std::sin(ego.yaw), c = std::cos(ego.yaw);
+    tr.pub.egoPos = {dx * s + dz * c, dx * c - dz * s, tr.pub.halfExtents.y};
+}
+
+void ByteTracker::update(float dt, const EgoState& ego, const std::vector<Detection3D>& detections) {
+    for (auto& tr : tracks_) {
+        predictTrack(tr, dt);
+        tr.pub.matchedLowConf = false;
+    }
+
+    highIdxScratch_.clear();
+    lowIdxScratch_.clear();
+    for (int i = 0; i < static_cast<int>(detections.size()); ++i) {
+        if (detections[i].semantic == SemanticClass::SignalSign) continue;
+        if (detections[i].score >= cfg_.rtdetrHighConfThresh) {
+            highIdxScratch_.push_back(i);
+        } else if (detections[i].score >= cfg_.rtdetrLowConfThresh) {
+            lowIdxScratch_.push_back(i);
+        }
+    }
+
+    trackMatchedScratch_.assign(tracks_.size(), 0);
+    highDetMatchedScratch_.assign(highIdxScratch_.size(), 0);
+
+    // Stage 1: High-Confidence matching
+    if (!tracks_.empty() && !highIdxScratch_.empty()) {
+        const int nRows = static_cast<int>(tracks_.size());
+        const int nCols = static_cast<int>(highIdxScratch_.size());
+        costFlatScratch_.resize(static_cast<size_t>(nRows) * nCols);
+        for (int t = 0; t < nRows; ++t) {
+            for (int d = 0; d < nCols; ++d) {
+                const auto& det = detections[highIdxScratch_[d]];
