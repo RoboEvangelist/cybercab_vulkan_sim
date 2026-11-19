@@ -138,3 +138,129 @@ TEST(VulkanPipelineIntegrationTest, EndToEndPerceptionAndUncertaintyPropagation)
     perception.reset();
     world.triggerOccludedDartOut();
     for (int i = 0; i < 6; ++i) {
+        world.stepAgents(dt);
+        rig.renderAllCameras(world, cfg, static_cast<float>(i) * dt, &profiler);
+        perception.runFrame(ctx, rig, world, dt, true, cleanOut, &profiler);
+    }
+    EXPECT_GT(cleanOut.shadowVoxels.size(), 0u);
+
+    profiler.destroy();
+    perception.destroy();
+    rig.destroy();
+    ctx.cleanup();
+}
+
+TEST(VulkanPipelineIntegrationTest, CameraResizeProjectionAndNominalCruise) {
+    SimConfig cfg = SimConfig::loadFromYaml(resolveAssetPath("config/cybercab_sim.yaml"));
+    VulkanContext ctx;
+    ctx.init(false, nullptr);
+
+    WorldEngine world(cfg);
+    CameraRigRenderer rig;
+    rig.init(ctx, cfg, world);
+    PerceptionPipeline perception(cfg);
+    perception.init(ctx, rig);
+    TrajectoryPlanner planner(cfg);
+    GpuProfiler profiler;
+    profiler.init(ctx, 64);
+
+    // 1. Project world point straight ahead of front main camera vs behind ego
+    const float dt = 1.0f / cfg.controlHz;
+    rig.renderAllCameras(world, cfg, 0.0f, &profiler);
+    Vec2 pxAhead{}, pxBehind{};
+    float depthA = 0.0f, depthB = 0.0f;
+    const Vec3 aheadWorld = world.ego().pos + Vec3{18.0f, 1.1f, 0.0f};
+    const Vec3 behindWorld = world.ego().pos + Vec3{-18.0f, 1.1f, 0.0f};
+    ASSERT_TRUE(rig.projectWorldToPixel(0, aheadWorld, pxAhead, depthA));
+    EXPECT_GT(depthA, 12.0f);
+    EXPECT_GT(pxAhead.x, 40.0f);
+    EXPECT_LT(pxAhead.x, 280.0f);
+    EXPECT_FALSE(rig.projectWorldToPixel(0, behindWorld, pxBehind, depthB));
+
+    // 2. Dynamic resize to 640x480 full resolution and back to 320x240
+    rig.resize(cfg.fullCamWidth, cfg.fullCamHeight);
+    perception.onCameraResized(rig);
+    rig.renderAllCameras(world, cfg, dt, &profiler);
+    const auto fullPx = rig.downloadCameraRGBA(0);
+    EXPECT_EQ(fullPx.size(), static_cast<size_t>(cfg.fullCamWidth * cfg.fullCamHeight * 4));
+
+    rig.resize(cfg.camWidth, cfg.camHeight);
+    perception.onCameraResized(rig);
+
+    // 3. Nominal autonomous driving progress check (should cruise smoothly without false AEB dead stop)
+    const Vec3 startPos = world.ego().pos;
+    PerceptionFrameOutput out;
+    PlannerCommand cmd;
+    for (int i = 0; i < 80; ++i) {
+        world.stepAgents(dt);
+        rig.renderAllCameras(world, cfg, static_cast<float>(i) * dt, &profiler);
+        perception.runFrame(ctx, rig, world, dt, true, out, &profiler);
+        planner.plan(world, out, cmd);
+        world.stepEgoAndPhysics(dt, cmd, ManualInput{});
+    }
+    const float distMoved = (world.ego().pos - startPos).norm();
+    EXPECT_GT(distMoved, 14.0f);
+    EXPECT_GT(world.ego().speed, 3.5f);
+    EXPECT_FALSE(world.lastContact().occurred);
+
+    profiler.destroy();
+    perception.destroy();
+    rig.destroy();
+    ctx.cleanup();
+}
+
+TEST(VulkanPipelineIntegrationTest, WorldModelHorizonUncertaintyGrowthAndBevTemporalPersistence) {
+    SimConfig cfg = SimConfig::loadFromYaml(resolveAssetPath("config/cybercab_sim.yaml"));
+    VulkanContext ctx;
+    ctx.init(false, nullptr);
+
+    WorldEngine world(cfg);
+    CameraRigRenderer rig;
+    rig.init(ctx, cfg, world);
+    PerceptionPipeline perception(cfg);
+    perception.init(ctx, rig);
+    TrajectoryPlanner planner(cfg);
+    GpuProfiler profiler;
+    profiler.init(ctx, 64);
+
+    // Run until at least one vehicle/ped track is confirmed so WorldModel produces rollout ghosts
+    const float dt = 1.0f / cfg.controlHz;
+    PerceptionFrameOutput out;
+    PlannerCommand cmd;
+    for (int i = 0; i < 15; ++i) {
+        world.stepAgents(dt);
+        rig.renderAllCameras(world, cfg, static_cast<float>(i) * dt, &profiler);
+        perception.runFrame(ctx, rig, world, dt, true, out, &profiler);
+        planner.plan(world, out, cmd);
+        world.stepEgoAndPhysics(dt, cmd, ManualInput{});
+    }
+
+    EXPECT_GT(out.bevSummary.observedCells, 200);
+    EXPECT_GT(out.bevSummary.meanObservability, 0.25f);
+    ASSERT_FALSE(out.worldGhosts.empty());
+
+    // Verify predicted horizon uncertainty grows monotonically from t=0.5s to t=2.0s per track
+    struct HorizonSig { float tEarly = 1e9f, sEarly = 0.0f, tLate = -1.0f, sLate = 0.0f; };
+    std::map<int, HorizonSig> perTrack;
+    for (const auto& g : out.worldGhosts) {
+        const int tid = static_cast<int>(std::round(g.yawMeta.w));
+        const float h = g.yawMeta.y;
+        const float s = g.yawMeta.z;
+        auto& hs = perTrack[tid];
+        if (h < hs.tEarly) { hs.tEarly = h; hs.sEarly = s; }
+        if (h > hs.tLate)  { hs.tLate  = h; hs.sLate  = s; }
+    }
+    int checkedTracks = 0;
+    for (const auto& kv : perTrack) {
+        if (kv.second.tLate > kv.second.tEarly + 0.5f) {
+            EXPECT_GT(kv.second.sLate, kv.second.sEarly);
+            ++checkedTracks;
+        }
+    }
+    EXPECT_GT(checkedTracks, 0);
+
+    profiler.destroy();
+    perception.destroy();
+    rig.destroy();
+    ctx.cleanup();
+}
