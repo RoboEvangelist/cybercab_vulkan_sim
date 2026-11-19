@@ -128,3 +128,120 @@ void BEVFormer::init(const VulkanContext& ctx, const SimConfig& cfg,
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, spatSet_, 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &s1, nullptr},
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, spatSet_, 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &s2, nullptr},
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, spatSet_, 3, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &s3, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, spatSet_, 4, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &s4, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, spatSet_, 5, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &s5, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, spatSet_, 6, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &s6, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, spatSet_, 7, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &s7, nullptr},
+    };
+    vkUpdateDescriptorSets(ctx_->device(), 8, sWrites, 0, nullptr);
+
+    resetHistory();
+}
+
+void BEVFormer::resetHistory() {
+    if (!ctx_) return;
+    hasPrevEgo_ = false;
+    std::vector<Vec4> zeroFeat(static_cast<size_t>(nx_ * ny_ * 4), Vec4{0, 0, 0, 0});
+    std::vector<Vec4> initMeta(static_cast<size_t>(nx_ * ny_), Vec4{0.0f, 1.0f, 0.0f, 0.0f});
+    prevBevFeatSSBO_.uploadVector(zeroFeat);
+    prevBevMetaSSBO_.uploadVector(initMeta);
+}
+
+void BEVFormer::destroy() {
+    if (!ctx_) return;
+    temporalPipe_.destroy();
+    spatialPipe_.destroy();
+    camProjSSBO_.destroy();
+    prevBevFeatSSBO_.destroy();
+    prevBevMetaSSBO_.destroy();
+    warpedBevFeatSSBO_.destroy();
+    warpedBevMetaSSBO_.destroy();
+    currBevFeatSSBO_.destroy();
+    currBevMetaSSBO_.destroy();
+    pillarHeightSSBO_.destroy();
+    ctx_ = nullptr;
+}
+
+void BEVFormer::recordDispatch(VkCommandBuffer cmd, const SimConfig& cfg,
+                               const CameraRigRenderer& rig,
+                               const EgoState& ego, float dt,
+                               const std::array<SoilCameraSummary, 8>& soilCameras) {
+    Mat4 worldFromCurrIso = worldFromIsoEgo(ego);
+    Mat4 prevEgoFromCurrEgo = hasPrevEgo_
+        ? (worldFromIsoEgo(prevEgo_).inverseRigid() * worldFromCurrIso)
+        : Mat4::identity();
+    prevEgo_ = ego;
+    hasPrevEgo_ = true;
+
+    std::array<CamProjGpu, 8> camProj{};
+    for (int c = 0; c < 8; ++c) {
+        const auto& spec = cfg.cameras.at(c);
+        const auto& cm = rig.cameraMatrices(c);
+        camProj[c].camFromEgoISO = cm.camFromWorld * worldFromCurrIso;
+        camProj[c].intr = {cm.intr.fx, cm.intr.fy, cm.intr.cx, cm.intr.cy};
+        camProj[c].dist = {spec.distortion[0], spec.distortion[1], spec.distortion[2], spec.distortion[3]};
+        camProj[c].dims = {static_cast<float>(cm.intr.width), static_cast<float>(cm.intr.height),
+                           spec.maxRangeM, soilCameras[c].tokenWeight};
+    }
+    camProjSSBO_.upload(camProj.data(), sizeof(camProj));
+
+    uint32_t gx = (nx_ + 7) / 8;
+    uint32_t gy = (ny_ + 7) / 8;
+
+    BevTemporalPC tpc{
+        prevEgoFromCurrEgo,
+        static_cast<uint32_t>(nx_),
+        static_cast<uint32_t>(ny_),
+        cfg.bevMinX, cfg.bevMaxX,
+        cfg.bevMinY, cfg.bevMaxY,
+        cfg.bevTemporalBlend,
+        dt
+    };
+    temporalPipe_.bindAndDispatch(cmd, tempSet_, gx, gy, 1, &tpc, sizeof(tpc));
+    cmdComputeBarrier(cmd);
+
+    Vec4 zAnc{0.45f, 1.05f, 1.75f, 2.65f};
+    if (cfg.bevZAnchors.size() >= 4) {
+        zAnc = {cfg.bevZAnchors[0], cfg.bevZAnchors[1], cfg.bevZAnchors[2], cfg.bevZAnchors[3]};
+    }
+    BevSpatialPC spc{
+        zAnc,
+        static_cast<uint32_t>(nx_),
+        static_cast<uint32_t>(ny_),
+        static_cast<uint32_t>(featW_),
+        static_cast<uint32_t>(featH_),
+        static_cast<uint32_t>(patchCols_),
+        static_cast<uint32_t>(patchRows_),
+        cfg.bevMinX, cfg.bevMaxX,
+        cfg.bevMinY, cfg.bevMaxY
+    };
+    spatialPipe_.bindAndDispatch(cmd, spatSet_, gx, gy, 1, &spc, sizeof(spc));
+    cmdComputeBarrier(cmd);
+}
+
+void BEVFormer::copyCurrToPrev(VkCommandBuffer cmd) const {
+    VkBufferCopy fCopy{0, 0, currBevFeatSSBO_.size()};
+    vkCmdCopyBuffer(cmd, currBevFeatSSBO_.handle(), prevBevFeatSSBO_.handle(), 1, &fCopy);
+    VkBufferCopy mCopy{0, 0, currBevMetaSSBO_.size()};
+    vkCmdCopyBuffer(cmd, currBevMetaSSBO_.handle(), prevBevMetaSSBO_.handle(), 1, &mCopy);
+}
+
+BevSummary BEVFormer::readbackSummary() const {
+    metaReadbackScratch_.resize(static_cast<size_t>(nx_ * ny_));
+    currBevMetaSSBO_.downloadVector(metaReadbackScratch_);
+    double sumObs = 0.0;
+    double sumVar = 0.0;
+    int obsCnt = 0;
+    for (const auto& m : metaReadbackScratch_) {
+        sumObs += m.x;
+        sumVar += m.y;
+        if (m.x > 0.25f) obsCnt++;
+    }
+    BevSummary out;
+    out.meanObservability = static_cast<float>(sumObs / std::max<size_t>(1, metaReadbackScratch_.size()));
+    out.meanEpistemicVar = static_cast<float>(sumVar / std::max<size_t>(1, metaReadbackScratch_.size()));
+    out.observedCells = obsCnt;
+    return out;
+}
+
+} // namespace cybercab
