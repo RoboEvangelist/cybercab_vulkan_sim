@@ -138,3 +138,143 @@ void BackboneRTDETR::updateCameraTensorBinding(const VulkanBuffer& camTensorSSBO
     VkDescriptorBufferInfo b0 = currCamTensorRef_->descriptorInfo();
     VkDescriptorBufferInfo b1 = prevCamTensorSSBO_.descriptorInfo();
     VkDescriptorBufferInfo b2 = soilPatchRef_->descriptorInfo();
+    VkDescriptorBufferInfo b3 = featS4SSBO_.descriptorInfo();
+    VkDescriptorBufferInfo b4 = featS5SSBO_.descriptorInfo();
+
+    VkWriteDescriptorSet bbWrites[5]{};
+    bbWrites[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, bbSet_, 0, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &b0, nullptr};
+    bbWrites[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, bbSet_, 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &b1, nullptr};
+    bbWrites[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, bbSet_, 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &b2, nullptr};
+    bbWrites[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, bbSet_, 3, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &b3, nullptr};
+    bbWrites[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, bbSet_, 4, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &b4, nullptr};
+    vkUpdateDescriptorSets(ctx_->device(), 5, bbWrites, 0, nullptr);
+
+    VkDescriptorBufferInfo e0 = featS4SSBO_.descriptorInfo();
+    VkDescriptorBufferInfo e1 = featS5SSBO_.descriptorInfo();
+    VkDescriptorBufferInfo e2 = encMemorySSBO_.descriptorInfo();
+    VkDescriptorBufferInfo e3 = queryInitSSBO_.descriptorInfo();
+
+    VkWriteDescriptorSet encWrites[4]{};
+    encWrites[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, encSet_, 0, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &e0, nullptr};
+    encWrites[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, encSet_, 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &e1, nullptr};
+    encWrites[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, encSet_, 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &e2, nullptr};
+    encWrites[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, encSet_, 3, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &e3, nullptr};
+    vkUpdateDescriptorSets(ctx_->device(), 4, encWrites, 0, nullptr);
+
+    VkDescriptorBufferInfo d0 = encMemorySSBO_.descriptorInfo();
+    VkDescriptorBufferInfo d1 = queryInitSSBO_.descriptorInfo();
+    VkDescriptorBufferInfo d2 = detrOutSSBO_.descriptorInfo();
+
+    VkWriteDescriptorSet decWrites[3]{};
+    decWrites[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, decSet_, 0, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &d0, nullptr};
+    decWrites[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, decSet_, 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &d1, nullptr};
+    decWrites[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, decSet_, 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &d2, nullptr};
+    vkUpdateDescriptorSets(ctx_->device(), 3, decWrites, 0, nullptr);
+}
+
+void BackboneRTDETR::destroy() {
+    if (!ctx_) return;
+    backbonePipe_.destroy();
+    detrEncPipe_.destroy();
+    detrDecPipe_.destroy();
+    prevCamTensorSSBO_.destroy();
+    featS4SSBO_.destroy();
+    featS5SSBO_.destroy();
+    encMemorySSBO_.destroy();
+    queryInitSSBO_.destroy();
+    detrOutSSBO_.destroy();
+    ctx_ = nullptr;
+}
+
+void BackboneRTDETR::recordBackbone(VkCommandBuffer cmd, int camW, int camH) const {
+    BackbonePC pc{
+        static_cast<uint32_t>(camW),
+        static_cast<uint32_t>(camH),
+        static_cast<uint32_t>(featW_),
+        static_cast<uint32_t>(featH_),
+        static_cast<uint32_t>(patchCols_),
+        static_cast<uint32_t>(patchRows_)
+    };
+    uint32_t gx = (featW_ + 7) / 8;
+    uint32_t gy = (featH_ + 7) / 8;
+    backbonePipe_.bindAndDispatch(cmd, bbSet_, gx, gy, 8, &pc, sizeof(pc));
+    cmdComputeBarrier(cmd);
+}
+
+void BackboneRTDETR::recordRTDETR(VkCommandBuffer cmd) const {
+    DetrEncPC encPc{
+        static_cast<uint32_t>(featW_),
+        static_cast<uint32_t>(featH_),
+        static_cast<uint32_t>(s5W_),
+        static_cast<uint32_t>(s5H_),
+        static_cast<uint32_t>(numQueries_)
+    };
+    detrEncPipe_.bindAndDispatch(cmd, encSet_, 1, 1, 8, &encPc, sizeof(encPc));
+    cmdComputeBarrier(cmd);
+
+    DetrDecPC decPc{
+        static_cast<uint32_t>(featW_),
+        static_cast<uint32_t>(featH_),
+        static_cast<uint32_t>(numQueries_),
+        static_cast<uint32_t>(numLayers_)
+    };
+    detrDecPipe_.bindAndDispatch(cmd, decSet_, 1, 1, 8, &decPc, sizeof(decPc));
+    cmdComputeBarrier(cmd);
+}
+
+void BackboneRTDETR::copyCurrToPrevTensor(VkCommandBuffer cmd) const {
+    if (!currCamTensorRef_ || tensorBytes_ == 0) return;
+    VkBufferCopy copy{0, 0, tensorBytes_};
+    vkCmdCopyBuffer(cmd, currCamTensorRef_->handle(), prevCamTensorSSBO_.handle(), 1, &copy);
+}
+
+void BackboneRTDETR::decodeAndLift3D(const SimConfig& cfg,
+                                     const CameraRigRenderer& rig,
+                                     const EgoState& ego,
+                                     std::vector<Detection2D>& out2D,
+                                     std::vector<Detection3D>& out3D) const {
+    out2D.clear();
+    out3D.clear();
+
+    detrRawScratch_.resize(static_cast<size_t>(8 * numQueries_ * 2));
+    detrOutSSBO_.downloadVector(detrRawScratch_);
+
+    const float sinEgo = std::sin(ego.yaw);
+    const float cosEgo = std::cos(ego.yaw);
+
+    for (int c = 0; c < 8; ++c) {
+        camCandsScratch_.clear();
+        for (int q = 0; q < numQueries_; ++q) {
+            const int base = (c * numQueries_ + q) * 2;
+            const Vec4& box = detrRawScratch_[base + 0];
+            const Vec4& meta = detrRawScratch_[base + 1];
+            if (meta.x < lowConfThresh_) continue;
+
+            Detection2D d;
+            d.camIndex = c;
+            d.cxNorm = clampf(box.x, 0.02f, 0.98f);
+            d.cyNorm = clampf(box.y, 0.02f, 0.98f);
+            d.wNorm = clampf(box.z, 0.02f, 0.65f);
+            d.hNorm = clampf(box.w, 0.03f, 0.75f);
+            d.score = meta.x;
+            const int cls = static_cast<int>(std::round(meta.y));
+            if (cls == 2) d.semantic = SemanticClass::Pedestrian;
+            else if (cls == 3) d.semantic = SemanticClass::SignalSign;
+            else d.semantic = SemanticClass::Vehicle;
+            d.camPatchWeight = meta.z;
+            d.boxSigma = meta.w;
+            camCandsScratch_.push_back(d);
+        }
+
+        std::sort(camCandsScratch_.begin(), camCandsScratch_.end(),
+                  [](const Detection2D& a, const Detection2D& b) { return a.score > b.score; });
+
+        keptScratch_.clear();
+        for (const auto& cand : camCandsScratch_) {
+            bool suppress = false;
+            for (const auto& k : keptScratch_) {
+                if (iou2D(cand, k) > nmsIouThresh_) {
+                    suppress = true;
+                    break;
+                }
+            }
