@@ -1358,3 +1358,154 @@ void WorldEngine::appendDynamicGeometry(std::vector<SceneVertex>& verts, std::ve
                     if (zq >= st[s].z && zq <= st[s + 1].z) { seg = s; break; }
                 }
                 const float tz = clampf((zq - st[seg].z) / std::max(1e-4f, st[seg + 1].z - st[seg].z), 0.0f, 1.0f);
+                const float yM = lerpf(st[seg].yMid, st[seg + 1].yMid, tz);
+                const float yT = lerpf(st[seg].yTopSide, st[seg + 1].yTopSide, tz);
+                const float wM = lerpf(st[seg].wMid, st[seg + 1].wMid, tz);
+                const float wT = lerpf(st[seg].wTop, st[seg + 1].wTop, tz);
+                const float ty = clampf((yq - yM) / std::max(1e-4f, yT - yM), 0.0f, 1.0f);
+                return lerpf(wM, wT, ty) + 0.009f;
+            };
+            Vec3 winR[kWinSt][2]{}, winL[kWinSt][2]{};
+            for (int w = 0; w < kWinSt; ++w) {
+                const float x0 = evalBodyW(wz[w], wy0[w]);
+                const float x1 = evalBodyW(wz[w], wy1[w]);
+                winR[w][0] = { x0, wy0[w], wz[w]};
+                winR[w][1] = { x1, wy1[w], wz[w]};
+                winL[w][0] = {-x1, wy1[w], wz[w]};
+                winL[w][1] = {-x0, wy0[w], wz[w]};
+            }
+            emitSmoothStripGrid<kWinSt, 2>(verts, indices, sprungMat, winR, kWinSt, 2, canopyCol, 1.0f, 0.0f, SemanticClass::Vehicle, false);
+            emitSmoothStripGrid<kWinSt, 2>(verts, indices, sprungMat, winL, kWinSt, 2, canopyCol, 1.0f, 0.0f, SemanticClass::Vehicle, false);
+
+            // Raked Panoramic Windshield & Sunroof Glass Inlay between champagne roof rails (flipWinding=true for +Y outward!)
+            const float fz[4] = {1.38f, 1.62f, 1.84f, 2.02f};
+            const float fy[4] = {1.335f, 1.19f, 1.045f, 0.90f};
+            const float fw[4] = {0.56f, 0.59f, 0.63f, 0.67f};
+            Vec3 wsGrid[4][3]{};
+            for (int k = 0; k < 4; ++k) {
+                wsGrid[k][0] = {-fw[k], fy[k] - 0.005f, fz[k]};
+                wsGrid[k][1] = { 0.0f,  fy[k] + 0.012f, fz[k]};
+                wsGrid[k][2] = { fw[k], fy[k] - 0.005f, fz[k]};
+            }
+            emitSmoothStripGrid<4, 3>(verts, indices, sprungMat, wsGrid, 4, 3, canopyCol, 1.0f, 0.0f, SemanticClass::Vehicle, true);
+
+            // Glossy black B-pillar door divider + front fender camera repeater pods + door cutline accents
+            for (const float sx : {-1.0f, 1.0f}) {
+                appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.78f, 1.08f, 0.64f}) * Mat4::rotZ(sx * 0.44f),
+                          {0.025f, 0.34f, 0.055f}, {0.02f, 0.03f, 0.05f}, 1.0f, 0.0f, SemanticClass::Vehicle);
+                // Side fender camera pod (tucked flush right behind front wheel arch)
+                appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.895f, 0.77f, 2.15f}),
+                          {0.045f, 0.048f, 0.12f}, {0.02f, 0.03f, 0.05f}, 1.0f, 0.0f, SemanticClass::Vehicle);
+            }
+
+            // Razor-thin Cyber DRL front lightbar slit + wraparound side LED tips
+            appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.55f, 3.298f}),
+                      {1.34f, 0.032f, 0.045f}, {0.93f, 0.98f, 1.0f}, 1.0f, 2.8f, SemanticClass::Vehicle);
+            for (const float sx : {-0.72f, 0.72f}) {
+                appendBox(verts, indices, sprungMat * Mat4::translation({sx, 0.55f, 3.22f}) * Mat4::rotY(sx > 0 ? -0.45f : 0.45f),
+                          {0.045f, 0.028f, 0.16f}, {0.93f, 0.98f, 1.0f}, 1.0f, 2.6f, SemanticClass::Vehicle);
+            }
+
+            // Kammtail full-width crimson rear tail/brake lightbar flush with rear deck width
+            const bool isBraking = ego_.accel < -0.45f || ego_.speed < 0.25f || ego_.aebActive;
+            appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.855f, -0.870f}),
+                      {1.42f, 0.045f, 0.045f}, {0.96f, 0.14f, 0.14f}, 1.0f, isBraking ? 4.4f : 1.3f, SemanticClass::Vehicle);
+
+            // 4x Giant Flush Champagne-Gold Aero Dish Wheels (32-segment round arches & dished solid covers)
+            const struct { float x, z; bool front; } wheels[4] = {
+                { 0.815f, 2.75f, true}, {-0.815f, 2.75f, true},
+                { 0.835f, 0.00f, false}, {-0.835f, 0.00f, false}
+            };
+            for (const auto& w : wheels) {
+                const float steer = w.front ? ego_.steerAngle : 0.0f;
+                const Mat4 wm = egoMat * Mat4::translation({w.x, 0.365f, w.z}) * Mat4::rotY(steer) * Mat4::rotX(ego_.wheelSpin);
+                appendCybercabAeroWheel(verts, indices, wm, (w.x >= 0.0f) ? 1.0f : -1.0f,
+                                        {0.055f, 0.065f, 0.085f}, goldBright, goldDark, SemanticClass::Vehicle);
+            }
+        } else {
+            // FSD Voxel holographic Cybercab fastback shell (flipWinding=true for +Y top roof)
+            const Vec3 holoCol{0.22f, 0.74f, 0.97f};
+            Vec3 holoRoof[kNumSt][3]{}, holoSideR[kNumSt][2]{}, holoSideL[kNumSt][2]{};
+            for (int i = 0; i < kNumSt; ++i) {
+                holoRoof[i][0] = {-st[i].wTop, st[i].yTopSide, st[i].z};
+                holoRoof[i][1] = { 0.0f,       st[i].yCrown,   st[i].z};
+                holoRoof[i][2] = { st[i].wTop, st[i].yTopSide, st[i].z};
+                holoSideR[i][0] = { st[i].wBot, st[i].yBot,     st[i].z};
+                holoSideR[i][1] = { st[i].wTop, st[i].yTopSide, st[i].z};
+                holoSideL[i][0] = {-st[i].wTop, st[i].yTopSide, st[i].z};
+                holoSideL[i][1] = {-st[i].wBot, st[i].yBot,     st[i].z};
+            }
+            emitSmoothStripGrid<kNumSt, 3>(verts, indices, sprungMat, holoRoof, kNumSt, 3, holoCol, 0.45f, 1.0f, SemanticClass::Vehicle, true);
+            emitSmoothStripGrid<kNumSt, 2>(verts, indices, sprungMat, holoSideR, kNumSt, 2, holoCol, 0.40f, 0.9f, SemanticClass::Vehicle, false);
+            emitSmoothStripGrid<kNumSt, 2>(verts, indices, sprungMat, holoSideL, kNumSt, 2, holoCol, 0.40f, 0.9f, SemanticClass::Vehicle, false);
+        }
+    }
+
+    if (fsdWireMode) return;
+
+    // 3. AI Traffic Vehicles (tapered cabins, glass, wheel assemblies, emissive headlights & taillights)
+    for (const auto& v : vehicles_) {
+        const Mat4 vm = Mat4::translation(v.pos) * Mat4::rotY(v.yaw);
+        const Vec3 tireCol{0.08f, 0.10f, 0.13f};
+        const Vec3 alloyCol{0.62f, 0.68f, 0.75f};
+        const Vec3 glassCol{0.05f, 0.08f, 0.15f};
+        if (v.type == "truck") {
+            appendFrustumBox(verts, indices, vm * Mat4::translation({0.0f, 1.15f, 2.02f}),
+                             {2.26f, 1.56f}, {2.05f, 1.28f}, 1.92f, -0.10f, v.color, 1.0f, 0.0f, SemanticClass::Vehicle);
+            appendFrustumBox(verts, indices, vm * Mat4::translation({0.0f, 1.48f, 2.48f}),
+                             {2.04f, 0.60f}, {1.92f, 0.42f}, 0.68f, -0.08f, glassCol, 1.0f, 0.0f, SemanticClass::Vehicle);
+            appendBox(verts, indices, vm * Mat4::translation({0.0f, 1.72f, -0.78f}), {2.38f, 2.68f, 4.12f}, {0.945f, 0.961f, 0.976f}, 1.0f, 0.0f, SemanticClass::Vehicle);
+            appendBox(verts, indices, vm * Mat4::translation({0.0f, 0.34f, -2.83f}), {2.34f, 0.22f, 0.12f}, tireCol, 1.0f, 0.0f, SemanticClass::Vehicle);
+            appendBox(verts, indices, vm * Mat4::translation({0.0f, 0.72f, -2.86f}), {2.24f, 0.18f, 0.08f}, {0.94f, 0.22f, 0.22f}, 1.0f, 2.2f, SemanticClass::Vehicle);
+            appendBox(verts, indices, vm * Mat4::translation({0.0f, 0.56f, 2.80f}), {2.02f, 0.14f, 0.08f}, {0.94f, 0.97f, 1.0f}, 1.0f, 1.4f, SemanticClass::Vehicle);
+            for (const float zAx : {-1.95f, -0.65f, 1.95f}) {
+                for (const float xAx : {-1.08f, 1.08f}) {
+                    appendWheelAssembly(verts, indices, vm * Mat4::translation({xAx, 0.44f, zAx}), 0.44f, 0.30f, tireCol, alloyCol, SemanticClass::Vehicle);
+                }
+            }
+        } else {
+            const float h = (v.type == "suv") ? 1.58f : 1.38f;
+            const float len = (v.type == "suv") ? 4.55f : 4.35f;
+            appendFrustumBox(verts, indices, vm * Mat4::translation({0.0f, h * 0.37f + 0.12f, 0.0f}),
+                             {1.88f, len}, {1.76f, len * 0.93f}, h * 0.46f, -0.05f, v.color, 1.0f, 0.0f, SemanticClass::Vehicle);
+            appendFrustumBox(verts, indices, vm * Mat4::translation({0.0f, h * 0.78f + 0.06f, -0.22f}),
+                             {1.66f, len * 0.56f}, {1.34f, len * 0.36f}, h * 0.44f, -0.10f, glassCol, 1.0f, 0.0f, SemanticClass::Vehicle);
+            appendBox(verts, indices, vm * Mat4::translation({0.0f, h * 0.42f + 0.12f, len * 0.5f + 0.01f}),
+                      {1.62f, 0.10f, 0.06f}, {0.94f, 0.97f, 1.0f}, 1.0f, 1.5f, SemanticClass::Vehicle);
+            appendBox(verts, indices, vm * Mat4::translation({0.0f, h * 0.48f + 0.10f, -len * 0.5f - 0.02f}),
+                      {1.66f, 0.11f, 0.06f}, {0.95f, 0.20f, 0.20f}, 1.0f, 1.9f, SemanticClass::Vehicle);
+            for (const float zAx : {-len * 0.30f, len * 0.30f}) {
+                for (const float xAx : {-0.86f, 0.86f}) {
+                    appendWheelAssembly(verts, indices, vm * Mat4::translation({xAx, 0.34f, zAx}), 0.34f, 0.24f, tireCol, alloyCol, SemanticClass::Vehicle);
+                }
+            }
+        }
+    }
+
+    // 4. Articulated Pedestrians (spherical heads, tapered torso, shoulder/hip-pivoted cylindrical limbs)
+    for (const auto& p : pedestrians_) {
+        const Mat4 pm = Mat4::translation({p.x, 0.0f, p.z}) * Mat4::rotY(p.yaw);
+        const Vec3 skinCol{0.97f, 0.75f, 0.54f};
+        const Vec3 shoeCol{0.08f, 0.10f, 0.14f};
+        appendFrustumBox(verts, indices, pm * Mat4::translation({0.0f, 1.04f, 0.0f}),
+                         {0.34f, 0.20f}, {0.42f, 0.24f}, 0.58f, 0.0f, p.shirtColor, 1.0f, 0.0f, SemanticClass::Pedestrian);
+        appendCylinderY(verts, indices, pm * Mat4::translation({0.0f, 1.37f, 0.0f}), 0.07f, 0.08f, 0.10f, 10, skinCol, 1.0f, 0.0f, SemanticClass::Pedestrian);
+        appendSphere(verts, indices, pm * Mat4::translation({0.0f, 1.54f, 0.0f}), 0.135f, 10, 12, skinCol, 1.0f, 0.0f, SemanticClass::Pedestrian);
+        // Legs pivoting around hip (y = 0.72)
+        for (const int side : {-1, 1}) {
+            const float ang = static_cast<float>(side) * p.legAngle;
+            const Mat4 legMat = pm * Mat4::translation({static_cast<float>(side) * 0.11f, 0.72f, 0.0f}) * Mat4::rotX(ang);
+            appendCylinderY(verts, indices, legMat * Mat4::translation({0.0f, -0.34f, 0.0f}), 0.075f, 0.062f, 0.66f, 10, p.pantsColor, 1.0f, 0.0f, SemanticClass::Pedestrian);
+            appendBox(verts, indices, legMat * Mat4::translation({0.0f, -0.68f, 0.04f}), {0.11f, 0.08f, 0.20f}, shoeCol, 1.0f, 0.0f, SemanticClass::Pedestrian);
+        }
+        // Arms pivoting around shoulder (y = 1.28)
+        for (const int side : {-1, 1}) {
+            const float ang = static_cast<float>(side) * p.armAngle;
+            const Mat4 armMat = pm * Mat4::translation({static_cast<float>(side) * 0.25f, 1.28f, 0.0f}) * Mat4::rotX(ang);
+            appendCylinderY(verts, indices, armMat * Mat4::translation({0.0f, -0.24f, 0.0f}), 0.055f, 0.048f, 0.48f, 10, p.shirtColor, 1.0f, 0.0f, SemanticClass::Pedestrian);
+            appendSphere(verts, indices, armMat * Mat4::translation({0.0f, -0.50f, 0.0f}), 0.052f, 6, 8, skinCol, 1.0f, 0.0f, SemanticClass::Pedestrian);
+        }
+    }
+}
+
+} // namespace cybercab
