@@ -338,3 +338,173 @@ void WorldEngine::initStaticOBBs() {
     }
 }
 
+void WorldEngine::resetTrafficAndPedestrians() {
+    vehicles_.clear();
+    pedestrians_.clear();
+
+    struct VehInit { const char* id; const char* type; int lane; float u; float spd; Vec3 col; };
+    const VehInit vSpecs[] = {
+        {"TRUCK_01", "truck", 0, 0.115f, 6.2f,  {0.231f, 0.510f, 0.965f}},
+        {"SEDAN_01", "sedan", 0, 0.270f, 9.2f,  {0.055f, 0.647f, 0.914f}},
+        {"SUV_01",   "suv",   1, 0.440f, 10.2f, {0.580f, 0.639f, 0.722f}},
+        {"SEDAN_02", "sedan", 0, 0.610f, 8.8f,  {0.882f, 0.114f, 0.282f}},
+        {"SUV_02",   "suv",   1, 0.760f, 9.8f,  {0.063f, 0.725f, 0.506f}},
+        {"SEDAN_03", "sedan", 0, 0.890f, 8.6f,  {0.659f, 0.333f, 0.969f}},
+    };
+
+    for (const auto& vs : vSpecs) {
+        AIVehicle v;
+        v.id = vs.id;
+        v.type = vs.type;
+        v.lane = vs.lane;
+        v.u = vs.u;
+        v.baseSpeed = vs.spd;
+        v.speed = vs.spd;
+        v.color = vs.col;
+        if (v.type == "truck") {
+            v.halfExtents = {1.22f, 1.55f, 2.90f};
+        } else if (v.type == "suv") {
+            v.halfExtents = {0.96f, 0.79f, 2.275f};
+        } else {
+            v.halfExtents = {0.96f, 0.69f, 2.175f};
+        }
+        v.pos = laneCurves_[v.lane].getPointAt(v.u);
+        Vec3 tan = laneCurves_[v.lane].getTangentAt(v.u);
+        v.yaw = std::atan2(tan.x, tan.z);
+        v.vx = tan.x * v.speed;
+        v.vz = tan.z * v.speed;
+        vehicles_.push_back(v);
+    }
+
+    struct PedInit { const char* id; float x, z, tx, tz, spd; Vec3 col; bool obey; };
+    const PedInit pSpecs[] = {
+        {"PED_01", -7.6f, kLoopHalfZ + 5.6f, -7.6f, kLoopHalfZ - 5.6f, 1.35f, {0.976f, 0.451f, 0.086f}, true},
+        {"PED_02", -7.0f, kLoopHalfZ - 5.8f, -7.0f, kLoopHalfZ + 5.8f, 1.28f, {0.220f, 0.741f, 0.973f}, true},
+        {"PED_03", 17.5f, -kLoopHalfZ + 5.6f, 17.5f, -kLoopHalfZ - 5.6f, 1.32f, {0.925f, 0.282f, 0.600f}, false},
+        {"PED_04", 18.2f, -kLoopHalfZ - 5.6f, 18.2f, -kLoopHalfZ + 5.6f, 1.25f, {0.659f, 0.333f, 0.969f}, false},
+        {"PED_05", -32.0f, kLoopHalfZ + 6.0f, -12.0f, kLoopHalfZ + 6.0f, 1.38f, {0.063f, 0.725f, 0.506f}, false},
+        {"PED_06", -15.0f, kLoopHalfZ - 6.0f, -38.0f, kLoopHalfZ - 6.0f, 1.30f, {0.918f, 0.702f, 0.031f}, false},
+        {"PED_07", kLoopHalfX + 6.0f, 22.0f, kLoopHalfX + 6.0f, -22.0f, 1.40f, {0.376f, 0.647f, 0.980f}, false},
+        {"PED_08", -22.0f, kLoopHalfZ + 5.9f, -22.0f, kLoopHalfZ - 5.9f, 1.45f, {0.957f, 0.247f, 0.369f}, true},
+    };
+
+    for (int i = 0; i < 8; ++i) {
+        const auto& pc = pSpecs[i];
+        Pedestrian p;
+        p.id = pc.id;
+        p.x = pc.x;
+        p.z = pc.z;
+        p.ax = pc.x;
+        p.az = pc.z;
+        p.bx = pc.tx;
+        p.bz = pc.tz;
+        p.targetX = pc.tx;
+        p.targetZ = pc.tz;
+        p.baseSpeed = pc.spd;
+        p.radius = 0.42f;
+        p.phase = static_cast<float>(i) * 1.1f;
+        p.shirtColor = pc.col;
+        p.pantsColor = (i % 2 == 0) ? Vec3{0.118f, 0.161f, 0.231f} : Vec3{0.200f, 0.255f, 0.333f};
+        p.obeySignal = pc.obey;
+        pedestrians_.push_back(p);
+    }
+}
+
+void WorldEngine::resetEgo() {
+    ego_ = EgoState{};
+    ego_.pos = {-38.0f, 0.0f, kLoopHalfZ + 1.9f};
+    ego_.yaw = kPi * 0.5f;
+    ego_.speed = 8.5f;
+    ego_.hx = cfg_.egoHx;
+    ego_.hy = cfg_.egoHy;
+    ego_.hz = cfg_.egoHz;
+    ego_.centerOffsetForward = cfg_.egoCenterOffsetFwd;
+    ego_.currentLateralOffset = -1.9f;
+    ego_.loopProgressU = 0.03f;
+}
+
+void WorldEngine::reset() {
+    signalPhase_ = SignalPhase::Green;
+    signalTimer_ = 0.0f;
+    forcedRed_ = false;
+    lastContact_ = {};
+    contactFlashAlpha_ = 0.0f;
+    resetTrafficAndPedestrians();
+    resetEgo();
+}
+
+OBB WorldEngine::getEgoWorldOBB() const {
+    float sinY = std::sin(ego_.yaw);
+    float cosY = std::cos(ego_.yaw);
+    return {
+        "EGO_CYBERCAB",
+        ego_.pos.x + sinY * ego_.centerOffsetForward,
+        ego_.hy,
+        ego_.pos.z + cosY * ego_.centerOffsetForward,
+        ego_.hx, ego_.hy, ego_.hz,
+        ego_.yaw,
+        sinY * ego_.speed,
+        cosY * ego_.speed,
+        SemanticClass::Vehicle,
+        "EGO"
+    };
+}
+
+Mat4 WorldEngine::getEgoWorldMatrix() const {
+    return Mat4::translation(ego_.pos) * Mat4::rotY(ego_.yaw);
+}
+
+Mat4 WorldEngine::getEgoSprungWorldMatrix() const {
+    // Matches HTML: yaw around world Y, then pitch around local X, roll around local Z
+    return getEgoWorldMatrix() * Mat4::rotX(ego_.pitch) * Mat4::rotZ(ego_.roll);
+}
+
+void WorldEngine::collectDynamicGroundTruthOBBs(std::vector<OBB>& out) const {
+    out.clear();
+    for (const auto& v : vehicles_) {
+        out.push_back({
+            v.id, v.pos.x, v.halfExtents.y, v.pos.z,
+            v.halfExtents.x, v.halfExtents.y, v.halfExtents.z,
+            v.yaw, v.vx, v.vz, SemanticClass::Vehicle, v.type
+        });
+    }
+    for (const auto& p : pedestrians_) {
+        out.push_back({
+            p.id, p.x, 0.9f, p.z,
+            0.35f, 0.9f, 0.35f,
+            p.yaw, p.vx, p.vz, SemanticClass::Pedestrian, "PED"
+        });
+    }
+}
+
+std::vector<OBB> WorldEngine::dynamicGroundTruthOBBs() const {
+    std::vector<OBB> out;
+    out.reserve(vehicles_.size() + pedestrians_.size());
+    collectDynamicGroundTruthOBBs(out);
+    return out;
+}
+
+std::vector<OBB> WorldEngine::allGroundTruthOBBs() const {
+    std::vector<OBB> out = staticOBBs_;
+    auto dyn = dynamicGroundTruthOBBs();
+    out.insert(out.end(), dyn.begin(), dyn.end());
+    return out;
+}
+
+float WorldEngine::findClosestLoopU(const Vec3& pos) const {
+    float bestU = ego_.loopProgressU;
+    float bestDistSq = std::numeric_limits<float>::infinity();
+    for (int i = -25; i <= 25; ++i) {
+        float u = std::fmod(ego_.loopProgressU + static_cast<float>(i) * 0.004f, 1.0f);
+        if (u < 0.0f) u += 1.0f;
+        Vec3 pt = centerline_.getPointAt(u);
+        float dSq = (pt.x - pos.x) * (pt.x - pos.x) + (pt.z - pos.z) * (pt.z - pos.z);
+        if (dSq < bestDistSq) {
+            bestDistSq = dSq;
+            bestU = u;
+        }
+    }
+    if (bestDistSq > 144.0f) {
+        for (int i = 0; i < 120; ++i) {
+            float u = static_cast<float>(i) / 120.0f;
+            Vec3 pt = centerline_.getPointAt(u);
