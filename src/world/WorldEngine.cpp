@@ -1188,3 +1188,173 @@ void WorldEngine::appendDynamicGeometry(std::vector<SceneVertex>& verts, std::ve
     }
 
     // 2. Ego Tesla Cybercab (matched to real Robotaxi fastback coupe profile & solid gold aero wheel covers)
+    if (includeEgo) {
+        const Mat4 egoMat = getEgoWorldMatrix();
+        const Mat4 sprungMat = getEgoSprungWorldMatrix();
+        const Vec3 goldCol{0.824f, 0.706f, 0.490f};
+        const Vec3 goldBright{0.875f, 0.769f, 0.557f};
+        const Vec3 goldDark{0.620f, 0.522f, 0.345f};
+        const Vec3 canopyCol{0.035f, 0.051f, 0.086f};
+        const Vec3 trimCol{0.075f, 0.086f, 0.114f};
+
+        struct CyberStation {
+            float z;
+            float yBot;
+            float yMid;
+            float yTopSide;
+            float yCrown;
+            float wBot;
+            float wMid;
+            float wTop;
+        };
+
+        auto wheelArchFloor = [](float z, float baseY) -> float {
+            const float dR = std::abs(z - 0.00f);
+            const float dF = std::abs(z - 2.75f);
+            const float archR = 0.395f;
+            float y = baseY;
+            if (dR < archR) y = std::max(y, 0.365f + std::sqrt(std::max(0.0f, archR * archR - dR * dR)));
+            if (dF < archR) y = std::max(y, 0.365f + std::sqrt(std::max(0.0f, archR * archR - dF * dF)));
+            return y;
+        };
+
+        constexpr int kNumSt = 23;
+        const float zSamples[kNumSt] = {
+            -0.86f, -0.64f, -0.405f, -0.34f, -0.20f, 0.00f, 0.20f, 0.34f, 0.405f,
+             0.72f,  1.02f,  1.42f,   1.85f,  2.10f,
+             2.345f, 2.41f,  2.55f,   2.75f,  2.95f, 3.09f, 3.155f,
+             3.255f, 3.31f
+        };
+
+        CyberStation st[kNumSt]{};
+        for (int i = 0; i < kNumSt; ++i) {
+            const float z = zSamples[i];
+            st[i].z = z;
+            // Base lower painted body line (diffuser kick at rear, rockers along doors, splitter chin at front)
+            const float baseY = (z < -0.40f) ? lerpf(0.47f, 0.34f, (z + 0.86f) / 0.46f)
+                              : (z > 3.15f)  ? lerpf(0.34f, 0.37f, (z - 3.15f) / 0.16f)
+                                             : 0.335f;
+            st[i].yBot = wheelArchFloor(z, baseY);
+
+            // Smooth fastback roof arch & curved front hood arching cleanly above front wheel wells
+            float yRoof = 1.385f;
+            if (z < 1.02f) {
+                const float t = (1.02f - z) / 1.88f; // 0 at roof crest -> 1 at Kammtail rear
+                yRoof = 1.385f - 0.485f * (0.35f * t + 0.65f * t * t);
+            } else if (z <= 2.08f) {
+                const float t = (z - 1.02f) / 1.06f; // 0 at crest -> 1 at hood cowl
+                yRoof = 1.385f - 0.485f * (t * t * (1.22f - 0.22f * t));
+            } else {
+                const float t = (z - 2.08f) / 1.23f; // cubic droop stays clear above front wheel (z=2.75), curves down at nose
+                yRoof = 0.900f - 0.305f * (0.20f * t + 0.80f * t * t * t);
+            }
+            st[i].yCrown = yRoof;
+            st[i].yTopSide = yRoof - ((z > 0.2f && z < 2.08f) ? 0.042f : 0.020f);
+
+            // Rising crisp beltline / fender shoulder crease (monotonically <= yTopSide and >= yBot everywhere)
+            if (z <= 2.08f) {
+                st[i].yMid = lerpf(0.865f, 0.805f, clampf((z + 0.86f) / 2.94f, 0.0f, 1.0f));
+            } else if (z <= 2.82f) {
+                st[i].yMid = 0.805f;
+            } else {
+                const float t = clampf((z - 2.82f) / (3.31f - 2.82f), 0.0f, 1.0f);
+                st[i].yMid = lerpf(0.805f, 0.550f, t * t);
+            }
+            st[i].yMid = clampf(st[i].yMid, st[i].yBot + 0.026f, st[i].yTopSide - 0.014f);
+
+            // Longitudinal planform width taper (wide sculpted haunches, sleek nose & Kammtail)
+            const float endTaperR = (z < -0.42f) ? clampf((-0.42f - z) / 0.44f, 0.0f, 1.0f) : 0.0f;
+            const float endTaperF = (z > 2.82f) ? clampf((z - 2.82f) / 0.49f, 0.0f, 1.0f) : 0.0f;
+            st[i].wBot = 0.915f - 0.11f * endTaperR * endTaperR - 0.14f * endTaperF * endTaperF;
+            st[i].wMid = 0.955f - 0.10f * endTaperR * endTaperR - 0.15f * endTaperF * endTaperF;
+            const float cabTaper = (z > 0.0f && z < 2.05f) ? 0.21f * std::sin(kPi * (z / 2.05f)) : 0.05f;
+            st[i].wTop = st[i].wMid - cabTaper - 0.04f;
+        }
+
+        if (!fsdWireMode) {
+            // Strip A: Smooth arched Champagne Roof / Hood spine (+X x +Z -> flipWinding=true for +Y outward!)
+            Vec3 roofGrid[kNumSt][3]{};
+            for (int i = 0; i < kNumSt; ++i) {
+                roofGrid[i][0] = {-st[i].wTop, st[i].yTopSide, st[i].z};
+                roofGrid[i][1] = { 0.0f,       st[i].yCrown,   st[i].z};
+                roofGrid[i][2] = { st[i].wTop, st[i].yTopSide, st[i].z};
+            }
+            emitSmoothStripGrid<kNumSt, 3>(verts, indices, sprungMat, roofGrid, kNumSt, 3, goldBright, 1.0f, 0.0f, SemanticClass::Vehicle, true);
+
+            // Strip B: Smooth Upper Tumblehome / Cabin & Fender Haunches (Right +X & Left -X)
+            Vec3 upR[kNumSt][2]{}, upL[kNumSt][2]{};
+            for (int i = 0; i < kNumSt; ++i) {
+                upR[i][0] = { st[i].wMid, st[i].yMid,     st[i].z};
+                upR[i][1] = { st[i].wTop, st[i].yTopSide, st[i].z};
+                upL[i][0] = {-st[i].wTop, st[i].yTopSide, st[i].z};
+                upL[i][1] = {-st[i].wMid, st[i].yMid,     st[i].z};
+            }
+            emitSmoothStripGrid<kNumSt, 2>(verts, indices, sprungMat, upR, kNumSt, 2, goldBright, 1.0f, 0.0f, SemanticClass::Vehicle, false);
+            emitSmoothStripGrid<kNumSt, 2>(verts, indices, sprungMat, upL, kNumSt, 2, goldBright, 1.0f, 0.0f, SemanticClass::Vehicle, false);
+
+            // Strip C: Lower Door Slab & Sculpted Wheel Arch Fenders
+            Vec3 loR[kNumSt][2]{}, loL[kNumSt][2]{};
+            for (int i = 0; i < kNumSt; ++i) {
+                loR[i][0] = { st[i].wBot, st[i].yBot, st[i].z};
+                loR[i][1] = { st[i].wMid, st[i].yMid, st[i].z};
+                loL[i][0] = {-st[i].wMid, st[i].yMid, st[i].z};
+                loL[i][1] = {-st[i].wBot, st[i].yBot, st[i].z};
+            }
+            emitSmoothStripGrid<kNumSt, 2>(verts, indices, sprungMat, loR, kNumSt, 2, goldCol, 1.0f, 0.0f, SemanticClass::Vehicle, false);
+            emitSmoothStripGrid<kNumSt, 2>(verts, indices, sprungMat, loL, kNumSt, 2, goldCol, 1.0f, 0.0f, SemanticClass::Vehicle, false);
+
+            // Exact gap-free Rear Kammtail & Front Nose closing panels matching cross-section stations
+            auto emitEndCap = [&](const CyberStation& s, bool isFront) {
+                const Vec3 pbL{-s.wBot, s.yBot,     s.z}, pbR{ s.wBot, s.yBot,     s.z};
+                const Vec3 pmL{-s.wMid, s.yMid,     s.z}, pmR{ s.wMid, s.yMid,     s.z};
+                const Vec3 ptL{-s.wTop, s.yTopSide, s.z}, ptR{ s.wTop, s.yTopSide, s.z};
+                const Vec3 pc { 0.0f,   s.yCrown,   s.z};
+                const float nZ = isFront ? 1.0f : -1.0f;
+                const Vec3 wn = sprungMat.transformVector({0.0f, 0.0f, nZ}).normalized();
+                const float semF = static_cast<float>(static_cast<int>(SemanticClass::Vehicle));
+                auto pushPt = [&](const Vec3& p) {
+                    const Vec3 wp = sprungMat.transformPoint(p);
+                    verts.push_back({wp.x, wp.y, wp.z, wn.x, wn.y, wn.z,
+                                     goldDark.x, goldDark.y, goldDark.z, 1.0f, 0.0f, semF, 0.0f, 0.0f});
+                };
+                const uint32_t b = static_cast<uint32_t>(verts.size());
+                pushPt(pbL); pushPt(pbR); pushPt(pmR); pushPt(pmL); // 0,1,2,3
+                pushPt(ptR); pushPt(ptL); pushPt(pc);               // 4,5,6
+                if (isFront) {
+                    indices.push_back(b + 0); indices.push_back(b + 1); indices.push_back(b + 2);
+                    indices.push_back(b + 0); indices.push_back(b + 2); indices.push_back(b + 3);
+                    indices.push_back(b + 3); indices.push_back(b + 2); indices.push_back(b + 4);
+                    indices.push_back(b + 3); indices.push_back(b + 4); indices.push_back(b + 5);
+                    indices.push_back(b + 5); indices.push_back(b + 4); indices.push_back(b + 6);
+                } else {
+                    indices.push_back(b + 0); indices.push_back(b + 2); indices.push_back(b + 1);
+                    indices.push_back(b + 0); indices.push_back(b + 3); indices.push_back(b + 2);
+                    indices.push_back(b + 3); indices.push_back(b + 4); indices.push_back(b + 2);
+                    indices.push_back(b + 3); indices.push_back(b + 5); indices.push_back(b + 4);
+                    indices.push_back(b + 5); indices.push_back(b + 6); indices.push_back(b + 4);
+                }
+            };
+            emitEndCap(st[0], false);
+            emitEndCap(st[kNumSt - 1], true);
+
+            // Recessed dark underbody floorpan, inner wheel-well tubs (compact inside hood height!), door rockers & kicked rear diffuser
+            appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.36f, 1.22f}),
+                      {1.16f, 0.36f, 3.68f}, {0.03f, 0.04f, 0.06f}, 1.0f, 0.0f, SemanticClass::Vehicle);
+            appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.25f, 1.375f}),
+                      {1.80f, 0.17f, 1.90f}, trimCol, 1.0f, 0.0f, SemanticClass::Vehicle);
+            appendFrustumBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.26f, 3.22f}),
+                             {1.42f, 0.18f}, {1.48f, 0.14f}, 0.14f, 0.02f, trimCol, 1.0f, 0.0f, SemanticClass::Vehicle);
+            appendFrustumBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.34f, -0.66f}),
+                             {1.68f, 0.44f}, {1.58f, 0.44f}, 0.22f, -0.04f, trimCol, 1.0f, 0.0f, SemanticClass::Vehicle);
+
+            // Flush Teardrop Side Glass Windows + B-Pillar Mullion + Panoramic Windshield (matching images.jpeg!)
+            constexpr int kWinSt = 6;
+            const float wz[kWinSt]  = { 0.16f, 0.52f, 0.92f, 1.32f, 1.68f, 1.96f};
+            const float wy0[kWinSt] = { 0.96f, 0.92f, 0.89f, 0.86f, 0.84f, 0.82f};
+            const float wy1[kWinSt] = { 0.975f, 1.21f, 1.325f, 1.29f, 1.09f, 0.855f};
+            auto evalBodyW = [&](float zq, float yq) -> float {
+                int seg = kNumSt - 2;
+                for (int s = 0; s < kNumSt - 1; ++s) {
+                    if (zq >= st[s].z && zq <= st[s + 1].z) { seg = s; break; }
+                }
+                const float tz = clampf((zq - st[seg].z) / std::max(1e-4f, st[seg + 1].z - st[seg].z), 0.0f, 1.0f);
