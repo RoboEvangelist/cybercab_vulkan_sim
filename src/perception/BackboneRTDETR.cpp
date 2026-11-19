@@ -278,3 +278,105 @@ void BackboneRTDETR::decodeAndLift3D(const SimConfig& cfg,
                     break;
                 }
             }
+            if (!suppress) keptScratch_.push_back(cand);
+        }
+
+        const auto& spec = cfg.cameras.at(c);
+        const auto& cm = rig.cameraMatrices(c);
+        const float W = static_cast<float>(cm.intr.width);
+        const float H = static_cast<float>(cm.intr.height);
+
+        for (const auto& d : keptScratch_) {
+            // Lift 2D detection to 3D via ground-plane ray + apparent height prior fusion
+            const float uBot = d.cxNorm * W;
+            const float vBot = (d.cyNorm + d.hNorm * 0.5f) * H;
+            const float xd = (uBot - cm.intr.cx) / cm.intr.fx;
+            const float yd = (vBot - cm.intr.cy) / cm.intr.fy;
+            const Vec2 xu = undistortNormalized(xd, yd, spec.distortion);
+
+            const Vec3 camOriginW = cm.worldFromCam.transformPoint({0.0f, 0.0f, 0.0f});
+            const Vec3 rayDirW = cm.worldFromCam.transformVector({xu.x, xu.y, 1.0f}).normalized();
+
+            const float hPx = std::max(d.hNorm * H, 6.0f);
+            const float hPrior = (d.semantic == SemanticClass::Pedestrian) ? 1.72f :
+                                 (d.semantic == SemanticClass::SignalSign) ? 1.15f : 1.50f;
+            const float tHeight = clampf((cm.intr.fy * hPrior) / hPx, 1.5f, std::min(spec.maxRangeM, maxRangeM_));
+
+            float tEst = tHeight;
+            if (d.semantic != SemanticClass::SignalSign && rayDirW.y < -0.025f) {
+                const float tGround = clampf(-camOriginW.y / rayDirW.y, 1.2f, spec.maxRangeM);
+                const float gWeight = clampf((-rayDirW.y - 0.025f) / 0.08f, 0.25f, 0.85f);
+                tEst = lerpf(tHeight, tGround, gWeight);
+            }
+
+            Vec3 wp = camOriginW + rayDirW * tEst;
+            const Vec3 he = (d.semantic == SemanticClass::Pedestrian) ? Vec3{0.35f, 0.90f, 0.35f} :
+                            (d.semantic == SemanticClass::SignalSign) ? Vec3{0.45f, 1.50f, 0.45f} :
+                                                                        Vec3{0.96f, 0.72f, 2.18f};
+            if (d.semantic != SemanticClass::SignalSign) wp.y = he.y;
+
+            const float relX = wp.x - ego.pos.x;
+            const float relZ = wp.z - ego.pos.z;
+            const Vec3 egoP{relX * sinEgo + relZ * cosEgo, relX * cosEgo - relZ * sinEgo, wp.y};
+
+            // Filter self-body detections (hood, fenders, rear decklid)
+            if (d.semantic != SemanticClass::SignalSign &&
+                egoP.x > -1.35f && egoP.x < 3.70f && std::abs(egoP.y) < 1.30f) {
+                continue;
+            }
+            out2D.push_back(d);
+
+            // Epistemic + Jacobian depth uncertainty propagation
+            const float rangeUncert = (tEst * tEst / (cm.intr.fy * hPx)) * 2.5f + d.boxSigma * 0.8f;
+
+            Detection3D d3;
+            d3.camIndex = c;
+            d3.semantic = d.semantic;
+            d3.score = d.score;
+            d3.worldPos = wp;
+            d3.egoPos = egoP;
+            d3.halfExtents = he;
+            d3.yaw = ego.yaw;
+            d3.rangeM = tEst;
+            d3.camWeight = d.camPatchWeight;
+            d3.epistemicSigma = clampf(rangeUncert, 0.15f, 8.0f);
+            d3.det2d = d;
+            out3D.push_back(d3);
+        }
+    }
+}
+
+std::vector<uint8_t> BackboneRTDETR::downloadBackboneHeatmapRGBA(int camIdx, int outW, int outH) const {
+    std::vector<Vec4> raw(static_cast<size_t>(8 * featW_ * featH_ * 4));
+    featS4SSBO_.downloadVector(raw);
+
+    std::vector<uint8_t> img(static_cast<size_t>(outW) * outH * 4, 255);
+    for (int y = 0; y < outH; ++y) {
+        int fy = clampf(static_cast<float>(y * featH_) / outH, 0.0f, static_cast<float>(featH_ - 1));
+        for (int x = 0; x < outW; ++x) {
+            int fx = clampf(static_cast<float>(x * featW_) / outW, 0.0f, static_cast<float>(featW_ - 1));
+            size_t base = (static_cast<size_t>((camIdx * featH_ + fy) * featW_ + fx)) * 4;
+            float edgeEnergy = raw[base + 0].z;
+            float objEnergy = raw[base + 3].w;
+            float patchW = raw[base + 3].y;
+
+            float e = clampf((edgeEnergy * 0.5f + objEnergy * 0.9f) * 1.3f, 0.0f, 1.0f);
+            uint8_t r = static_cast<uint8_t>(clampf(e * 1.45f, 0.0f, 1.0f) * 255.0f);
+            uint8_t g = static_cast<uint8_t>(clampf((e - 0.30f) * 1.6f, 0.0f, 1.0f) * 255.0f);
+            uint8_t b = static_cast<uint8_t>(clampf(0.22f + (1.0f - e) * 0.55f, 0.0f, 1.0f) * 255.0f);
+            // Tint orange on soiled low-weight patches so user sees SoilDetector output in heatmap!
+            if (patchW < 0.55f) {
+                r = static_cast<uint8_t>(std::min(255, r + 90));
+                g = static_cast<uint8_t>(g * 0.6f);
+            }
+            size_t di = (static_cast<size_t>(y) * outW + x) * 4;
+            img[di + 0] = r;
+            img[di + 1] = g;
+            img[di + 2] = b;
+            img[di + 3] = 255;
+        }
+    }
+    return img;
+}
+
+} // namespace cybercab
