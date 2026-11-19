@@ -113,3 +113,101 @@ int main(int argc, char** argv) {
 
             float simTime = 0.0f;
             for (int step = 0; step < args.steps; ++step) {
+                world.stepAgents(dtControl);
+                rig.renderAllCameras(world, cfg, simTime, &profiler);
+                perception.runFrame(ctx, rig, world, dtControl, cfg.occEnableShadows, percOut, &profiler);
+                planner.plan(world, percOut, planCmd);
+                world.stepEgoAndPhysics(dtControl, planCmd, cybercab::ManualInput{});
+
+                if (tracer.isOpen()) {
+                    tracer.logFrame(step, simTime, cfg, world.ego(), planCmd, percOut, world.lastContact());
+                }
+                if (!args.dumpDir.empty() && (step == 0 || step == args.steps / 2 || step == args.steps - 1)) {
+                    char ppmName[256];
+                    std::snprintf(ppmName, sizeof(ppmName), "%s/cam_grid_step_%04d.ppm", args.dumpDir.c_str(), step);
+                    rig.dumpCameraGridPPM(ppmName);
+                }
+
+                if (step % 20 == 0 || step == args.steps - 1) {
+                    double totGpuMs = 0.0;
+                    for (const auto& kv : percOut.gpuStageMs) totGpuMs += kv.second;
+                    std::cout << std::fixed << std::setprecision(2)
+                              << "[step " << std::setw(3) << step << "] state=" << planCmd.behaviorState
+                              << " v=" << world.ego().speed << "m/s"
+                              << " rss=" << planCmd.rssSafeDist << "m"
+                              << " fwdSig=" << percOut.forwardEpistemicSigma
+                              << " det3D=" << percOut.detections3D.size()
+                              << " trk=" << percOut.tracks.size()
+                              << " vox=" << percOut.activeVoxels.size()
+                              << " shad=" << percOut.shadowVoxels.size()
+                              << " gpu=" << totGpuMs << "ms\n";
+                }
+                simTime += dtControl;
+            }
+
+            profiler.destroy();
+            perception.destroy();
+            rig.destroy();
+            ctx.cleanup();
+            return 0;
+        }
+
+        // Interactive SDL2 + Vulkan Window Mode
+        cybercab::VulkanViewer viewer;
+        viewer.init(cfg, world, rig, perception, ctx);
+        profiler.init(ctx, 64);
+        std::cout << "Vulkan Interactive GPU: " << ctx.deviceName() << "\n";
+
+        applyScenario(args.scenario, cfg, world);
+
+        cybercab::ViewerToggleState toggles;
+        toggles.showShadows = cfg.occEnableShadows;
+        if (cfg.initialViewMode == "fsd") toggles.viewMode = cybercab::ViewMode::FsdVoxel;
+        else if (cfg.initialViewMode == "bev") toggles.viewMode = cybercab::ViewMode::BevTactical;
+
+        cybercab::ManualInput manual;
+        std::string toastMsg = "Vulkan 8-Cam Perception Ready (" + ctx.deviceName() + ")";
+        auto lastTime = std::chrono::steady_clock::now();
+        float accum = 0.0f;
+        float simTime = 0.0f;
+        int step = 0;
+
+        while (viewer.pollEvents(cfg, world, rig, perception, manual, toggles, toastMsg)) {
+            const auto now = std::chrono::steady_clock::now();
+            const float rawDt = std::chrono::duration<float>(now - lastTime).count();
+            lastTime = now;
+            const float dt = std::min(rawDt, 0.05f);
+
+            world.stepAgents(dt);
+            accum += dt;
+            bool ranControl = false;
+            while (accum >= dtControl) {
+                if (!ranControl) {
+                    rig.renderAllCameras(world, cfg, simTime, &profiler);
+                    perception.runFrame(ctx, rig, world, dtControl, toggles.showShadows, percOut, &profiler);
+                    ranControl = true;
+                }
+                planner.plan(world, percOut, planCmd);
+                world.stepEgoAndPhysics(dtControl, planCmd, manual);
+                if (tracer.isOpen()) {
+                    tracer.logFrame(step, simTime, cfg, world.ego(), planCmd, percOut, world.lastContact());
+                }
+                accum -= dtControl;
+                simTime += dtControl;
+                step++;
+            }
+
+            viewer.renderFrame(cfg, world, rig, percOut, planCmd, toggles, toastMsg);
+        }
+
+        profiler.destroy();
+        perception.destroy();
+        rig.destroy();
+        viewer.destroy();
+        ctx.cleanup();
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "Fatal error: " << e.what() << "\n";
+        return 1;
+    }
+}
