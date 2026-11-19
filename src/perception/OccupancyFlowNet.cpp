@@ -98,3 +98,95 @@ void OccupancyFlowNet::resetVoxels() {
 }
 
 void OccupancyFlowNet::destroy() {
+    if (!ctx_) return;
+    occPipe_.destroy();
+    shadowPipe_.destroy();
+    trackPriorsSSBO_.destroy();
+    voxelStateSSBO_.destroy();
+    voxelUncertSSBO_.destroy();
+    ctx_ = nullptr;
+}
+
+void OccupancyFlowNet::recordDispatch(VkCommandBuffer cmd, const SimConfig& cfg,
+                                      const EgoState& ego, float dt,
+                                      const std::vector<TrackPriorGpu>& tracks,
+                                      bool enableShadows) {
+    uint32_t activeCount = 0;
+    for (const auto& t : tracks) {
+        if (t.yawValid.w > 0.5f) activeCount++;
+    }
+    trackPriorsSSBO_.uploadVector(tracks);
+
+    OccPC opc{
+        static_cast<uint32_t>(nx_),
+        static_cast<uint32_t>(ny_),
+        static_cast<uint32_t>(nz_),
+        static_cast<uint32_t>(tracks.size()),
+        cfg.occMinX, cfg.occMaxX,
+        cfg.occMinY, cfg.occMaxY,
+        cfg.occMinZ, cfg.occMaxZ,
+        cfg.occDecayRate, dt,
+        ego.pos.x, ego.pos.z, ego.yaw,
+        cfg.occThreshold
+    };
+    occPipe_.bindAndDispatch(cmd, occSet_, (nx_ + 7) / 8, (ny_ + 7) / 8, (nz_ + 1) / 2, &opc, sizeof(opc));
+    cmdComputeBarrier(cmd);
+
+    ShadowPC spc{
+        static_cast<uint32_t>(nx_),
+        static_cast<uint32_t>(ny_),
+        static_cast<uint32_t>(nz_),
+        cfg.occMinX, cfg.occMaxX,
+        cfg.occMinY, cfg.occMaxY,
+        enableShadows ? 1u : 0u
+    };
+    shadowPipe_.bindAndDispatch(cmd, shadowSet_, (nx_ + 7) / 8, (ny_ + 7) / 8, 1, &spc, sizeof(spc));
+    cmdComputeBarrier(cmd);
+}
+
+void OccupancyFlowNet::readbackVoxels(const SimConfig& cfg, const EgoState& ego,
+                                      std::vector<ActiveVoxel>& outObserved,
+                                      std::vector<ActiveVoxel>& outShadows) const {
+    outObserved.clear();
+    outShadows.clear();
+
+    const size_t total = static_cast<size_t>(nx_ * ny_ * nz_);
+    statesScratch_.resize(total);
+    uncertScratch_.resize(total);
+    voxelStateSSBO_.downloadVector(statesScratch_);
+    voxelUncertSSBO_.downloadVector(uncertScratch_);
+
+    const float sinEgo = std::sin(ego.yaw);
+    const float cosEgo = std::cos(ego.yaw);
+
+    for (int ix = 0; ix < nx_; ++ix) {
+        const float egoX = cfg.occMinX + (static_cast<float>(ix) + 0.5f) * cfg.occStepX;
+        for (int iy = 0; iy < ny_; ++iy) {
+            const float egoY = cfg.occMinY + (static_cast<float>(iy) + 0.5f) * cfg.occStepY;
+            const float wx = ego.pos.x + egoX * sinEgo + egoY * cosEgo;
+            const float wz = ego.pos.z + egoX * cosEgo - egoY * sinEgo;
+
+            for (int iz = 0; iz < nz_; ++iz) {
+                const size_t idx = (static_cast<size_t>(ix) * ny_ + iy) * nz_ + iz;
+                const float conf = statesScratch_[idx].y;
+                if (conf <= 0.08f) continue;
+
+                const int semInt = static_cast<int>(std::round(statesScratch_[idx].x));
+                const SemanticClass sem = static_cast<SemanticClass>(semInt);
+                const float wy = cfg.occMinZ + (static_cast<float>(iz) + 0.5f) * cfg.occStepZ;
+
+                const ActiveVoxel v{
+                    egoX, egoY, wy, wx, wz, sem, conf,
+                    statesScratch_[idx].z, statesScratch_[idx].w, uncertScratch_[idx].x
+                };
+                if (sem == SemanticClass::OccShadow) {
+                    outShadows.push_back(v);
+                } else if (sem != SemanticClass::Empty) {
+                    outObserved.push_back(v);
+                }
+            }
+        }
+    }
+}
+
+} // namespace cybercab
