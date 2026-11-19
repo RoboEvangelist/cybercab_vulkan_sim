@@ -1258,3 +1258,162 @@ void VulkanViewer::buildUiOverlay(const SimConfig& cfg, const WorldEngine& world
                   scSoil.meanSoilProb, scSoil.tokenWeight, scSoil.meanEpistemicVar);
     uiText(rx + 10.0f, ry + 206.0f, 1.25f, scSoil.tokenWeight < 0.7f ? Vec4{0.98f, 0.45f, 0.15f, 1.0f} : Vec4{0.20f, 0.83f, 0.60f, 1.0f}, dBuf);
 
+    addChipButton(rx + 10.0f, ry + 234.0f, rPanW - 20.0f, 26.0f,
+                  spec.soiled ? ("C: Clean " + spec.shortName + " Lens") : ("C: Soil / Mud " + spec.shortName + " Lens"),
+                  spec.soiled, {0.55f, 0.24f, 0.06f, 0.95f}, {0.98f, 0.55f, 0.15f, 1.0f},
+                  UiAction::ToggleSoilSelected);
+
+    if (!toastMsg.empty()) {
+        const float tw = std::min(W - 80.0f, static_cast<float>(toastMsg.size()) * 8.5f + 24.0f);
+        uiRect((W - tw) * 0.5f, topBarH + 14.0f, tw, 24.0f, {0.03f, 0.18f, 0.26f, 0.92f});
+        uiRectOutline((W - tw) * 0.5f, topBarH + 14.0f, tw, 24.0f, 1.0f, {0.13f, 0.83f, 0.93f, 0.85f});
+        uiText((W - tw) * 0.5f + 12.0f, topBarH + 20.0f, 1.3f, {0.88f, 0.97f, 1.0f, 1.0f}, toastMsg);
+    }
+
+    flushBatch(0);
+
+    if (!uiVertsScratch_.empty() && uiVertsScratch_.size() <= 65536 && uiIdxScratch_.size() <= 131072) {
+        uiVB_.upload(uiVertsScratch_.data(), uiVertsScratch_.size() * sizeof(UiVertex));
+        uiIB_.upload(uiIdxScratch_.data(), uiIdxScratch_.size() * sizeof(uint32_t));
+    }
+}
+
+void VulkanViewer::renderFrame(const SimConfig& cfg, const WorldEngine& world, const CameraRigRenderer& rig,
+                               const PerceptionFrameOutput& perc, const PlannerCommand& cmd,
+                               const ViewerToggleState& toggles, const std::string& toastMsg) {
+    if (framebufferResized_) {
+        framebufferResized_ = false;
+        recreateSwapchain();
+    }
+
+    VK_CHECK(vkWaitForFences(ctx_->device(), 1, &inFlightFence_, VK_TRUE, UINT64_MAX));
+    uint32_t imgIdx = 0;
+    VkResult acq = vkAcquireNextImageKHR(ctx_->device(), swapchain_, UINT64_MAX, imageAvailSem_, VK_NULL_HANDLE, &imgIdx);
+    if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
+        recreateSwapchain();
+        return;
+    }
+    VK_CHECK(vkResetFences(ctx_->device(), 1, &inFlightFence_));
+
+    dynVertsScratch_.clear();
+    dynIdxScratch_.clear();
+    world.appendDynamicGeometry(dynVertsScratch_, dynIdxScratch_, toggles.viewMode == ViewMode::FsdVoxel);
+    if (!dynVertsScratch_.empty() && dynVertsScratch_.size() <= 65536 && dynIdxScratch_.size() <= 262144) {
+        dynWorldVB_.upload(dynVertsScratch_.data(), dynVertsScratch_.size() * sizeof(SceneVertex));
+        dynWorldIB_.upload(dynIdxScratch_.data(), dynIdxScratch_.size() * sizeof(uint32_t));
+    }
+
+    buildVoxelAndGhostGeometry(world, perc, toggles);
+    build3DLines(cfg, world, perc, cmd, toggles);
+    buildUiOverlay(cfg, world, rig, perc, cmd, toggles, toastMsg);
+
+    const EgoState& ego = world.ego();
+    const Vec3 target{ego.pos.x + std::sin(ego.yaw) * 3.0f, 1.2f, ego.pos.z + std::cos(ego.yaw) * 3.0f};
+    Vec3 camEye{};
+    if (toggles.viewMode == ViewMode::BevTactical) {
+        camEye = {ego.pos.x + std::sin(ego.yaw) * 6.0f, 34.0f, ego.pos.z + std::cos(ego.yaw) * 6.0f - 0.1f};
+    } else {
+        const float totalYaw = ego.yaw + kPi + orbitYaw_;
+        const float horizDist = std::cos(orbitPitch_) * orbitDist_;
+        const float vertDist = std::sin(orbitPitch_) * orbitDist_;
+        camEye = {target.x + std::sin(totalYaw) * horizDist, std::max(1.2f, target.y + vertDist), target.z + std::cos(totalYaw) * horizDist};
+    }
+    const Vec3 lookTarget = (toggles.viewMode == ViewMode::BevTactical)
+                          ? Vec3{ego.pos.x + std::sin(ego.yaw) * 6.0f, 0.0f, ego.pos.z + std::cos(ego.yaw) * 6.0f}
+                          : target;
+
+    const float vfov = degToRad(52.0f);
+    const float fy = static_cast<float>(swapExtent_.height) / (2.0f * std::tan(vfov * 0.5f));
+    const Mat4 proj = Mat4::vulkanPerspectiveCV(fy, fy, swapExtent_.width * 0.5f, swapExtent_.height * 0.5f,
+                                                static_cast<float>(swapExtent_.width), static_cast<float>(swapExtent_.height),
+                                                0.2f, 450.0f);
+    const Mat4 view = Mat4::lookAtVulkan(camEye, lookTarget);
+    const Mat4 viewProj = proj * view;
+
+    VK_CHECK(vkResetCommandBuffer(frameCmd_, 0));
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, nullptr, 0, nullptr};
+    VK_CHECK(vkBeginCommandBuffer(frameCmd_, &bi));
+
+    const bool isFsd = (toggles.viewMode == ViewMode::FsdVoxel);
+    VkClearValue clears[2]{};
+    clears[0].color = isFsd ? VkClearColorValue{{0.020f, 0.031f, 0.067f, 1.0f}}
+                            : VkClearColorValue{{0.545f, 0.722f, 0.910f, 1.0f}};
+    clears[1].depthStencil = {1.0f, 0};
+
+    VkRenderPassBeginInfo rpbi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, nullptr, mainPass_,
+                               swapFramebuffers_[imgIdx], {{0, 0}, swapExtent_}, 2, clears};
+    vkCmdBeginRenderPass(frameCmd_, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport vp{0, 0, static_cast<float>(swapExtent_.width), static_cast<float>(swapExtent_.height), 0, 1};
+    VkRect2D sc{{0, 0}, swapExtent_};
+    vkCmdSetViewport(frameCmd_, 0, 1, &vp);
+    vkCmdSetScissor(frameCmd_, 0, 1, &sc);
+
+    // Draw 3D World + Voxels
+    vkCmdBindPipeline(frameCmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, scenePipeline_);
+    const ScenePC spc{
+        viewProj,
+        Vec4{Vec3{65.0f, 95.0f, 45.0f}.normalized(), 0.48f},
+        isFsd ? Vec4{0.020f, 0.031f, 0.067f, 0.006f} : Vec4{0.545f, 0.722f, 0.910f, 0.003f}
+    };
+    vkCmdPushConstants(frameCmd_, sceneLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(spc), &spc);
+
+    VkDeviceSize off = 0;
+    if (!isFsd && rig.staticIndexCount() > 0) {
+        VkBuffer vb = rig.staticVertexBuffer().handle();
+        vkCmdBindVertexBuffers(frameCmd_, 0, 1, &vb, &off);
+        vkCmdBindIndexBuffer(frameCmd_, rig.staticIndexBuffer().handle(), 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(frameCmd_, rig.staticIndexCount(), 1, 0, 0, 0);
+    }
+    if (!dynIdxScratch_.empty()) {
+        VkBuffer vb = dynWorldVB_.handle();
+        vkCmdBindVertexBuffers(frameCmd_, 0, 1, &vb, &off);
+        vkCmdBindIndexBuffer(frameCmd_, dynWorldIB_.handle(), 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(frameCmd_, static_cast<uint32_t>(dynIdxScratch_.size()), 1, 0, 0, 0);
+    }
+    if (!voxelIdxScratch_.empty()) {
+        VkBuffer vb = voxelVB_.handle();
+        vkCmdBindVertexBuffers(frameCmd_, 0, 1, &vb, &off);
+        vkCmdBindIndexBuffer(frameCmd_, voxelIB_.handle(), 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(frameCmd_, static_cast<uint32_t>(voxelIdxScratch_.size()), 1, 0, 0, 0);
+    }
+
+    // Draw 3D Lines (Planner, Colliders, Frustums, Flow, FSD Grid)
+    if (!lineVertsScratch_.empty()) {
+        vkCmdBindPipeline(frameCmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, linesPipeline_);
+        const LinesPC lpc{viewProj};
+        vkCmdPushConstants(frameCmd_, linesLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(lpc), &lpc);
+        VkBuffer vb = lineVB_.handle();
+        vkCmdBindVertexBuffers(frameCmd_, 0, 1, &vb, &off);
+        vkCmdDraw(frameCmd_, static_cast<uint32_t>(lineVertsScratch_.size()), 1, 0, 0);
+    }
+
+    // Draw 2D UI & 8-Camera Matrix
+    if (!uiIdxScratch_.empty()) {
+        vkCmdBindPipeline(frameCmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, uiPipeline_);
+        const UiPC upc{Vec2{static_cast<float>(swapExtent_.width), static_cast<float>(swapExtent_.height)}};
+        vkCmdPushConstants(frameCmd_, uiLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(upc), &upc);
+        VkBuffer vb = uiVB_.handle();
+        vkCmdBindVertexBuffers(frameCmd_, 0, 1, &vb, &off);
+        vkCmdBindIndexBuffer(frameCmd_, uiIB_.handle(), 0, VK_INDEX_TYPE_UINT32);
+        for (const auto& batch : uiBatchesScratch_) {
+            vkCmdBindDescriptorSets(frameCmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, uiLayout_, 0, 1, &uiSets_[batch.camSetIdx], 0, nullptr);
+            vkCmdDrawIndexed(frameCmd_, batch.indexCount, 1, batch.indexOffset, 0, 0);
+        }
+    }
+
+    vkCmdEndRenderPass(frameCmd_);
+    VK_CHECK(vkEndCommandBuffer(frameCmd_));
+
+    VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO, nullptr, 1, &imageAvailSem_, &waitStage, 1, &frameCmd_, 1, &renderDoneSem_};
+    VK_CHECK(vkQueueSubmit(ctx_->graphicsQueue(), 1, &si, inFlightFence_));
+
+    VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, nullptr, 1, &renderDoneSem_, 1, &swapchain_, &imgIdx, nullptr};
+    VkResult pres = vkQueuePresentKHR(ctx_->graphicsQueue(), &pi);
+    if (pres == VK_ERROR_OUT_OF_DATE_KHR || pres == VK_SUBOPTIMAL_KHR) {
+        recreateSwapchain();
+    }
+}
+
+} // namespace cybercab
