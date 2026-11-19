@@ -318,3 +318,163 @@ void CameraRigRenderer::updateIspDescriptorSets() {
         writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[1].dstSet = ispSets_[c];
         writes[1].dstBinding = 1;
+        writes[1].descriptorCount = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[1].pImageInfo = &outInfo;
+
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = ispSets_[c];
+        writes[2].dstBinding = 2;
+        writes[2].descriptorCount = 1;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[2].pBufferInfo = &bufInfo;
+
+        vkUpdateDescriptorSets(ctx_->device(), 3, writes, 0, nullptr);
+    }
+}
+
+void CameraRigRenderer::uploadStaticWorld(const WorldEngine& world) {
+    std::vector<SceneVertex> verts;
+    std::vector<uint32_t> indices;
+    world.buildStaticWorldGeometry(verts, indices);
+    staticIndexCount_ = static_cast<uint32_t>(indices.size());
+
+    staticVB_.create(*ctx_, verts.size() * sizeof(SceneVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    staticVB_.uploadVector(verts);
+
+    staticIB_.create(*ctx_, indices.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    staticIB_.uploadVector(indices);
+}
+
+void CameraRigRenderer::uploadDynamicWorld(const WorldEngine& world, bool includeEgo) {
+    dynVertsScratch_.clear();
+    dynIndicesScratch_.clear();
+    world.appendDynamicGeometry(dynVertsScratch_, dynIndicesScratch_, false, includeEgo);
+    dynamicIndexCount_ = static_cast<uint32_t>(dynIndicesScratch_.size());
+    if (dynVertsScratch_.empty() || dynIndicesScratch_.empty()) return;
+
+    const VkDeviceSize vbBytes = dynVertsScratch_.size() * sizeof(SceneVertex);
+    const VkDeviceSize ibBytes = dynIndicesScratch_.size() * sizeof(uint32_t);
+    if (vbBytes > dynamicVBCapacity_) {
+        dynamicVBCapacity_ = vbBytes * 2;
+        dynamicVB_.create(*ctx_, dynamicVBCapacity_, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    }
+    if (ibBytes > dynamicIBCapacity_) {
+        dynamicIBCapacity_ = ibBytes * 2;
+        dynamicIB_.create(*ctx_, dynamicIBCapacity_, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    }
+    dynamicVB_.upload(dynVertsScratch_.data(), vbBytes);
+    dynamicIB_.upload(dynIndicesScratch_.data(), ibBytes);
+}
+
+void CameraRigRenderer::renderAllCameras(const WorldEngine& world, const SimConfig& cfg,
+                                         float timeSec, GpuProfiler* profiler) {
+    uploadDynamicWorld(world);
+    const Mat4 worldFromSprung = world.getEgoSprungWorldMatrix();
+
+    VkCommandBuffer cmd = ctx_->beginSingleTimeCommands();
+    if (profiler) {
+        profiler->reset(cmd);
+        profiler->beginStage(cmd, "1_cam_render", VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+    }
+
+    VkViewport vp{0.0f, 0.0f, static_cast<float>(camWidth_), static_cast<float>(camHeight_), 0.0f, 1.0f};
+    VkRect2D sc{{0, 0}, {static_cast<uint32_t>(camWidth_), static_cast<uint32_t>(camHeight_)}};
+
+    for (int c = 0; c < kNumCams; ++c) {
+        const auto& spec = cfg.cameras.at(c);
+        CameraIntrinsics intr = spec.intrinsics(camWidth_, camHeight_);
+        // Overscan wide/barrel cameras so Brown-Conrady distortion pulls outer scene into edges cleanly
+        float renderScale = (spec.distortion[0] < -0.14f) ? 1.24f : 1.04f;
+
+        Mat4 worldFromCam = worldFromSprung * spec.extrinsicVehicleLocalFromCam();
+        Mat4 camFromWorld = worldFromCam.inverseRigid();
+        Mat4 projRender = Mat4::vulkanPerspectiveCV(
+            intr.fx / renderScale, intr.fy / renderScale, intr.cx, intr.cy,
+            static_cast<float>(camWidth_), static_cast<float>(camHeight_), 0.25f, spec.maxRangeM);
+        Mat4 projNominal = Mat4::vulkanPerspectiveCV(
+            intr.fx, intr.fy, intr.cx, intr.cy,
+            static_cast<float>(camWidth_), static_cast<float>(camHeight_), 0.25f, spec.maxRangeM);
+
+        camMats_[c] = {worldFromCam, camFromWorld, projNominal, projNominal * camFromWorld, intr, renderScale};
+
+        VkClearValue clears[2]{};
+        clears[0].color = {{0.545f, 0.722f, 0.910f, 1.0f}}; // SKY_DAY_COLOR
+        clears[1].depthStencil = {1.0f, 0};
+
+        VkRenderPassBeginInfo rpbi{};
+        rpbi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rpbi.renderPass = offscreenPass_;
+        rpbi.framebuffer = framebuffers_[c];
+        rpbi.renderArea = sc;
+        rpbi.clearValueCount = 2;
+        rpbi.pClearValues = clears;
+
+        vkCmdBeginRenderPass(cmd, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gfxPipeline_);
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        vkCmdSetScissor(cmd, 0, 1, &sc);
+
+        ScenePushConstants pc{};
+        pc.viewProj = projRender * camFromWorld;
+        pc.sunDirIntensity = Vec4{Vec3{65.0f, 95.0f, 45.0f}.normalized(), 0.48f};
+        pc.fogColorDensity = Vec4{0.545f, 0.722f, 0.910f, 0.003f};
+        vkCmdPushConstants(cmd, gfxLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+
+        VkDeviceSize off = 0;
+        VkBuffer svb = staticVB_.handle();
+        vkCmdBindVertexBuffers(cmd, 0, 1, &svb, &off);
+        vkCmdBindIndexBuffer(cmd, staticIB_.handle(), 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, staticIndexCount_, 1, 0, 0, 0);
+
+        if (dynamicIndexCount_ > 0) {
+            VkBuffer dvb = dynamicVB_.handle();
+            vkCmdBindVertexBuffers(cmd, 0, 1, &dvb, &off);
+            vkCmdBindIndexBuffer(cmd, dynamicIB_.handle(), 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, dynamicIndexCount_, 1, 0, 0, 0);
+        }
+        vkCmdEndRenderPass(cmd);
+        rawColorImages_[c].setLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    if (profiler) {
+        profiler->endStage(cmd, "1_cam_render", VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        profiler->beginStage(cmd, "1b_isp_soil", VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    }
+
+    uint32_t gx = (camWidth_ + 15) / 16;
+    uint32_t gy = (camHeight_ + 15) / 16;
+    for (int c = 0; c < kNumCams; ++c) {
+        VulkanImage::cmdTransitionLayout(cmd, distortedImages_[c].handle(), VK_IMAGE_ASPECT_COLOR_BIT,
+                                         distortedImages_[c].layout(), VK_IMAGE_LAYOUT_GENERAL);
+        distortedImages_[c].setLayout(VK_IMAGE_LAYOUT_GENERAL);
+
+        const auto& spec = cfg.cameras.at(c);
+        const auto& intr = camMats_[c].intr;
+        const IspPushConstants ipc{
+            static_cast<uint32_t>(c),
+            static_cast<uint32_t>(camWidth_),
+            static_cast<uint32_t>(camHeight_),
+            spec.soiled ? 1u : 0u,
+            Vec4{spec.distortion[0], spec.distortion[1], spec.distortion[2], spec.distortion[3]},
+            Vec4{intr.fx, intr.fy, intr.cx, intr.cy},
+            camMats_[c].renderScale,
+            timeSec
+        };
+        ispPipeline_.bindAndDispatch(cmd, ispSets_[c], gx, gy, 1, &ipc, sizeof(ipc));
+    }
+    cmdComputeBarrier(cmd);
+
+    if (profiler) {
+        profiler->endStage(cmd, "1b_isp_soil", VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    }
+    ctx_->endSingleTimeCommands(cmd);
+}
+
+bool CameraRigRenderer::projectWorldToPixel(int camIdx, const Vec3& worldPt, Vec2& outPx, float& outDepth) const {
+    const auto& cm = camMats_.at(camIdx);
+    Vec3 pc = cm.camFromWorld.transformPoint(worldPt);
