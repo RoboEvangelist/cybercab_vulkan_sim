@@ -718,3 +718,183 @@ void VulkanViewer::buildVoxelAndGhostGeometry(const WorldEngine& world, const Pe
         }
     }
     if (toggles.showWorldGhosts) {
+        for (const auto& g : perc.worldGhosts) {
+            const float sc = g.worldPosScale.w;
+            appendCube(voxelVertsScratch_, voxelIdxScratch_,
+                       {g.worldPosScale.x, g.worldPosScale.y, g.worldPosScale.z},
+                       {0.76f * sc, 0.36f * sc, 0.76f * sc}, g.yawMeta.x,
+                       {g.colorAlpha.x, g.colorAlpha.y, g.colorAlpha.z}, g.colorAlpha.w, 0.4f);
+        }
+    }
+
+    // RSS Safety Carpet
+    if (toggles.showRss) {
+        const EgoState& ego = world.ego();
+        const float envLen = std::max(1.2f, std::min(ego.rssSafeDist, ego.minObstacleDist + 0.5f));
+        const float sinE = std::sin(ego.yaw), cosE = std::cos(ego.yaw);
+        Vec3 rssCol{0.024f, 0.714f, 0.831f};
+        float alpha = 0.24f;
+        if (ego.aebActive || ego.behaviorState == "COLLISION_CONTACT") {
+            rssCol = {0.957f, 0.247f, 0.369f}; alpha = 0.45f;
+        } else if (ego.behaviorState == "YIELDING_PEDESTRIAN" || ego.behaviorState == "RED_LIGHT_HOLD" ||
+                   ego.behaviorState == "STOP_SIGN_HOLD" || ego.behaviorState == "FOLLOWING_LEAD") {
+            rssCol = {0.961f, 0.620f, 0.043f}; alpha = 0.32f;
+        }
+        const float centerFwd = 3.45f + envLen * 0.5f;
+        appendCube(voxelVertsScratch_, voxelIdxScratch_,
+                   {ego.pos.x + sinE * centerFwd, 0.08f, ego.pos.z + cosE * centerFwd},
+                   {2.15f, 0.04f, envLen}, ego.yaw, rssCol, alpha, 0.35f);
+        const float barFwd = 3.45f + envLen;
+        appendCube(voxelVertsScratch_, voxelIdxScratch_,
+                   {ego.pos.x + sinE * barFwd, 0.12f, ego.pos.z + cosE * barFwd},
+                   {2.35f, 0.14f, 0.22f}, ego.yaw, rssCol, 0.88f, 0.75f);
+    }
+
+    if (!voxelVertsScratch_.empty() && voxelVertsScratch_.size() <= 120000 && voxelIdxScratch_.size() <= 200000) {
+        voxelVB_.upload(voxelVertsScratch_.data(), voxelVertsScratch_.size() * sizeof(SceneVertex));
+        voxelIB_.upload(voxelIdxScratch_.data(), voxelIdxScratch_.size() * sizeof(uint32_t));
+    }
+}
+
+void VulkanViewer::build3DLines(const SimConfig& cfg, const WorldEngine& world, const PerceptionFrameOutput& perc,
+                                const PlannerCommand& cmd, const ViewerToggleState& toggles) {
+    lineVertsScratch_.clear();
+
+    if (toggles.viewMode == ViewMode::FsdVoxel) {
+        const Vec4 gridCol{0.12f, 0.17f, 0.25f, 0.55f};
+        for (float g = -100.0f; g <= 100.0f; g += 4.0f) {
+            lineVertsScratch_.push_back({g, 0.02f, -100.0f, gridCol.x, gridCol.y, gridCol.z, gridCol.w});
+            lineVertsScratch_.push_back({g, 0.02f,  100.0f, gridCol.x, gridCol.y, gridCol.z, gridCol.w});
+            lineVertsScratch_.push_back({-100.0f, 0.02f, g, gridCol.x, gridCol.y, gridCol.z, gridCol.w});
+            lineVertsScratch_.push_back({ 100.0f, 0.02f, g, gridCol.x, gridCol.y, gridCol.z, gridCol.w});
+        }
+    }
+
+    if (toggles.showPlanner) {
+        for (size_t c = 0; c < cmd.candidateTrajectories.size(); ++c) {
+            const auto& pts = cmd.candidateTrajectories[c];
+            const bool isBest = (static_cast<int>(c) == cmd.bestCandIdx);
+            const Vec4 col = isBest ? Vec4{0.063f, 0.725f, 0.506f, 0.98f}
+                           : cmd.candidateBlocked[c] ? Vec4{0.957f, 0.247f, 0.369f, 0.55f}
+                           : Vec4{0.392f, 0.455f, 0.545f, 0.38f};
+            const float yOff = isBest ? 0.06f : 0.0f;
+            for (size_t s = 1; s < pts.size(); ++s) {
+                lineVertsScratch_.push_back({pts[s - 1].x, pts[s - 1].y + yOff, pts[s - 1].z, col.x, col.y, col.z, col.w});
+                lineVertsScratch_.push_back({pts[s].x,     pts[s].y + yOff,     pts[s].z,     col.x, col.y, col.z, col.w});
+            }
+        }
+    }
+
+    if (toggles.showColliders) {
+        const OBB egoOBB = world.getEgoWorldOBB();
+        appendBoxLines(lineVertsScratch_, {egoOBB.cx, egoOBB.cy, egoOBB.cz}, {egoOBB.hx + 0.02f, egoOBB.hy + 0.02f, egoOBB.hz + 0.02f},
+                       egoOBB.yaw, {0.133f, 0.827f, 0.933f, 0.75f});
+        for (const auto& v : world.vehicles()) {
+            appendBoxLines(lineVertsScratch_, {v.pos.x, v.halfExtents.y, v.pos.z}, v.halfExtents, v.yaw, {0.22f, 0.74f, 0.97f, 0.45f});
+        }
+        // Also draw ByteTrack perceived tracks + uncertainty halos in bright lime/yellow!
+        for (const auto& tr : perc.tracks) {
+            const Vec4 col = tr.matchedLowConf ? Vec4{0.984f, 0.749f, 0.141f, 0.9f} : Vec4{0.518f, 0.922f, 0.322f, 0.9f};
+            appendBoxLines(lineVertsScratch_, {tr.worldPos.x, tr.halfExtents.y, tr.worldPos.z},
+                           {tr.halfExtents.x + tr.posSigmaM * 0.25f, tr.halfExtents.y, tr.halfExtents.z + tr.posSigmaM * 0.25f},
+                           tr.yaw, col);
+        }
+    }
+
+    if (toggles.showFlow) {
+        for (const auto& tr : perc.tracks) {
+            const float spd = std::hypot(tr.worldVel.x, tr.worldVel.z);
+            if (spd < 0.3f) continue;
+            const Vec3 p0{tr.worldPos.x, 1.45f, tr.worldPos.z};
+            const Vec3 p1{tr.worldPos.x + tr.worldVel.x * 0.8f, 1.45f, tr.worldPos.z + tr.worldVel.z * 0.8f};
+            lineVertsScratch_.push_back({p0.x, p0.y, p0.z, 0.91f, 0.47f, 0.98f, 0.95f});
+            lineVertsScratch_.push_back({p1.x, p1.y, p1.z, 0.91f, 0.47f, 0.98f, 0.95f});
+            // Arrowhead chevron at p1
+            const Vec3 dir = (p1 - p0).normalized();
+            const Vec3 perp{-dir.z, 0.0f, dir.x};
+            const Vec3 hL = p1 - dir * 0.32f + perp * 0.22f;
+            const Vec3 hR = p1 - dir * 0.32f - perp * 0.22f;
+            lineVertsScratch_.push_back({p1.x, p1.y, p1.z, 0.95f, 0.65f, 1.0f, 0.95f});
+            lineVertsScratch_.push_back({hL.x, hL.y, hL.z, 0.95f, 0.65f, 1.0f, 0.95f});
+            lineVertsScratch_.push_back({p1.x, p1.y, p1.z, 0.95f, 0.65f, 1.0f, 0.95f});
+            lineVertsScratch_.push_back({hR.x, hR.y, hR.z, 0.95f, 0.65f, 1.0f, 0.95f});
+        }
+
+        // Dynamic occupancy voxel velocity vectors
+        int flowCount = 0;
+        for (const auto& v : perc.activeVoxels) {
+            if (flowCount >= 140) break;
+            const float spd = std::hypot(v.vx, v.vz);
+            if (spd < 0.6f) continue;
+            ++flowCount;
+            const Vec3 p0{v.wx, v.wy + 0.15f, v.wz};
+            const Vec3 p1{v.wx + v.vx * 0.35f, v.wy + 0.15f, v.wz + v.vz * 0.35f};
+            lineVertsScratch_.push_back({p0.x, p0.y, p0.z, 0.22f, 0.88f, 0.97f, 0.80f});
+            lineVertsScratch_.push_back({p1.x, p1.y, p1.z, 0.22f, 0.88f, 0.97f, 0.80f});
+        }
+    }
+
+    if (world.contactFlashAlpha() > 0.01f) {
+        const float a = world.contactFlashAlpha();
+        const Vec3 center = world.contactFlashPos();
+        const float radius = 0.85f + (1.0f - a) * 1.45f;
+        const int segs = 28;
+        for (int i = 0; i < segs; ++i) {
+            const float t0 = (2.0f * kPi * static_cast<float>(i)) / static_cast<float>(segs);
+            const float t1 = (2.0f * kPi * static_cast<float>(i + 1)) / static_cast<float>(segs);
+            lineVertsScratch_.push_back({center.x + std::cos(t0) * radius, 0.24f, center.z + std::sin(t0) * radius, 0.98f, 0.18f, 0.28f, a});
+            lineVertsScratch_.push_back({center.x + std::cos(t1) * radius, 0.24f, center.z + std::sin(t1) * radius, 0.98f, 0.18f, 0.28f, a});
+        }
+    }
+
+    if (toggles.showFrustums) {
+        const Mat4 worldFromSprung = world.getEgoSprungWorldMatrix();
+        for (int c = 0; c < 8; ++c) {
+            const auto& spec = cfg.cameras[c];
+            const auto intr = spec.intrinsics(cfg.camWidth, cfg.camHeight);
+            const Mat4 wfc = worldFromSprung * spec.extrinsicVehicleLocalFromCam();
+            const float fl = std::min(spec.maxRangeM * 0.38f, 16.0f);
+            const float hw = std::tan(intr.hfovRad * 0.5f) * fl;
+            const float hh = std::tan(intr.vfovRad * 0.5f) * fl;
+            const Vec3 o = wfc.transformPoint({0, 0, 0});
+            const Vec3 f[4] = {
+                wfc.transformPoint({-hw, -hh, fl}),
+                wfc.transformPoint({ hw, -hh, fl}),
+                wfc.transformPoint({ hw,  hh, fl}),
+                wfc.transformPoint({-hw,  hh, fl}),
+            };
+            const float alpha = spec.soiled ? 0.12f : (c == toggles.selectedCam ? 0.9f : 0.45f);
+            const Vec4 col{spec.uiColor.x, spec.uiColor.y, spec.uiColor.z, alpha};
+            for (int i = 0; i < 4; ++i) {
+                lineVertsScratch_.push_back({o.x, o.y, o.z, col.x, col.y, col.z, col.w});
+                lineVertsScratch_.push_back({f[i].x, f[i].y, f[i].z, col.x, col.y, col.z, col.w});
+                lineVertsScratch_.push_back({f[i].x, f[i].y, f[i].z, col.x, col.y, col.z, col.w});
+                lineVertsScratch_.push_back({f[(i + 1) % 4].x, f[(i + 1) % 4].y, f[(i + 1) % 4].z, col.x, col.y, col.z, col.w});
+            }
+        }
+    }
+
+    if (!lineVertsScratch_.empty() && lineVertsScratch_.size() <= 32768) {
+        lineVB_.upload(lineVertsScratch_.data(), lineVertsScratch_.size() * sizeof(LineVertex));
+    }
+}
+
+void VulkanViewer::uiRect(float x, float y, float w, float h, Vec4 col) {
+    const uint32_t b = static_cast<uint32_t>(uiVertsScratch_.size());
+    uiVertsScratch_.push_back({x,     y,     0, 0, col.x, col.y, col.z, col.w, 0.0f});
+    uiVertsScratch_.push_back({x + w, y,     1, 0, col.x, col.y, col.z, col.w, 0.0f});
+    uiVertsScratch_.push_back({x + w, y + h, 1, 1, col.x, col.y, col.z, col.w, 0.0f});
+    uiVertsScratch_.push_back({x,     y + h, 0, 1, col.x, col.y, col.z, col.w, 0.0f});
+    uiIdxScratch_.push_back(b + 0); uiIdxScratch_.push_back(b + 1); uiIdxScratch_.push_back(b + 2);
+    uiIdxScratch_.push_back(b + 0); uiIdxScratch_.push_back(b + 2); uiIdxScratch_.push_back(b + 3);
+}
+
+void VulkanViewer::uiRectOutline(float x, float y, float w, float h, float t, Vec4 col) {
+    uiRect(x, y, w, t, col);
+    uiRect(x, y + h - t, w, t, col);
+    uiRect(x, y, t, h, col);
+    uiRect(x + w - t, y, t, h, col);
+}
+
+void VulkanViewer::uiLine(float x0, float y0, float x1, float y1, float t, Vec4 col) {
+    const float dx = x1 - x0, dy = y1 - y0;
