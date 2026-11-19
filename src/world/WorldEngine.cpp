@@ -678,3 +678,173 @@ void WorldEngine::stepMultiBodyCollisionSolver() {
             }
         }
     }
+
+    for (auto& veh : vehicles_) {
+        const OBB vOBB{veh.id, veh.pos.x, veh.halfExtents.y, veh.pos.z,
+                       veh.halfExtents.x, veh.halfExtents.y, veh.halfExtents.z, veh.yaw,
+                       veh.vx, veh.vz, SemanticClass::Vehicle, ""};
+        SatHit hit = checkSAT_OBB(egoOBB, vOBB);
+        if (hit.hit) {
+            ego_.pos.x += hit.normal.x * (hit.overlap * 0.7f + 0.03f);
+            ego_.pos.z += hit.normal.y * (hit.overlap * 0.7f + 0.03f);
+            veh.pos.x -= hit.normal.x * (hit.overlap * 0.3f);
+            veh.pos.z -= hit.normal.y * (hit.overlap * 0.3f);
+
+            ego_.speed *= 0.15f;
+            veh.speed *= 0.2f;
+            ego_.pitchRate += 0.25f;
+            ego_.collisionHoldTimer = 1.2f;
+
+            contactFlashPos_ = {(egoOBB.cx + vOBB.cx) * 0.5f, 0.3f, (egoOBB.cz + vOBB.cz) * 0.5f};
+            contactFlashAlpha_ = 1.0f;
+            lastContact_ = {true, contactFlashPos_, veh.id, hit.overlap};
+            egoOBB = getEgoWorldOBB();
+        }
+    }
+
+    for (const auto& sOBB : staticOBBs_) {
+        if (sOBB.semantic == SemanticClass::Overhang) continue;
+        SatHit hit = checkSAT_OBB(egoOBB, sOBB);
+        if (hit.hit) {
+            ego_.pos.x += hit.normal.x * (hit.overlap + 0.04f);
+            ego_.pos.z += hit.normal.y * (hit.overlap + 0.04f);
+            ego_.speed *= 0.1f;
+            ego_.pitchRate += 0.22f;
+            ego_.collisionHoldTimer = 1.0f;
+            contactFlashPos_ = {egoOBB.cx - hit.normal.x * 1.5f, 0.3f, egoOBB.cz - hit.normal.y * 1.5f};
+            contactFlashAlpha_ = 1.0f;
+            lastContact_ = {true, contactFlashPos_, sOBB.id, hit.overlap};
+            egoOBB = getEgoWorldOBB();
+        }
+    }
+}
+
+void WorldEngine::stepAgents(float dt) {
+    if (!forcedRed_) {
+        signalTimer_ += dt;
+        if (signalPhase_ == SignalPhase::Green && signalTimer_ > 9.0f) {
+            signalPhase_ = SignalPhase::Yellow;
+            signalTimer_ = 0.0f;
+        } else if (signalPhase_ == SignalPhase::Yellow && signalTimer_ > 2.5f) {
+            signalPhase_ = SignalPhase::Red;
+            signalTimer_ = 0.0f;
+        } else if (signalPhase_ == SignalPhase::Red && signalTimer_ > 7.5f) {
+            signalPhase_ = SignalPhase::Green;
+            signalTimer_ = 0.0f;
+        }
+    } else {
+        signalPhase_ = SignalPhase::Red;
+    }
+
+    if (contactFlashAlpha_ > 0.0f) {
+        contactFlashAlpha_ = std::max(0.0f, contactFlashAlpha_ - dt * 1.8f);
+    }
+
+    const float loopLen = centerline_.getLength();
+    const OBB egoOBB = getEgoWorldOBB();
+
+    // Update IDM vehicles
+    for (size_t i = 0; i < vehicles_.size(); ++i) {
+        AIVehicle& v = vehicles_[i];
+        const auto& curve = laneCurves_[v.lane & 1];
+        Vec3 pt = curve.getPointAt(v.u);
+        Vec3 tan = curve.getTangentAt(v.u);
+
+        float minGap = 60.0f;
+        float leadSpeed = v.baseSpeed;
+
+        float toEgoX = egoOBB.cx - pt.x;
+        float toEgoZ = egoOBB.cz - pt.z;
+        float egoFwd = toEgoX * tan.x + toEgoZ * tan.z - (v.halfExtents.z + egoOBB.hz);
+        float egoLat = std::abs(toEgoX * (-tan.z) + toEgoZ * tan.x);
+        if (egoFwd > -1.0f && egoFwd < minGap && egoLat < 2.2f) {
+            minGap = std::max(0.1f, egoFwd);
+            leadSpeed = ego_.speed;
+        }
+
+        for (size_t j = 0; j < vehicles_.size(); ++j) {
+            if (i == j) continue;
+            const auto& other = vehicles_[j];
+            float dx = other.pos.x - pt.x;
+            float dz = other.pos.z - pt.z;
+            float fwd = dx * tan.x + dz * tan.z - (v.halfExtents.z + other.halfExtents.z);
+            float lat = std::abs(dx * (-tan.z) + dz * tan.x);
+            if (fwd > -0.5f && fwd < minGap && lat < 2.1f) {
+                minGap = std::max(0.1f, fwd);
+                leadSpeed = other.speed;
+            }
+        }
+
+        for (const auto& ped : pedestrians_) {
+            float dx = ped.x - pt.x;
+            float dz = ped.z - pt.z;
+            float fwd = dx * tan.x + dz * tan.z - v.halfExtents.z;
+            float lat = std::abs(dx * (-tan.z) + dz * tan.x);
+            if (fwd > -0.5f && fwd < 16.0f && lat < 2.8f && fwd < minGap) {
+                minGap = std::max(0.1f, fwd);
+                leadSpeed = 0.0f;
+            }
+        }
+
+        if (pt.z > 36.0f && pt.x < kStopLineX + 0.5f && pt.x > kStopLineX - 20.0f && signalPhase_ != SignalPhase::Green) {
+            float dLight = kStopLineX - pt.x - v.halfExtents.z;
+            if (dLight < minGap) {
+                minGap = std::max(0.1f, dLight);
+                leadSpeed = 0.0f;
+            }
+        }
+
+        if (v.hardBrakeTimer > 0.0f) {
+            v.hardBrakeTimer -= dt;
+            v.accel = -7.5f;
+        } else {
+            const float s0 = 2.8f, T = 1.25f, aMax = 2.4f, bComf = 3.8f;
+            float dv = v.speed - leadSpeed;
+            float sStar = s0 + std::max(0.0f, v.speed * T + (v.speed * dv) / (2.0f * std::sqrt(aMax * bComf)));
+            v.accel = aMax * (1.0f - std::pow(v.speed / v.baseSpeed, 4.0f) - std::pow(sStar / std::max(0.4f, minGap), 2.0f));
+            v.accel = clampf(v.accel, -7.0f, 2.6f);
+        }
+
+        v.speed = std::max(0.0f, v.speed + v.accel * dt);
+        v.u = std::fmod(v.u + (v.speed * dt) / loopLen, 1.0f);
+        if (v.u < 0.0f) v.u += 1.0f;
+
+        Vec3 newPt = curve.getPointAt(v.u);
+        Vec3 newTan = curve.getTangentAt(v.u);
+        v.pos = newPt;
+        v.yaw = std::atan2(newTan.x, newTan.z);
+        v.vx = newTan.x * v.speed;
+        v.vz = newTan.z * v.speed;
+    }
+
+    // Update Helbing pedestrians (reuse pre-allocated scratch buffer to avoid hot-path allocations)
+    allCarsScratch_.clear();
+    allCarsScratch_.push_back(egoOBB);
+    for (const auto& v : vehicles_) {
+        allCarsScratch_.push_back({v.id, v.pos.x, v.halfExtents.y, v.pos.z,
+                                   v.halfExtents.x, v.halfExtents.y, v.halfExtents.z,
+                                   v.yaw, v.vx, v.vz, SemanticClass::Vehicle, ""});
+    }
+
+    for (auto& p : pedestrians_) {
+        float distToGoal = std::hypot(p.targetX - p.x, p.targetZ - p.z);
+        if (distToGoal < 0.45f) {
+            if (std::hypot(p.targetX - p.bx, p.targetZ - p.bz) < 0.5f) {
+                p.targetX = p.ax; p.targetZ = p.az;
+            } else {
+                p.targetX = p.bx; p.targetZ = p.bz;
+            }
+            p.jaywalking = false;
+            distToGoal = std::hypot(p.targetX - p.x, p.targetZ - p.z);
+        }
+
+        float distFromSouthRoad = std::abs(p.z - kLoopHalfZ);
+        bool waitAtCurb = false;
+        if (p.obeySignal && !p.jaywalking && signalPhase_ == SignalPhase::Green &&
+            distFromSouthRoad > 4.2f && distFromSouthRoad < 6.5f) {
+            if ((p.z - kLoopHalfZ) * (p.targetZ - kLoopHalfZ) < 0.0f) {
+                waitAtCurb = true;
+            }
+        }
+
+        float repulseX = 0.0f, repulseZ = 0.0f;
