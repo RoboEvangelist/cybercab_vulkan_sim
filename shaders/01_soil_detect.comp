@@ -1,0 +1,107 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+// Stage 2: image-based lens soiling detector + epistemic uncertainty.
+// One workgroup per camera, one thread per spatial patch (10 x 8 grid).
+layout(local_size_x = 10, local_size_y = 8, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer CamTensorIn { vec4 pixels[]; } uCamTensor;
+layout(std430, binding = 1) writeonly buffer SoilPatchOut { vec4 patches[]; } uSoilPatch;       // (p, w, var, edge)
+layout(std430, binding = 2) writeonly buffer SoilCamSummaryOut { vec4 summary[]; } uCamSummary; // (mean p, camW, mean var, edge)
+
+layout(push_constant) uniform SoilPC {
+    uint width;
+    uint height;
+    uint patchCols;
+    uint patchRows;
+    float edgeThresh;
+    float glareThresh;
+    float minTokenWeight;
+    float baseEpistemicVar;
+    float soilVarGain;
+} pc;
+
+const uint kPatches = 80u;
+shared vec4 s_patch[kPatches];
+
+vec3 fetchRgb(uint cam, int x, int y) {
+    const int cx = clamp(x, 0, int(pc.width) - 1);
+    const int cy = clamp(y, 0, int(pc.height) - 1);
+    return uCamTensor.pixels[(cam * pc.height + uint(cy)) * pc.width + uint(cx)].rgb;
+}
+
+void main() {
+    const uint cam = gl_WorkGroupID.z;
+    const uint px = gl_LocalInvocationID.x;
+    const uint py = gl_LocalInvocationID.y;
+    const uint patchIdx = py * pc.patchCols + px;
+
+    const int x0 = int((px * pc.width) / pc.patchCols);
+    const int x1 = int(((px + 1u) * pc.width) / pc.patchCols);
+    const int y0 = int((py * pc.height) / pc.patchRows);
+    const int y1 = int(((py + 1u) * pc.height) / pc.patchRows);
+
+    float sumEdge = 0.0, sumLum = 0.0, sumLumSq = 0.0;
+    float sumMud = 0.0, sumGlare = 0.0, sumCleanBg = 0.0, count = 0.0;
+
+    for (int y = y0; y < y1; y += 2) {
+        for (int x = x0; x < x1; x += 2) {
+            const vec3 c = fetchRgb(cam, x, y);
+            const float lum = luma(c);
+            const float edge = abs(luma(fetchRgb(cam, x + 1, y)) - luma(fetchRgb(cam, x - 1, y))) +
+                               abs(luma(fetchRgb(cam, x, y + 1)) - luma(fetchRgb(cam, x, y - 1)));
+            sumEdge += edge;
+            sumLum += lum;
+            sumLumSq += lum * lum;
+
+            // Mud/brown occlusion signature (R > G > B earthy tone)
+            const bool isMud = (c.r > c.g + 0.025) && (c.g > c.b + 0.025) && (c.r < 0.62) && (c.b < 0.36);
+            if (isMud) sumMud += 1.0;
+
+            // Clean sky (blue-dominant) or clean dark asphalt (neutral low-luma)
+            const bool isSky = (c.b > c.r + 0.05) && (lum > 0.35);
+            const bool isAsphalt = (lum < 0.24) && (abs(c.r - c.b) < 0.045);
+            if (isSky || isAsphalt) sumCleanBg += 1.0;
+
+            // Milky haze / glare (warm desaturated bright wash)
+            const float chroma = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+            if ((lum > pc.glareThresh && chroma < 0.14) || (c.r > c.b + 0.08 && lum > 0.42 && chroma < 0.28)) {
+                sumGlare += 1.0;
+            }
+            count += 1.0;
+        }
+    }
+    count = max(count, 1.0);
+    const float meanEdge = sumEdge / count;
+    const float meanLum = sumLum / count;
+    const float lumVar = max(0.0, sumLumSq / count - meanLum * meanLum);
+    const float cleanBgRatio = sumCleanBg / count;
+
+    const float fBlur  = (1.0 - clamp(meanEdge / max(pc.edgeThresh, 1e-4), 0.0, 1.0)) * (1.0 - 0.85 * cleanBgRatio);
+    const float fFlat  = (1.0 - clamp(lumVar / 0.012, 0.0, 1.0)) * (1.0 - 0.85 * cleanBgRatio);
+    const float fMud   = clamp((sumMud / count) * 2.4, 0.0, 1.0);
+    const float fGlare = clamp((sumGlare / count) * 2.2, 0.0, 1.0);
+
+    // Calibrated 2-layer MLP head
+    const float hMud  = relu(3.6 * fMud + 1.2 * fBlur - 0.6);
+    const float hHaze = relu(2.8 * fGlare + 1.1 * fFlat - 0.8);
+    const float hBlur = relu(1.5 * fBlur + 1.3 * fFlat - 1.3);
+    const float soilProb = sigmoid(1.7 * hMud + 1.4 * hHaze + 1.1 * hBlur - 3.1);
+
+    const float patchW = mix(1.0, pc.minTokenWeight, smoothstep(0.28, 0.78, soilProb));
+    const float patchVar = pc.baseEpistemicVar + pc.soilVarGain * soilProb * soilProb;
+    const vec4 patchOut = vec4(soilProb, patchW, patchVar, meanEdge);
+
+    uSoilPatch.patches[cam * kPatches + patchIdx] = patchOut;
+    s_patch[patchIdx] = patchOut;
+    barrier();
+
+    if (patchIdx == 0u) {
+        vec4 acc = vec4(0.0);
+        for (uint i = 0u; i < kPatches; ++i) acc += s_patch[i];
+        acc /= float(kPatches);
+        const float camW = mix(1.0, pc.minTokenWeight, clamp((acc.x - 0.22) / 0.45, 0.0, 1.0));
+        uCamSummary.summary[cam] = vec4(acc.x, camW, acc.z, acc.w);
+    }
+}
