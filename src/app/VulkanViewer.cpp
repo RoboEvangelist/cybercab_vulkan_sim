@@ -358,3 +358,183 @@ void VulkanViewer::createPipelines() {
         VkPipelineShaderStageCreateInfo stages[2]{
             {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vm, "main", nullptr},
             {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fm, "main", nullptr},
+        };
+        VkVertexInputBindingDescription bind{0, sizeof(SceneVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+        std::array<VkVertexInputAttributeDescription, 5> attrs{{
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SceneVertex, px)},
+            {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SceneVertex, nx)},
+            {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SceneVertex, r)},
+            {3, 0, VK_FORMAT_R32_SFLOAT, offsetof(SceneVertex, emissive)},
+            {4, 0, VK_FORMAT_R32_SFLOAT, offsetof(SceneVertex, semId)},
+        }};
+        VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO, nullptr, 0, 1, &bind, 5, attrs.data()};
+        VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, nullptr, 0, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, VK_FALSE};
+        VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, nullptr, 0, 1, nullptr, 1, nullptr};
+        VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, nullptr, 0, VK_FALSE, VK_FALSE,
+                                                  VK_POLYGON_MODE_FILL, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE, VK_FALSE, 0, 0, 0, 1.0f};
+        VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, nullptr, 0, VK_SAMPLE_COUNT_1_BIT, VK_FALSE, 1.0f, nullptr, VK_FALSE, VK_FALSE};
+        VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO, nullptr, 0, VK_TRUE, VK_TRUE, VK_COMPARE_OP_LESS, VK_FALSE, VK_FALSE, {}, {}, 0, 1};
+
+        VkPipelineColorBlendAttachmentState cba{};
+        cba.blendEnable = VK_TRUE;
+        cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        cba.colorBlendOp = VK_BLEND_OP_ADD;
+        cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        cba.alphaBlendOp = VK_BLEND_OP_ADD;
+        cba.colorWriteMask = 0xF;
+        VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, nullptr, 0, VK_FALSE, VK_LOGIC_OP_COPY, 1, &cba, {0,0,0,0}};
+
+        VkDynamicState dynS[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, nullptr, 0, 2, dynS};
+        VkGraphicsPipelineCreateInfo gpci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, nullptr, 0, 2, stages, &vi, &ia, nullptr, &vp, &rs, &ms, &ds, &cb, &dyn, sceneLayout_, mainPass_, 0, VK_NULL_HANDLE, -1};
+        VK_CHECK(vkCreateGraphicsPipelines(ctx_->device(), VK_NULL_HANDLE, 1, &gpci, nullptr, &scenePipeline_));
+        vkDestroyShaderModule(ctx_->device(), vm, nullptr);
+        vkDestroyShaderModule(ctx_->device(), fm, nullptr);
+    }
+
+    // 2. 3D Lines Pipeline
+    {
+        VkPushConstantRange pcr{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(LinesPC)};
+        VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, nullptr, 0, 0, nullptr, 1, &pcr};
+        VK_CHECK(vkCreatePipelineLayout(ctx_->device(), &plci, nullptr, &linesLayout_));
+
+        auto vc = readSpirvFile(resolveAssetPath("shaders/lines3d.vert.spv"));
+        auto fc = readSpirvFile(resolveAssetPath("shaders/lines3d.frag.spv"));
+        VkShaderModule vm = createShaderModule(ctx_->device(), vc);
+        VkShaderModule fm = createShaderModule(ctx_->device(), fc);
+
+        VkPipelineShaderStageCreateInfo stages[2]{
+            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vm, "main", nullptr},
+            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fm, "main", nullptr},
+        };
+        VkVertexInputBindingDescription bind{0, sizeof(LineVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+        VkVertexInputAttributeDescription attrs[2]{
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(LineVertex, x)},
+            {1, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(LineVertex, r)},
+        };
+        VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO, nullptr, 0, 1, &bind, 2, attrs};
+        VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, nullptr, 0, VK_PRIMITIVE_TOPOLOGY_LINE_LIST, VK_FALSE};
+        VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, nullptr, 0, 1, nullptr, 1, nullptr};
+        VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, nullptr, 0, VK_FALSE, VK_FALSE,
+                                                  VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE, VK_FALSE, 0, 0, 0, 2.0f};
+        VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, nullptr, 0, VK_SAMPLE_COUNT_1_BIT, VK_FALSE, 1.0f, nullptr, VK_FALSE, VK_FALSE};
+        VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO, nullptr, 0, VK_TRUE, VK_FALSE, VK_COMPARE_OP_LESS_OR_EQUAL, VK_FALSE, VK_FALSE, {}, {}, 0, 1};
+        VkPipelineColorBlendAttachmentState cba{VK_TRUE, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD,
+                                               VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, 0xF};
+        VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, nullptr, 0, VK_FALSE, VK_LOGIC_OP_COPY, 1, &cba, {0,0,0,0}};
+        VkDynamicState dynS[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, nullptr, 0, 2, dynS};
+        VkGraphicsPipelineCreateInfo gpci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, nullptr, 0, 2, stages, &vi, &ia, nullptr, &vp, &rs, &ms, &ds, &cb, &dyn, linesLayout_, mainPass_, 0, VK_NULL_HANDLE, -1};
+        VK_CHECK(vkCreateGraphicsPipelines(ctx_->device(), VK_NULL_HANDLE, 1, &gpci, nullptr, &linesPipeline_));
+        vkDestroyShaderModule(ctx_->device(), vm, nullptr);
+        vkDestroyShaderModule(ctx_->device(), fm, nullptr);
+    }
+
+    // 3. 2D UI & Camera Matrix Pipeline
+    {
+        VkDescriptorSetLayoutBinding bindings[2]{
+            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        };
+        VkDescriptorSetLayoutCreateInfo dslci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0, 2, bindings};
+        VK_CHECK(vkCreateDescriptorSetLayout(ctx_->device(), &dslci, nullptr, &uiSetLayout_));
+
+        VkPushConstantRange pcr{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(UiPC)};
+        VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, nullptr, 0, 1, &uiSetLayout_, 1, &pcr};
+        VK_CHECK(vkCreatePipelineLayout(ctx_->device(), &plci, nullptr, &uiLayout_));
+
+        auto vc = readSpirvFile(resolveAssetPath("shaders/ui.vert.spv"));
+        auto fc = readSpirvFile(resolveAssetPath("shaders/ui.frag.spv"));
+        VkShaderModule vm = createShaderModule(ctx_->device(), vc);
+        VkShaderModule fm = createShaderModule(ctx_->device(), fc);
+
+        VkPipelineShaderStageCreateInfo stages[2]{
+            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vm, "main", nullptr},
+            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fm, "main", nullptr},
+        };
+        VkVertexInputBindingDescription bind{0, sizeof(UiVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+        VkVertexInputAttributeDescription attrs[4]{
+            {0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(UiVertex, x)},
+            {1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(UiVertex, u)},
+            {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(UiVertex, r)},
+            {3, 0, VK_FORMAT_R32_SFLOAT, offsetof(UiVertex, mode)},
+        };
+        VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO, nullptr, 0, 1, &bind, 4, attrs};
+        VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, nullptr, 0, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, VK_FALSE};
+        VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, nullptr, 0, 1, nullptr, 1, nullptr};
+        VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, nullptr, 0, VK_FALSE, VK_FALSE,
+                                                  VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE, VK_FALSE, 0, 0, 0, 1.0f};
+        VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, nullptr, 0, VK_SAMPLE_COUNT_1_BIT, VK_FALSE, 1.0f, nullptr, VK_FALSE, VK_FALSE};
+        VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO, nullptr, 0, VK_FALSE, VK_FALSE, VK_COMPARE_OP_ALWAYS, VK_FALSE, VK_FALSE, {}, {}, 0, 1};
+        VkPipelineColorBlendAttachmentState cba{VK_TRUE, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD,
+                                               VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, 0xF};
+        VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, nullptr, 0, VK_FALSE, VK_LOGIC_OP_COPY, 1, &cba, {0,0,0,0}};
+        VkDynamicState dynS[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, nullptr, 0, 2, dynS};
+        VkGraphicsPipelineCreateInfo gpci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, nullptr, 0, 2, stages, &vi, &ia, nullptr, &vp, &rs, &ms, &ds, &cb, &dyn, uiLayout_, mainPass_, 0, VK_NULL_HANDLE, -1};
+        VK_CHECK(vkCreateGraphicsPipelines(ctx_->device(), VK_NULL_HANDLE, 1, &gpci, nullptr, &uiPipeline_));
+        vkDestroyShaderModule(ctx_->device(), vm, nullptr);
+        vkDestroyShaderModule(ctx_->device(), fm, nullptr);
+    }
+}
+
+void VulkanViewer::createSyncObjects() {
+    VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, nullptr, 0};
+    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, nullptr, VK_FENCE_CREATE_SIGNALED_BIT};
+    VK_CHECK(vkCreateSemaphore(ctx_->device(), &sci, nullptr, &imageAvailSem_));
+    VK_CHECK(vkCreateSemaphore(ctx_->device(), &sci, nullptr, &renderDoneSem_));
+    VK_CHECK(vkCreateFence(ctx_->device(), &fci, nullptr, &inFlightFence_));
+
+    VkCommandBufferAllocateInfo cbai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr,
+                                     ctx_->commandPool(), VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
+    VK_CHECK(vkAllocateCommandBuffers(ctx_->device(), &cbai, &frameCmd_));
+}
+
+void VulkanViewer::applyUiAction(UiAction action, int param, SimConfig& cfg, WorldEngine& world,
+                                 CameraRigRenderer& rig, PerceptionPipeline& pipeline,
+                                 ViewerToggleState& toggles, std::string& toastMsg) {
+    switch (action) {
+        case UiAction::SetCamOverlay: {
+            toggles.camOverlay = static_cast<CamOverlayMode>(std::clamp(param, 0, 4));
+            const char* names[5] = {
+                "Cam Overlay: 2D Neural Boxes + ByteTrack",
+                "Cam Overlay: Raw Distorted RGB",
+                "Cam Overlay: Intrinsic Calib Grid",
+                "Cam Overlay: Soil / Feature Heatmap",
+                "Cam Overlay: 3D Voxel Reprojection"
+            };
+            toastMsg = names[static_cast<int>(toggles.camOverlay)];
+            break;
+        }
+        case UiAction::SelectCam: {
+            toggles.selectedCam = std::clamp(param, 0, 7);
+            toastMsg = "Inspecting " + cfg.cameras[toggles.selectedCam].id;
+            break;
+        }
+        case UiAction::SetViewMode: {
+            toggles.viewMode = static_cast<ViewMode>(std::clamp(param, 0, 2));
+            toastMsg = (toggles.viewMode == ViewMode::Chase3D) ? "Viewport: 3D Twin"
+                     : (toggles.viewMode == ViewMode::FsdVoxel) ? "Viewport: FSD Voxel" : "Viewport: BEV Tactical";
+            break;
+        }
+        case UiAction::ToggleRes: {
+            const bool toFull = (rig.camWidth() == cfg.camWidth);
+            rig.resize(toFull ? cfg.fullCamWidth : cfg.camWidth, toFull ? cfg.fullCamHeight : cfg.camHeight);
+            pipeline.onCameraResized(rig);
+            refreshCameraDescriptors(rig);
+            toastMsg = toFull ? "8x 640x480 Full Res" : "8x 320x240 Half Res";
+            break;
+        }
+        case UiAction::ToggleDriveMode: {
+            cfg.driveMode = (cfg.driveMode == "auto") ? "manual" : "auto";
+            toastMsg = (cfg.driveMode == "manual") ? "Manual WASD Drive Active" : "Autonomous FSD Engaged";
+            break;
+        }
+        case UiAction::ToggleAeb: {
+            cfg.aebEnabled = !cfg.aebEnabled;
+            toastMsg = cfg.aebEnabled ? "36Hz RSS/AEB Shield ON" : "AEB Shield OFF (Raw SAT Collisions)";
+            break;
+        }
+        case UiAction::ToggleSoilSelected: {
