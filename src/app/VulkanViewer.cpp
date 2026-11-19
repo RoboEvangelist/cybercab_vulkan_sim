@@ -1078,3 +1078,183 @@ void VulkanViewer::buildUiOverlay(const SimConfig& cfg, const WorldEngine& world
                 std::snprintf(tag, sizeof(tag), "%s:%.0fm", clsCh, d.rangeM);
                 uiRect(bx, std::max(iy, by - 10.0f), 36.0f, 10.0f, {0.03f, 0.05f, 0.09f, 0.82f});
                 uiText(bx + 2.0f, std::max(iy, by - 9.0f), 0.95f, {sc.x, sc.y, sc.z, 1.0f}, tag);
+            }
+        } else if (toggles.camOverlay == CamOverlayMode::Calib) {
+            for (int k = 1; k < 4; ++k) {
+                const float gxLine = cx + cardW * (static_cast<float>(k) / 4.0f);
+                const float gyLine = iy + camImgH * (static_cast<float>(k) / 4.0f);
+                uiLine(gxLine, iy, gxLine, iy + camImgH, 1.0f, {0.22f, 0.74f, 0.97f, 0.32f});
+                uiLine(cx, gyLine, cx + cardW, gyLine, 1.0f, {0.22f, 0.74f, 0.97f, 0.32f});
+            }
+            const float mx = cx + cardW * 0.5f, my = iy + camImgH * 0.5f;
+            uiLine(mx - 10.0f, my, mx + 10.0f, my, 1.5f, {0.22f, 0.74f, 0.97f, 0.90f});
+            uiLine(mx, my - 10.0f, mx, my + 10.0f, 1.5f, {0.22f, 0.74f, 0.97f, 0.90f});
+            uiRectOutline(cx + cardW * 0.15f, iy + camImgH * 0.15f, cardW * 0.7f, camImgH * 0.7f, 1.0f, {0.98f, 0.75f, 0.14f, 0.60f});
+        } else if (toggles.camOverlay == CamOverlayMode::SoilHeatmap) {
+            const int pPerCam = cfg.soilPatchCols * cfg.soilPatchRows;
+            const float pw = cardW / static_cast<float>(cfg.soilPatchCols);
+            const float ph = camImgH / static_cast<float>(cfg.soilPatchRows);
+            for (int py = 0; py < cfg.soilPatchRows; ++py) {
+                for (int px = 0; px < cfg.soilPatchCols; ++px) {
+                    const size_t idx = static_cast<size_t>(c * pPerCam + py * cfg.soilPatchCols + px);
+                    if (idx < perc.soilPatches.size()) {
+                        const float sp = perc.soilPatches[idx].soilProb;
+                        if (sp > 0.25f) {
+                            uiRect(cx + px * pw, iy + py * ph, pw, ph, {0.96f, 0.35f, 0.08f, sp * 0.55f});
+                        }
+                    }
+                }
+            }
+        } else if (toggles.camOverlay == CamOverlayMode::VoxelReproj) {
+            const size_t step = std::max<size_t>(1, perc.activeVoxels.size() / 220);
+            for (size_t i = 0; i < perc.activeVoxels.size(); i += step) {
+                const auto& v = perc.activeVoxels[i];
+                Vec2 px; float depth = 0.0f;
+                if (rig.projectWorldToPixel(c, {v.wx, v.wy, v.wz}, px, depth)) {
+                    const float uN = px.x / static_cast<float>(rig.camWidth());
+                    const float vN = px.y / static_cast<float>(rig.camHeight());
+                    if (uN >= 0.0f && uN <= 1.0f && vN >= 0.0f && vN <= 1.0f) {
+                        const Vec3 sc = semanticColor(v.sem);
+                        uiRect(cx + uN * cardW - 1.5f, iy + vN * camImgH - 1.5f, 3.0f, 3.0f, {sc.x, sc.y, sc.z, 0.85f});
+                    }
+                }
+            }
+        }
+
+        uiRectOutline(cx, cy, cardW, camImgH + 14.0f, sel ? 2.0f : 1.0f,
+                      sel ? Vec4{0.13f, 0.83f, 0.93f, 1.0f} : Vec4{0.22f, 0.28f, 0.38f, 0.9f});
+    }
+
+    // 4. Left Floating Panel: Clickable Display Controls, Layers, Scenarios & GPU Latency
+    const float panW = 356.0f;
+    const float leftH = 440.0f;
+    const float panY = std::max(topBarH + pad + 4.0f, H - leftH - pad);
+    uiPanelsScratch_.push_back({pad, panY, panW, leftH});
+    uiRect(pad, panY, panW, leftH, {0.035f, 0.051f, 0.086f, 0.88f});
+    uiRectOutline(pad, panY, panW, leftH, 1.0f, {0.20f, 0.25f, 0.33f, 0.85f});
+
+    float ly = panY + 10.0f;
+    const float innerW = panW - 20.0f;
+    uiText(pad + 10.0f, ly, 1.25f, {0.22f, 0.74f, 0.97f, 1.0f}, "MAIN VIEWPORT & MODE");
+    ly += 16.0f;
+
+    const float thirdW = (innerW - 8.0f) / 3.0f;
+    addChipButton(pad + 10.0f, ly, thirdW, 22.0f, "3D Twin",
+                  toggles.viewMode == ViewMode::Chase3D, {0.52f, 0.34f, 0.08f, 0.95f}, {0.96f, 0.65f, 0.14f, 1.0f},
+                  UiAction::SetViewMode, 0);
+    addChipButton(pad + 10.0f + thirdW + 4.0f, ly, thirdW, 22.0f, "FSD Voxel",
+                  toggles.viewMode == ViewMode::FsdVoxel, {0.52f, 0.34f, 0.08f, 0.95f}, {0.96f, 0.65f, 0.14f, 1.0f},
+                  UiAction::SetViewMode, 1);
+    addChipButton(pad + 10.0f + 2.0f * (thirdW + 4.0f), ly, thirdW, 22.0f, "BEV Tact",
+                  toggles.viewMode == ViewMode::BevTactical, {0.52f, 0.34f, 0.08f, 0.95f}, {0.96f, 0.65f, 0.14f, 1.0f},
+                  UiAction::SetViewMode, 2);
+    ly += 27.0f;
+
+    const std::string resLbl = (rig.camWidth() == cfg.camWidth) ? "Res:320x240" : "Res:640x480";
+    const bool isAuto = (cfg.driveMode == "auto");
+    addChipButton(pad + 10.0f, ly, thirdW, 22.0f, resLbl,
+                  rig.camWidth() == cfg.fullCamWidth, {0.06f, 0.35f, 0.45f, 0.95f}, {0.13f, 0.83f, 0.93f, 1.0f},
+                  UiAction::ToggleRes);
+    addChipButton(pad + 10.0f + thirdW + 4.0f, ly, thirdW, 22.0f, isAuto ? "Auto FSD" : "WASD Man",
+                  isAuto, {0.06f, 0.36f, 0.24f, 0.95f}, {0.20f, 0.83f, 0.60f, 1.0f},
+                  UiAction::ToggleDriveMode);
+    addChipButton(pad + 10.0f + 2.0f * (thirdW + 4.0f), ly, thirdW, 22.0f, cfg.aebEnabled ? "AEB:ON" : "AEB:OFF",
+                  cfg.aebEnabled, {0.06f, 0.36f, 0.24f, 0.95f}, {0.20f, 0.83f, 0.60f, 1.0f},
+                  UiAction::ToggleAeb);
+    ly += 30.0f;
+
+    uiText(pad + 10.0f, ly, 1.25f, {0.22f, 0.74f, 0.97f, 1.0f}, "PERCEPTION & PHYSICS LAYERS");
+    ly += 15.0f;
+    const float halfW = (innerW - 6.0f) * 0.5f;
+    addCheckbox(pad + 10.0f,             ly, halfW, "O: 3D Voxels",   toggles.showVoxels,      {0.22f, 0.74f, 0.97f, 1.0f}, UiAction::ToggleLayerVoxels);
+    addCheckbox(pad + 10.0f + halfW + 6, ly, halfW, "H: Occ Shadows", toggles.showShadows,     {0.58f, 0.64f, 0.72f, 1.0f}, UiAction::ToggleLayerShadows);
+    ly += 20.0f;
+    addCheckbox(pad + 10.0f,             ly, halfW, "F: 4D Flow",     toggles.showFlow,        {0.91f, 0.47f, 0.98f, 1.0f}, UiAction::ToggleLayerFlow);
+    addCheckbox(pad + 10.0f + halfW + 6, ly, halfW, "M: World Ghosts",toggles.showWorldGhosts, {0.65f, 0.55f, 0.98f, 1.0f}, UiAction::ToggleLayerGhosts);
+    ly += 20.0f;
+    addCheckbox(pad + 10.0f,             ly, halfW, "E: RSS Carpet",  toggles.showRss,         {0.20f, 0.83f, 0.60f, 1.0f}, UiAction::ToggleLayerRss);
+    addCheckbox(pad + 10.0f + halfW + 6, ly, halfW, "K: Colliders",   toggles.showColliders,   {0.52f, 0.92f, 0.32f, 1.0f}, UiAction::ToggleLayerColliders);
+    ly += 20.0f;
+    addCheckbox(pad + 10.0f,             ly, halfW, "G: Cam Frustums",toggles.showFrustums,    {0.98f, 0.75f, 0.14f, 1.0f}, UiAction::ToggleLayerFrustums);
+    addCheckbox(pad + 10.0f + halfW + 6, ly, halfW, "P: Quintic Plan",toggles.showPlanner,     {0.06f, 0.73f, 0.51f, 1.0f}, UiAction::ToggleLayerPlanner);
+    ly += 26.0f;
+
+    uiText(pad + 10.0f, ly, 1.25f, {0.98f, 0.75f, 0.14f, 1.0f}, "EDGE-CASE SCENARIOS");
+    ly += 15.0f;
+    addChipButton(pad + 10.0f,                          ly, thirdW, 21.0f, "F1:Jaywalk",  false, {}, {}, UiAction::ScenarioJaywalk);
+    addChipButton(pad + 10.0f + thirdW + 4.0f,          ly, thirdW, 21.0f, "F2:Occluded", false, {}, {}, UiAction::ScenarioOccluded);
+    addChipButton(pad + 10.0f + 2.0f * (thirdW + 4.0f), ly, thirdW, 21.0f, "F3:HardBrk",  false, {}, {}, UiAction::ScenarioHardBrake);
+    ly += 24.0f;
+    addChipButton(pad + 10.0f,                          ly, thirdW, 21.0f, "F4:SoilFrnt", false, {}, {}, UiAction::ScenarioSoilFront);
+    addChipButton(pad + 10.0f + thirdW + 4.0f,          ly, thirdW, 21.0f,
+                  world.forcedRedSignal() ? "F6:RED ON" : "F6:ForceRed", world.forcedRedSignal(),
+                  {0.55f, 0.12f, 0.16f, 0.95f}, {0.96f, 0.25f, 0.37f, 1.0f}, UiAction::ToggleForcedRed);
+    addChipButton(pad + 10.0f + 2.0f * (thirdW + 4.0f), ly, thirdW, 21.0f, "F5:Reset",    false, {}, {}, UiAction::ScenarioReset);
+    ly += 29.0f;
+
+    uiText(pad + 10.0f, ly, 1.25f, {0.22f, 0.74f, 0.97f, 1.0f}, "GPU PERCEPTION PIPELINE (ms)");
+    ly += 16.0f;
+    double totMs = 0.0;
+    int sIdx = 0;
+    for (const auto& kv : perc.gpuStageMs) {
+        char buf[40];
+        std::snprintf(buf, sizeof(buf), "%-12s %4.2f", kv.first.c_str(), kv.second);
+        const float colX = pad + 10.0f + static_cast<float>(sIdx & 1) * (halfW + 6.0f);
+        const float rowY = ly + static_cast<float>(sIdx >> 1) * 14.5f;
+        uiText(colX, rowY, 1.1f, {0.84f, 0.89f, 0.94f, 1.0f}, buf);
+        totMs += kv.second;
+        ++sIdx;
+    }
+    const float rowsUsed = static_cast<float>((sIdx + 1) / 2);
+    char totBuf[64];
+    std::snprintf(totBuf, sizeof(totBuf), "TOTAL GPU: %.2f ms (%.0f Hz)", totMs, 1000.0 / std::max(0.5, totMs));
+    uiText(pad + 10.0f, ly + rowsUsed * 14.5f + 4.0f, 1.25f, {0.20f, 0.83f, 0.60f, 1.0f}, totBuf);
+
+    // 5. Right Floating Panel: Dynamics, RSS, Perception Metrics & Camera Calib Inspector
+    const float rPanW = 345.0f;
+    const float rightH = 310.0f;
+    const float rx = W - rPanW - pad;
+    const float ry = H - rightH - pad;
+    uiPanelsScratch_.push_back({rx, ry, rPanW, rightH});
+    uiRect(rx, ry, rPanW, rightH, {0.035f, 0.051f, 0.086f, 0.88f});
+    uiRectOutline(rx, ry, rPanW, rightH, 1.0f, {0.20f, 0.25f, 0.33f, 0.85f});
+
+    const EgoState& ego = world.ego();
+    const Vec4 stateCol = aebWarn ? Vec4{0.96f, 0.25f, 0.37f, 1.0f} : Vec4{0.20f, 0.83f, 0.60f, 1.0f};
+    uiText(rx + 10.0f, ry + 10.0f, 1.45f, stateCol, "STATE: " + ego.behaviorState);
+
+    char dBuf[96];
+    std::snprintf(dBuf, sizeof(dBuf), "Vel: %.1f m/s (%.1f mph)  Acc: %+.1f", ego.speed, ego.speed * 2.23694f, ego.accel);
+    uiText(rx + 10.0f, ry + 32.0f, 1.25f, {0.95f, 0.97f, 1.0f, 1.0f}, dBuf);
+    std::snprintf(dBuf, sizeof(dBuf), "Steer: %+.1fd  Pitch: %+.1fd Roll: %+.1fd",
+                  radToDeg(ego.steerAngle), radToDeg(ego.pitch), radToDeg(ego.roll));
+    uiText(rx + 10.0f, ry + 50.0f, 1.25f, {0.98f, 0.75f, 0.14f, 1.0f}, dBuf);
+    std::snprintf(dBuf, sizeof(dBuf), "RSS Stop: %.1fm  MinObs: %.1fm  Sig:%s",
+                  ego.rssSafeDist, ego.minObstacleDist, signalPhaseName(world.signalPhase()));
+    uiText(rx + 10.0f, ry + 68.0f, 1.25f, {0.22f, 0.74f, 0.97f, 1.0f}, dBuf);
+    std::snprintf(dBuf, sizeof(dBuf), "Dets:%zu Trk:%zu Vox:%zu Shad:%zu FwdSig:%.2f",
+                  perc.detections3D.size(), perc.tracks.size(), perc.activeVoxels.size(),
+                  perc.shadowVoxels.size(), perc.forwardEpistemicSigma);
+    uiText(rx + 10.0f, ry + 86.0f, 1.2f, {0.75f, 0.52f, 0.99f, 1.0f}, dBuf);
+    std::snprintf(dBuf, sizeof(dBuf), "Eval Rec:%.2f Prec:%.2f RMSE:%.2fm",
+                  perc.eval.detRecall, perc.eval.detPrecision, perc.eval.trackPosRmseM);
+    uiText(rx + 10.0f, ry + 104.0f, 1.2f, {0.58f, 0.85f, 0.65f, 1.0f}, dBuf);
+
+    // Selected Camera Calib & Soil Readout + Clickable Soil Toggle
+    const int sc = toggles.selectedCam;
+    const auto& spec = cfg.cameras[sc];
+    const auto intr = spec.intrinsics(rig.camWidth(), rig.camHeight());
+    const auto& scSoil = perc.soilCameras[sc];
+    uiText(rx + 10.0f, ry + 132.0f, 1.35f, {0.98f, 0.75f, 0.14f, 1.0f}, "CALIB: " + spec.id);
+    std::snprintf(dBuf, sizeof(dBuf), "fx=%.1f fy=%.1f cx=%.0f cy=%.0f", intr.fx, intr.fy, intr.cx, intr.cy);
+    uiText(rx + 10.0f, ry + 152.0f, 1.2f, {0.65f, 0.92f, 0.98f, 1.0f}, dBuf);
+    std::snprintf(dBuf, sizeof(dBuf), "Pos:[%.2f, %.2f, %.2f] RPY:[%.1f, %.1f, %.1f]",
+                  spec.posIso.x, spec.posIso.y, spec.posIso.z, spec.rpyDeg.x, spec.rpyDeg.y, spec.rpyDeg.z);
+    uiText(rx + 10.0f, ry + 170.0f, 1.15f, {0.55f, 0.92f, 0.65f, 1.0f}, dBuf);
+    std::snprintf(dBuf, sizeof(dBuf), "Dist:[%.3f, %.3f, %.4f, %.4f]",
+                  spec.distortion[0], spec.distortion[1], spec.distortion[2], spec.distortion[3]);
+    uiText(rx + 10.0f, ry + 188.0f, 1.15f, {0.65f, 0.80f, 0.95f, 1.0f}, dBuf);
+    std::snprintf(dBuf, sizeof(dBuf), "SoilProb:%.2f TokenWt:%.2f Var:%.3f",
+                  scSoil.meanSoilProb, scSoil.tokenWeight, scSoil.meanEpistemicVar);
+    uiText(rx + 10.0f, ry + 206.0f, 1.25f, scSoil.tokenWeight < 0.7f ? Vec4{0.98f, 0.45f, 0.15f, 1.0f} : Vec4{0.20f, 0.83f, 0.60f, 1.0f}, dBuf);
+
