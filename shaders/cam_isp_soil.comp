@@ -1,0 +1,59 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+// Camera ISP: pinhole render -> Brown-Conrady distortion -> vignetting -> optional physical lens soiling.
+// Writes the displayable RGBA8 image and the normalized float RGB tensor consumed by the neural stages.
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(binding = 0) uniform sampler2D uRawCam;
+layout(binding = 1, rgba8) uniform writeonly image2D uOutDistorted;
+layout(std430, binding = 2) writeonly buffer CamTensorOut { vec4 pixels[]; } uCamTensor;
+
+layout(push_constant) uniform IspPC {
+    uint camIndex;
+    uint width;
+    uint height;
+    uint soiled;
+    vec4 dist;        // k1, k2, p1, p2
+    vec4 intr;        // fx, fy, cx, cy (nominal, distorted image)
+    float renderScale; // pinhole render used fx / renderScale (overscan)
+    float timeSec;
+} pc;
+
+vec3 sampleRaw(vec2 uv) { return texture(uRawCam, clamp(uv, vec2(0.001), vec2(0.999))).rgb; }
+
+void main() {
+    const uint x = gl_GlobalInvocationID.x;
+    const uint y = gl_GlobalInvocationID.y;
+    if (x >= pc.width || y >= pc.height) return;
+
+    const vec2 wh = vec2(pc.width, pc.height);
+    const vec2 xd = (vec2(x, y) + 0.5 - pc.intr.zw) / pc.intr.xy;
+    const vec2 xu = brownConradyUndistort(xd, pc.dist);
+    const vec2 uvPin = (xu * (pc.intr.xy / pc.renderScale) + pc.intr.zw) / wh;
+
+    vec3 rgb = sampleRaw(uvPin);
+    const vec2 nrm = (vec2(x, y) - wh * 0.5) / (wh * 0.5);
+    rgb *= 1.0 - 0.11 * dot(nrm, nrm);
+
+    if (pc.soiled != 0u) {
+        const vec2 duv = vec2(2.5) / wh;
+        const vec3 blurRgb = 0.25 * (sampleRaw(uvPin + vec2(-duv.x, -duv.y)) + sampleRaw(uvPin + vec2(duv.x, -duv.y)) +
+                                     sampleRaw(uvPin + vec2(-duv.x,  duv.y)) + sampleRaw(uvPin + vec2(duv.x,  duv.y)));
+        const float fx = float(x);
+        const float fy = float(y);
+        const float ci = float(pc.camIndex);
+        const float blob = sin(fx * 0.045 + ci) * cos(fy * 0.055 - ci) + sin((fx + fy) * 0.025);
+        if (blob > -0.22) {
+            const float noise = float((x * 7u + y * 13u) & 15u) / 255.0;
+            const vec3 mud = vec3(88.0 / 255.0 + noise, 66.0 / 255.0 + noise * 0.8, 44.0 / 255.0);
+            rgb = mix(blurRgb * 0.35, mud, 0.88);
+        } else {
+            rgb = clamp(blurRgb * 0.38 + vec3(0.37, 0.31, 0.21), 0.0, 1.0); // milky haze / glare
+        }
+    }
+
+    imageStore(uOutDistorted, ivec2(x, y), vec4(rgb, 1.0));
+    uCamTensor.pixels[(pc.camIndex * pc.height + y) * pc.width + x] = vec4(rgb, 1.0);
+}
