@@ -1,0 +1,78 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+// Stage 7: Autoregressive World Model Rollout
+// Propagates tracked dynamic agents + epistemic uncertainty across future horizons
+// (0.5s, 1.0s, 1.5s, 2.0s) into GPU future ghost voxel & planner risk buffers.
+layout(local_size_x = 16, local_size_y = 4, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer TrackPriorsIn {
+    TrackPriorGpu tracks[64];
+} uTracks;
+
+layout(std430, binding = 1) buffer GhostCounterBuf {
+    uint count;
+} uGhostCounter;
+
+layout(std430, binding = 2) writeonly buffer WorldGhostsOut {
+    WorldGhostGpu ghosts[];
+} uGhosts;
+
+layout(push_constant) uniform WorldModelPC {
+    vec4 horizons; // t0, t1, t2, t3 (e.g. 0.5, 1.0, 1.5, 2.0)
+    uint numTracks;
+    uint maxGhosts;
+    float uncertaintyGrowthRate;
+    float egoX;
+    float egoZ;
+    float egoYaw;
+} pc;
+
+void main() {
+    uint tIdx = gl_GlobalInvocationID.x;
+    uint hIdx = gl_GlobalInvocationID.y;
+    if (tIdx >= pc.numTracks || hIdx >= 4u) return;
+
+    TrackPriorGpu tr = uTracks.tracks[tIdx];
+    if (tr.yawValid.w < 0.5) return;
+
+    float spd = length(tr.posVel.zw);
+    if (spd < 0.25) return; // Static parked or stopped items don't roll out far
+
+    float tFut = pc.horizons[hIdx];
+    float sinEgo = sin(pc.egoYaw);
+    float cosEgo = cos(pc.egoYaw);
+    float wx = pc.egoX + tr.posVel.x * sinEgo + tr.posVel.y * cosEgo;
+    float wz = pc.egoZ + tr.posVel.x * cosEgo - tr.posVel.y * sinEgo;
+
+    float fx = wx + tr.posVel.z * tFut;
+    float fz = wz + tr.posVel.w * tFut;
+
+    float baseSigma = tr.sizeMeta.w;
+    float futSigma = baseSigma + pc.uncertaintyGrowthRate * tFut;
+    float shrink = 1.0 - float(hIdx) * 0.14;
+    float alpha = clamp((0.42 - float(hIdx) * 0.06) / (1.0 + futSigma * 0.35), 0.12, 0.5);
+
+    // Emit compact 2x2 footprint cluster per horizon matching HTML ghost visual
+    float hx = min(tr.sizeMeta.x * 0.55, 0.65);
+    float hz = min(tr.sizeMeta.y * 0.55, 0.90);
+    float cY = cos(tr.yawValid.x), sY = sin(tr.yawValid.x);
+
+    for (int ox = -1; ox <= 1; ox += 2) {
+        for (int oz = -1; oz <= 1; oz += 2) {
+            uint slot = atomicAdd(uGhostCounter.count, 1u);
+            if (slot >= pc.maxGhosts) return;
+
+            float lx = float(ox) * hx;
+            float lz = float(oz) * hz;
+            float gwx = fx + lx * cY + lz * sY;
+            float gwz = fz - lx * sY + lz * cY;
+
+            vec3 col = (round(tr.sizeMeta.z) == 2.0) ? vec3(0.95, 0.35, 0.55) : vec3(0.66, 0.33, 0.97);
+            uGhosts.ghosts[slot].worldPosScale = vec4(gwx, 0.75, gwz, shrink);
+            uGhosts.ghosts[slot].colorAlpha = vec4(col, alpha);
+            uGhosts.ghosts[slot].yawMeta = vec4(tr.yawValid.x, tFut, futSigma, tr.yawValid.z);
+        }
+    }
+}

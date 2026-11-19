@@ -1,0 +1,77 @@
+#version 450
+
+// Stage 6b: Occlusion Shadow Raycast over Predicted 3D Occupancy Grid
+// Casts visibility rays in ego-BEV from the sensor rig through tall occupied voxels
+// (vehicles/static structures) to flag occluded shadow zones (SEMANTIC.OCC_SHADOW = 7)
+// where unseen pedestrians/agents could emerge!
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(std430, binding = 0) buffer VoxelStateIO {
+    vec4 state[];
+} uVoxelState;
+
+layout(std430, binding = 1) buffer VoxelUncertIO {
+    vec4 uncert[];
+} uVoxelUncert;
+
+layout(push_constant) uniform ShadowPC {
+    uint nx;
+    uint ny;
+    uint nz;
+    float minX;
+    float maxX;
+    float minY;
+    float maxY;
+    uint enableShadows;
+} pc;
+
+void main() {
+    uint ix = gl_GlobalInvocationID.x;
+    uint iy = gl_GlobalInvocationID.y;
+    if (ix >= pc.nx || iy >= pc.ny) return;
+
+    uint baseIdx = (ix * pc.ny + iy) * pc.nz + 0u;
+    vec4 st0 = uVoxelState.state[baseIdx];
+    if (pc.enableShadows == 0u) {
+        if (uint(round(st0.x)) == 7u) {
+            uVoxelState.state[baseIdx] = vec4(0.0);
+        }
+        return;
+    }
+
+    float stepX = (pc.maxX - pc.minX) / float(pc.nx);
+    float stepY = (pc.maxY - pc.minY) / float(pc.ny);
+    float egoX = pc.minX + (float(ix) + 0.5) * stepX;
+    float egoY = pc.minY + (float(iy) + 0.5) * stepY;
+
+    float r = length(vec2(egoX - 1.2, egoY));
+    if (r < 3.5 || r > 36.0) return;
+
+    // Only cast into currently empty/low-confidence cells at ground level
+    if (st0.y >= 0.25) return;
+
+    // March inward from sensor origin (1.2, 0.0) toward (egoX, egoY) looking for tall occluders
+    vec2 dir = vec2(egoX - 1.2, egoY) / r;
+    bool occluded = false;
+    for (float d = 2.5; d < r - 1.0; d += 1.0) {
+        if (r - d > 9.5) continue; // Shadow length capped at 9.5m behind occluder
+        vec2 sampleEgo = vec2(1.2, 0.0) + dir * d;
+        int sx = int(floor((sampleEgo.x - pc.minX) / stepX));
+        int sy = int(floor((sampleEgo.y - pc.minY) / stepY));
+        if (sx < 0 || sy < 0 || sx >= int(pc.nx) || sy >= int(pc.ny)) continue;
+
+        // Check mid-height voxel iz=2 (z ~ 1.5m) for tall occluder (truck/SUV/wall)
+        uint occIdx = (uint(sx) * pc.ny + uint(sy)) * pc.nz + 2u;
+        vec4 occSt = uVoxelState.state[occIdx];
+        uint occSem = uint(round(occSt.x));
+        if (occSt.y > 0.45 && (occSem == 1u || occSem == 4u)) {
+            occluded = true;
+            break;
+        }
+    }
+
+    if (occluded) {
+        uVoxelState.state[baseIdx] = vec4(7.0, 0.55, 0.0, 0.0);
+        uVoxelUncert.uncert[baseIdx].x = max(uVoxelUncert.uncert[baseIdx].x, 0.85);
+    }
+}
