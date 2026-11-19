@@ -1,0 +1,145 @@
+#version 450
+
+// Stage 3a: RT-DETR Hybrid Encoder (AIFI Self-Attention on S5 + CCFM Cross-Scale Fusion to S4)
+// Dispatched as (1, 1, 8) with 20*15 = 300 threads per workgroup (one thread per S5 token).
+layout(local_size_x = 20, local_size_y = 15, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer FeatS4In {
+    vec4 feat[]; // 8 * 30 * 40 * 4
+} uFeatS4;
+
+layout(std430, binding = 1) readonly buffer FeatS5In {
+    vec4 feat[]; // 8 * 15 * 20 * 4
+} uFeatS5;
+
+layout(std430, binding = 2) writeonly buffer EncMemoryOut {
+    vec4 feat[]; // 8 * 30 * 40 * 4
+} uEncMemory;
+
+// Top-K Query Anchor Seeds per camera: 8 * 16 vec4(cx_norm, cy_norm, objScore, camPatchW)
+layout(std430, binding = 3) writeonly buffer QueryInitOut {
+    vec4 anchors[];
+} uQueryInit;
+
+layout(push_constant) uniform DetrEncPC {
+    uint featW;
+    uint featH;
+    uint s5W;
+    uint s5H;
+    uint numQueries;
+} pc;
+
+shared vec4 s_tokens[300][2]; // Compact 8-dim token state for AIFI attention
+shared float s_scores[300];
+
+void main() {
+    uint cam = gl_WorkGroupID.z;
+    uint tx = gl_LocalInvocationID.x;
+    uint ty = gl_LocalInvocationID.y;
+    uint tid = ty * pc.s5W + tx;
+
+    uint s5Base = ((cam * pc.s5H + ty) * pc.s5W + tx) * 4u;
+    vec4 f0 = uFeatS5.feat[s5Base + 0u];
+    vec4 f1 = uFeatS5.feat[s5Base + 1u];
+    vec4 f2 = uFeatS5.feat[s5Base + 2u];
+    vec4 f3 = uFeatS5.feat[s5Base + 3u];
+
+    // 2D sinusoidal positional encoding added to S5 token representation
+    float px = (float(tx) + 0.5) / float(pc.s5W);
+    float py = (float(ty) + 0.5) / float(pc.s5H);
+    vec4 posEnc = vec4(sin(px * 6.28318), cos(px * 6.28318), sin(py * 6.28318), cos(py * 6.28318)) * 0.25;
+
+    // 8-dim projected AIFI token embedding: [edge, veh, ped, sig, sky, mot, vPrior, obj]
+    vec4 qkA = vec4(f0.z, f1.x, f1.y, f1.z) + posEnc;
+    vec4 qkB = vec4(f2.x, f2.z, f3.x, f3.w);
+    s_tokens[tid][0] = qkA;
+    s_tokens[tid][1] = qkB;
+
+    // Uncertainty-minimal objectness score (f1 already masked background per pixel; only suppress pure sky/upper-bldg tiles)
+    const float skyBldgSuppress = clamp(1.0 - f2.x * 1.4 - f2.y * 0.75, 0.10, 1.0);
+    const float s5EdgeGate = smoothstep(0.008, 0.032, f0.z + f2.z * 0.5);
+    float rawObj = (f1.y * 2.40 + f1.x * 1.65 + f1.z * 1.15) * skyBldgSuppress * s5EdgeGate * f3.y;
+    if (py < 0.28 || py > 0.86) rawObj *= 0.08;
+    s_scores[tid] = rawObj;
+
+    barrier();
+
+    // AIFI: Scaled Dot-Product Self-Attention over S5 tokens (with spatial locality bias)
+    vec4 vA = vec4(0.0);
+    vec4 vB = vec4(0.0);
+    float wSum = 0.0;
+    const float invSqrtD = 0.35355339; // 1/sqrt(8)
+
+    for (uint j = 0u; j < 300u; ++j) {
+        vec4 oA = s_tokens[j][0];
+        vec4 oB = s_tokens[j][1];
+        float logit = (dot(qkA, oA) + dot(qkB, oB)) * invSqrtD;
+        float attn = exp(clamp(logit, -8.0, 8.0));
+        vA += attn * oA;
+        vB += attn * oB;
+        wSum += attn;
+    }
+    vA /= max(wSum, 1e-5);
+    vB /= max(wSum, 1e-5);
+
+    // Residual AIFI context
+    vec4 ctx0 = mix(f0, vec4(f0.x, f0.y, vA.x, f0.w), 0.35);
+    vec4 ctx1 = mix(f1, vec4(vA.y, vA.z, vA.w, f1.w), 0.35);
+
+    // CCFM: Upsample AIFI S5 context into the 2x2 S4 child cells and write uEncMemory
+    for (uint dy = 0u; dy < 2u; ++dy) {
+        for (uint dx = 0u; dx < 2u; ++dx) {
+            uint fx = tx * 2u + dx;
+            uint fy = ty * 2u + dy;
+            if (fx < pc.featW && fy < pc.featH) {
+                uint idx4 = ((cam * pc.featH + fy) * pc.featW + fx) * 4u;
+                vec4 s4_0 = uFeatS4.feat[idx4 + 0u];
+                vec4 s4_1 = uFeatS4.feat[idx4 + 1u];
+                vec4 s4_2 = uFeatS4.feat[idx4 + 2u];
+                vec4 s4_3 = uFeatS4.feat[idx4 + 3u];
+
+                uEncMemory.feat[idx4 + 0u] = mix(s4_0, ctx0, 0.25);
+                uEncMemory.feat[idx4 + 1u] = mix(s4_1, ctx1, 0.25);
+                uEncMemory.feat[idx4 + 2u] = s4_2;
+                uEncMemory.feat[idx4 + 3u] = vec4(s4_3.x, s4_3.y, s4_3.z, s_scores[tid]);
+            }
+        }
+    }
+
+    barrier();
+
+    // Thread 0 performs Uncertainty-Minimal Top-K Query Selection with local 3x3 peak suppression
+    if (tid == 0u) {
+        bool used[300];
+        for (uint i = 0u; i < 300u; ++i) used[i] = false;
+
+        for (uint q = 0u; q < pc.numQueries; ++q) {
+            int bestIdx = -1;
+            float bestVal = 0.14; // Require salient object seed above background threshold
+            for (int i = 0; i < 300; ++i) {
+                if (!used[i] && s_scores[i] > bestVal) {
+                    bestVal = s_scores[i];
+                    bestIdx = i;
+                }
+            }
+            vec4 anchor = vec4(0.5, 0.5, 0.0, 0.0);
+            if (bestIdx >= 0) {
+                int bx = bestIdx % int(pc.s5W);
+                int by = bestIdx / int(pc.s5W);
+                // Suppress immediate 3x3 S5 neighbors so queries cover distinct candidate objects
+                for (int ny = max(0, by - 1); ny <= min(int(pc.s5H) - 1, by + 1); ++ny) {
+                    for (int nx = max(0, bx - 1); nx <= min(int(pc.s5W) - 1, bx + 1); ++nx) {
+                        used[ny * int(pc.s5W) + nx] = true;
+                    }
+                }
+                uint s5Idx = ((cam * pc.s5H + uint(by)) * pc.s5W + uint(bx)) * 4u;
+                float patchW = uFeatS5.feat[s5Idx + 3u].y;
+                anchor = vec4((float(bx) + 0.5) / float(pc.s5W),
+                              (float(by) + 0.5) / float(pc.s5H),
+                              bestVal,
+                              patchW);
+            }
+            uQueryInit.anchors[cam * pc.numQueries + q] = anchor;
+        }
+    }
+}
