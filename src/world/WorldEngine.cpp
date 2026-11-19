@@ -848,3 +848,173 @@ void WorldEngine::stepAgents(float dt) {
         }
 
         float repulseX = 0.0f, repulseZ = 0.0f;
+        p.yieldingToCar = false;
+
+        for (const auto& car : allCarsScratch_) {
+            float dx = p.x - car.cx;
+            float dz = p.z - car.cz;
+            if (std::hypot(dx, dz) > 14.0f) continue;
+
+            float cosY = std::cos(car.yaw), sinY = std::sin(car.yaw);
+            float localZ = dx * sinY + dz * cosY;
+            float localX = dx * cosY - dz * sinY;
+            float carSpd = std::hypot(car.vx, car.vz);
+
+            if (carSpd > 0.8f && localZ > car.hz - 0.5f && localZ < car.hz + 9.5f &&
+                std::abs(localX) < car.hx + 2.4f) {
+                if (std::abs(localX) > car.hx + 0.55f && !p.jaywalking) {
+                    p.yieldingToCar = true;
+                }
+            }
+
+            float safeHx = car.hx + p.radius + 0.75f;
+            float safeHz = car.hz + p.radius + 0.85f;
+            if (std::abs(localX) < safeHx && std::abs(localZ) < safeHz) {
+                float penX = safeHx - std::abs(localX);
+                float penZ = safeHz - std::abs(localZ);
+                float nLocX = (localX >= 0.0f) ? 1.0f : -1.0f;
+                float nLocZ = (localZ >= 0.0f) ? 1.0f : -1.0f;
+                float wnx = nLocX * cosY + nLocZ * sinY;
+                float wnz = -nLocX * sinY + nLocZ * cosY;
+                float strength = 4.2f * std::max(penX, penZ);
+                repulseX += wnx * strength;
+                repulseZ += wnz * strength;
+
+                float dirToGoalX = (p.targetX - p.x) / std::max(0.1f, distToGoal);
+                float dirToGoalZ = (p.targetZ - p.z) / std::max(0.1f, distToGoal);
+                float tangSign = (localZ >= 0.0f) ? 1.0f : -1.0f;
+                repulseX += sinY * tangSign * 2.2f + dirToGoalX * 0.5f;
+                repulseZ += cosY * tangSign * 2.2f + dirToGoalZ * 0.5f;
+            }
+        }
+
+        float desVx = 0.0f, desVz = 0.0f;
+        if (!waitAtCurb && !p.yieldingToCar) {
+            float dirX = (p.targetX - p.x) / std::max(0.01f, distToGoal);
+            float dirZ = (p.targetZ - p.z) / std::max(0.01f, distToGoal);
+            float spd = p.jaywalking ? p.baseSpeed * 1.45f : p.baseSpeed;
+            desVx = dirX * spd + repulseX;
+            desVz = dirZ * spd + repulseZ;
+        } else {
+            desVx = repulseX * 0.6f;
+            desVz = repulseZ * 0.6f;
+        }
+
+        float maxPedSpd = p.jaywalking ? 2.4f : 1.75f;
+        float curMag = std::hypot(desVx, desVz);
+        if (curMag > maxPedSpd) {
+            desVx = (desVx / curMag) * maxPedSpd;
+            desVz = (desVz / curMag) * maxPedSpd;
+        }
+
+        float blend = clampf(7.5f * dt, 0.0f, 1.0f);
+        p.vx = lerpf(p.vx, desVx, blend);
+        p.vz = lerpf(p.vz, desVz, blend);
+        p.x += p.vx * dt;
+        p.z += p.vz * dt;
+
+        resolvePedestrianVsVehicleOBB(p, egoOBB, &ego_);
+
+        float actualSpd = std::hypot(p.vx, p.vz);
+        if (actualSpd > 0.12f) {
+            p.yaw = std::atan2(p.vx, p.vz);
+            p.phase += dt * actualSpd * 5.8f;
+            p.legAngle = std::sin(p.phase) * 0.58f;
+            p.armAngle = -std::sin(p.phase) * 0.45f;
+        } else {
+            p.legAngle = lerpf(p.legAngle, 0.0f, clampf(8.0f * dt, 0.0f, 1.0f));
+            p.armAngle = lerpf(p.armAngle, 0.0f, clampf(8.0f * dt, 0.0f, 1.0f));
+        }
+    }
+}
+
+void WorldEngine::stepEgoAndPhysics(float dt, const PlannerCommand& cmd, const ManualInput& manual) {
+    ego_.rssSafeDist = cmd.rssSafeDist;
+    ego_.minObstacleDist = cmd.minObstacleDist;
+    ego_.aebActive = cmd.aebActive;
+    ego_.behaviorState = cmd.behaviorState;
+
+    if (ego_.collisionHoldTimer > 0.0f) {
+        ego_.collisionHoldTimer = std::max(0.0f, ego_.collisionHoldTimer - dt);
+    }
+
+    if (ego_.aebActive) {
+        ego_.accel = -cfg_.rssABrakeAebMs2;
+        ego_.speed = std::max(0.0f, ego_.speed + ego_.accel * dt);
+    } else if (cfg_.driveMode == "manual") {
+        float throttle = 0.0f;
+        if (manual.forward) throttle += 4.5f;
+        if (manual.backward) throttle -= 7.5f;
+        if (!manual.forward && !manual.backward) throttle = -ego_.speed * 0.45f;
+        ego_.accel = throttle;
+        ego_.speed = clampf(ego_.speed + ego_.accel * dt, 0.0f, 18.0f);
+
+        float targetSteer = 0.0f;
+        if (manual.left) targetSteer += 0.40f;
+        if (manual.right) targetSteer -= 0.40f;
+        ego_.steerAngle = lerpf(ego_.steerAngle, targetSteer, clampf(8.5f * dt, 0.0f, 1.0f));
+    } else {
+        if (cmd.optimalTrajectory.size() > 4) {
+            int lookIdx = std::min(static_cast<int>(cmd.optimalTrajectory.size()) - 1,
+                                   std::max(4, static_cast<int>(std::round(ego_.speed * 0.72f + 4.0f))));
+            const Vec3& targetPt = cmd.optimalTrajectory[lookIdx];
+            float dx = targetPt.x - ego_.pos.x;
+            float dz = targetPt.z - ego_.pos.z;
+            float targetYaw = std::atan2(dx, dz);
+            float alpha = wrapAngle(targetYaw - ego_.yaw);
+            float ld = std::max(3.4f, std::hypot(dx, dz));
+            float rawSteer = std::atan2(2.0f * cfg_.wheelbaseM * std::sin(alpha), ld);
+            float clampedSteer = clampf(rawSteer, -cfg_.maxSteerRad, cfg_.maxSteerRad);
+            ego_.steerAngle = lerpf(ego_.steerAngle, clampedSteer, clampf(9.5f * dt, 0.0f, 1.0f));
+        }
+
+        float speedErr = cmd.targetSpeed - ego_.speed;
+        float maxBrake = (ego_.behaviorState == "YIELDING_PEDESTRIAN") ? -7.2f : -5.8f;
+        float rawAccel = clampf(speedErr * 2.1f, maxBrake, 2.8f);
+        ego_.accel = lerpf(ego_.accel, rawAccel, clampf(8.0f * dt, 0.0f, 1.0f));
+        ego_.speed = std::max(0.0f, ego_.speed + ego_.accel * dt);
+    }
+
+    ego_.yawRate = (ego_.speed / cfg_.wheelbaseM) * std::tan(ego_.steerAngle);
+    ego_.yaw = wrapAngle(ego_.yaw + ego_.yawRate * dt);
+    ego_.pos.x += std::sin(ego_.yaw) * ego_.speed * dt;
+    ego_.pos.z += std::cos(ego_.yaw) * ego_.speed * dt;
+    ego_.wheelSpin += (ego_.speed / 0.36f) * dt;
+
+    float latAccel = ego_.speed * ego_.yawRate;
+    float targetPitch = clampf(-ego_.accel * 0.0085f, -0.065f, 0.065f);
+    float targetRoll = clampf(latAccel * 0.0095f, -0.07f, 0.07f);
+
+    float pitchAcc = cfg_.suspensionKSpring * (targetPitch - ego_.pitch) - cfg_.suspensionCDamper * ego_.pitchRate;
+    float rollAcc = cfg_.suspensionKSpring * (targetRoll - ego_.roll) - cfg_.suspensionCDamper * ego_.rollRate;
+
+    ego_.pitchRate += pitchAcc * dt;
+    ego_.pitch += ego_.pitchRate * dt;
+    ego_.rollRate += rollAcc * dt;
+    ego_.roll += ego_.rollRate * dt;
+
+    stepMultiBodyCollisionSolver();
+
+    ego_.loopProgressU = findClosestLoopU(ego_.pos);
+    Vec3 curCenter = centerline_.getPointAt(ego_.loopProgressU);
+    Vec3 curTan = centerline_.getTangentAt(ego_.loopProgressU);
+    Vec3 curLeft{-curTan.z, 0.0f, curTan.x};
+    ego_.currentLateralOffset = (ego_.pos - curCenter).dot(curLeft);
+}
+
+void WorldEngine::triggerJaywalkerCutIn() {
+    float sinY = std::sin(ego_.yaw);
+    float cosY = std::cos(ego_.yaw);
+    float rightX = -cosY;
+    float rightZ = sinY;
+
+    Pedestrian& ped = pedestrians_.at(7);
+    ped.x = ego_.pos.x + sinY * 11.5f + rightX * 3.8f;
+    ped.z = ego_.pos.z + cosY * 11.5f + rightZ * 3.8f;
+    ped.ax = ped.x;
+    ped.az = ped.z;
+    ped.bx = ego_.pos.x + sinY * 11.5f - rightX * 5.2f;
+    ped.bz = ego_.pos.z + cosY * 11.5f - rightZ * 5.2f;
+    ped.targetX = ped.bx;
+    ped.targetZ = ped.bz;
+    ped.jaywalking = true;
