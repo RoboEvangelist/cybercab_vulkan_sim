@@ -1,0 +1,159 @@
+#version 450
+
+// Stage 3b: RT-DETR Transformer Decoder + Box/Class/Uncertainty Regression Heads
+// Dispatched as (1, 1, 8) with numQueries (=16) threads per workgroup.
+layout(local_size_x = 16, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer EncMemoryIn {
+    vec4 feat[]; // 8 * 30 * 40 * 4
+} uEncMemory;
+
+layout(std430, binding = 1) readonly buffer QueryInitIn {
+    vec4 anchors[]; // 8 * 16 vec4(cx, cy, objScore, patchW)
+} uQueryInit;
+
+// Decoded detections: 2 vec4 per query -> 8 * 16 * 2 vec4
+//   slot0 = vec4(cx, cy, w, h) normalized [0, 1]
+//   slot1 = vec4(score, float(classId), camWeight, boxEpistemicSigma)
+//   Class IDs: 1 = Vehicle, 2 = Pedestrian, 3 = SignalSign
+layout(std430, binding = 2) writeonly buffer DetrDecOut {
+    vec4 dets[];
+} uDetrOut;
+
+layout(push_constant) uniform DetrDecPC {
+    uint featW;
+    uint featH;
+    uint numQueries;
+    uint numLayers;
+} pc;
+
+shared vec4 s_qPos[16];     // cx, cy, w, h
+shared vec4 s_qFeat[16];    // veh, ped, sig, obj
+
+vec4 readMem(uint cam, int x, int y, uint slot) {
+    int cx = clamp(x, 0, int(pc.featW) - 1);
+    int cy = clamp(y, 0, int(pc.featH) - 1);
+    uint idx = ((cam * pc.featH + uint(cy)) * pc.featW + uint(cx)) * 4u + slot;
+    return uEncMemory.feat[idx];
+}
+
+void main() {
+    uint cam = gl_WorkGroupID.z;
+    uint q = gl_LocalInvocationID.x;
+    if (q >= pc.numQueries) return;
+
+    const vec4 initA = uQueryInit.anchors[cam * pc.numQueries + q];
+    float cx = initA.x;
+    float cy = initA.y;
+    float w = 0.08;
+    float h = 0.12;
+    float objSeed = initA.z;
+    const float patchW = initA.w;
+    if (objSeed <= 0.05) {
+        const uint outBase = (cam * pc.numQueries + q) * 2u;
+        uDetrOut.dets[outBase + 0u] = vec4(0.5, 0.5, 0.0, 0.0);
+        uDetrOut.dets[outBase + 1u] = vec4(0.0, 1.0, patchW, 1.0);
+        return;
+    }
+
+    s_qPos[q] = vec4(cx, cy, w, h);
+    s_qFeat[q] = vec4(0.0);
+    barrier();
+
+    // Iterative Decoder Refinement Layers (Cross-Attention + Query Self-Attention + Box FFN)
+    for (uint layer = 0u; layer < pc.numLayers; ++layer) {
+        int gx = int(clamp(cx * float(pc.featW), 0.0, float(pc.featW) - 1.0));
+        int gy = int(clamp(cy * float(pc.featH), 0.0, float(pc.featH) - 1.0));
+
+        // Deformable Cross-Attention sampling 5x5 local window in uEncMemory
+        float sumW = 0.0;
+        vec2 weightedPos = vec2(0.0);
+        float sumVeh = 0.0, sumPed = 0.0, sumSig = 0.0, sumEdge = 0.0;
+        int minDx = 99, maxDx = -99, minDy = 99, maxDy = -99;
+
+        for (int dy = -2; dy <= 2; ++dy) {
+            for (int dx = -2; dx <= 2; ++dx) {
+                vec4 m0 = readMem(cam, gx + dx, gy + dy, 0u);
+                vec4 m1 = readMem(cam, gx + dx, gy + dy, 1u);
+                vec4 m2 = readMem(cam, gx + dx, gy + dy, 2u);
+                vec4 m3 = readMem(cam, gx + dx, gy + dy, 3u);
+
+                float sal = (m1.x * 1.15 + m1.y * 1.85 + m1.z * 1.1 + m0.z * 0.25)
+                          * clamp(1.0 - m2.x * 1.2 - m1.w * 0.25, 0.20, 1.0);
+                float spatialKern = exp(-0.18 * float(dx * dx + dy * dy));
+                float a = sal * spatialKern;
+                sumW += a;
+                weightedPos += a * vec2((float(gx + dx) + 0.5) / float(pc.featW),
+                                        (float(gy + dy) + 0.5) / float(pc.featH));
+                sumVeh += a * m1.x;
+                sumPed += a * m1.y;
+                sumSig += a * m1.z;
+                sumEdge += a * m0.z;
+
+                if (sal > 0.14) {
+                    minDx = min(minDx, dx);
+                    maxDx = max(maxDx, dx);
+                    minDy = min(minDy, dy);
+                    maxDy = max(maxDy, dy);
+                }
+            }
+        }
+
+        if (sumW > 1e-4) {
+            vec2 refined = weightedPos / sumW;
+            cx = mix(cx, refined.x, 0.65);
+            cy = mix(cy, refined.y, 0.65);
+        }
+
+        if (maxDx >= minDx && maxDy >= minDy) {
+            float estW = float(maxDx - minDx + 1) / float(pc.featW);
+            float estH = float(maxDy - minDy + 1) / float(pc.featH);
+            w = mix(w, clamp(estW * 1.25, 0.035, 0.45), 0.7);
+            h = mix(h, clamp(estH * 1.25, 0.050, 0.55), 0.7);
+        }
+
+        s_qPos[q] = vec4(cx, cy, w, h);
+        s_qFeat[q] = vec4(sumVeh, sumPed, sumSig, sumW);
+        barrier();
+
+        // Query-to-Query Self-Attention duplicate suppression (keeps highest scoring query per cluster)
+        float selfSuppress = 1.0;
+        for (uint o = 0u; o < pc.numQueries; ++o) {
+            if (o == q) continue;
+            vec4 oPos = s_qPos[o];
+            vec4 oFeat = s_qFeat[o];
+            float d = length((oPos.xy - vec2(cx, cy)) / max(vec2(w, h), vec2(0.05)));
+            if (d < 0.85 && oFeat.w > sumW) {
+                selfSuppress *= 0.30;
+            }
+        }
+        objSeed *= selfSuppress;
+        barrier();
+    }
+
+    // Classification Head
+    vec4 qf = s_qFeat[q];
+    float vScore = qf.x * 1.15;
+    float pScore = qf.y * 1.55;
+    float sScore = qf.z * 1.25;
+
+    // Aspect-ratio & vertical-position geometric inductive bias in FFN head
+    if (cy < 0.42 && sScore > 0.08) sScore *= 1.45;
+    if (h > w * 1.25 && pScore > 0.05) pScore *= 1.35;
+    if (w >= h * 0.95 && vScore > 0.05) vScore *= 1.25;
+
+    float clsId = 1.0;
+    float maxCls = vScore;
+    if (pScore > maxCls) { maxCls = pScore; clsId = 2.0; }
+    if (sScore > maxCls) { maxCls = sScore; clsId = 3.0; }
+
+    const float logit = objSeed * 5.0 + maxCls * 2.2 - 2.35;
+    const float rawConf = 1.0 / (1.0 + exp(-clamp(logit, -8.0, 8.0)));
+    // Propagate soil confidence into detection confidence (soiled lens drops score to ByteTrack Stage-2 tier!)
+    const float finalConf = clamp(rawConf * mix(0.32, 1.0, patchW), 0.0, 0.99);
+    const float boxSigma = 0.05 + (1.0 - patchW) * 0.65 + (1.0 - finalConf) * 0.25;
+
+    uint outBase = (cam * pc.numQueries + q) * 2u;
+    uDetrOut.dets[outBase + 0u] = vec4(cx, cy, w, h);
+    uDetrOut.dets[outBase + 1u] = vec4(finalConf, clsId, patchW, boxSigma);
+}
