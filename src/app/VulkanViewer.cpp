@@ -538,3 +538,183 @@ void VulkanViewer::applyUiAction(UiAction action, int param, SimConfig& cfg, Wor
             break;
         }
         case UiAction::ToggleSoilSelected: {
+            cfg.cameras[toggles.selectedCam].soiled = !cfg.cameras[toggles.selectedCam].soiled;
+            toastMsg = cfg.cameras[toggles.selectedCam].id + (cfg.cameras[toggles.selectedCam].soiled ? " SOILED" : " CLEANED");
+            break;
+        }
+        case UiAction::ToggleLayerVoxels:
+            toggles.showVoxels = !toggles.showVoxels;
+            toastMsg = toggles.showVoxels ? "3D Occupancy Voxels ON" : "3D Occupancy Voxels OFF";
+            break;
+        case UiAction::ToggleLayerShadows:
+            toggles.showShadows = !toggles.showShadows;
+            toastMsg = toggles.showShadows ? "Occlusion Shadows ON" : "Occlusion Shadows OFF";
+            break;
+        case UiAction::ToggleLayerFlow:
+            toggles.showFlow = !toggles.showFlow;
+            toastMsg = toggles.showFlow ? "4D Occupancy Flow Vectors ON" : "4D Occupancy Flow Vectors OFF";
+            break;
+        case UiAction::ToggleLayerGhosts:
+            toggles.showWorldGhosts = !toggles.showWorldGhosts;
+            toastMsg = toggles.showWorldGhosts ? "World Model Rollout Ghosts ON" : "World Model Rollout Ghosts OFF";
+            break;
+        case UiAction::ToggleLayerRss:
+            toggles.showRss = !toggles.showRss;
+            toastMsg = toggles.showRss ? "RSS Uncertainty Carpet ON" : "RSS Uncertainty Carpet OFF";
+            break;
+        case UiAction::ToggleLayerColliders:
+            toggles.showColliders = !toggles.showColliders;
+            toastMsg = toggles.showColliders ? "SAT Colliders & Track Boxes ON" : "SAT Colliders & Track Boxes OFF";
+            break;
+        case UiAction::ToggleLayerFrustums:
+            toggles.showFrustums = !toggles.showFrustums;
+            toastMsg = toggles.showFrustums ? "8-Camera 3D Frustums ON" : "8-Camera 3D Frustums OFF";
+            break;
+        case UiAction::ToggleLayerPlanner:
+            toggles.showPlanner = !toggles.showPlanner;
+            toastMsg = toggles.showPlanner ? "Quintic Lattice Planner ON" : "Quintic Lattice Planner OFF";
+            break;
+        case UiAction::ScenarioJaywalk:
+            world.triggerJaywalkerCutIn();
+            toastMsg = "Scenario: Jaywalker Cut-In 11.5m Ahead";
+            break;
+        case UiAction::ScenarioOccluded:
+            world.triggerOccludedDartOut();
+            toastMsg = "Scenario: Occluded Dart-Out Behind Truck";
+            break;
+        case UiAction::ScenarioHardBrake:
+            world.triggerLeadHardBrake();
+            toastMsg = "Scenario: Lead Hard Brake (-7.5 m/s2)";
+            break;
+        case UiAction::ScenarioSoilFront:
+            cfg.cameras[0].soiled = true;
+            cfg.cameras[2].soiled = true;
+            cfg.cameras[3].soiled = true;
+            toastMsg = "Scenario: Front-Left Cameras Soiled";
+            break;
+        case UiAction::ToggleForcedRed: {
+            const bool next = !world.forcedRedSignal();
+            world.setForcedRedSignal(next);
+            toastMsg = next ? "Traffic Signal LOCKED RED" : "Traffic Signal Automatic Cycling";
+            break;
+        }
+        case UiAction::ScenarioReset:
+            for (auto& cam : cfg.cameras) cam.soiled = false;
+            world.reset();
+            pipeline.reset();
+            toastMsg = "Reset Nominal Traffic & Clean Lenses";
+            break;
+        case UiAction::None:
+        default:
+            break;
+    }
+}
+
+bool VulkanViewer::pollEvents(SimConfig& cfg, WorldEngine& world, CameraRigRenderer& rig,
+                              PerceptionPipeline& pipeline, ManualInput& manual, ViewerToggleState& toggles,
+                              std::string& toastMsg) {
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev)) {
+        if (ev.type == SDL_QUIT) return false;
+        if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_RESIZED) {
+            framebufferResized_ = true;
+        } else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
+            const float mx = static_cast<float>(ev.button.x);
+            const float my = static_cast<float>(ev.button.y);
+            bool hitUi = false;
+            for (int i = static_cast<int>(uiButtonsScratch_.size()) - 1; i >= 0; --i) {
+                if (uiButtonsScratch_[i].contains(mx, my)) {
+                    applyUiAction(uiButtonsScratch_[i].action, uiButtonsScratch_[i].param,
+                                  cfg, world, rig, pipeline, toggles, toastMsg);
+                    hitUi = true;
+                    break;
+                }
+            }
+            if (!hitUi) {
+                for (const auto& pan : uiPanelsScratch_) {
+                    if (mx >= pan.x && mx <= pan.x + pan.w && my >= pan.y && my <= pan.y + pan.h) {
+                        hitUi = true;
+                        break;
+                    }
+                }
+            }
+            if (!hitUi) {
+                dragging_ = true;
+                lastMouseX_ = ev.button.x;
+                lastMouseY_ = ev.button.y;
+            }
+        } else if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT) {
+            dragging_ = false;
+        } else if (ev.type == SDL_MOUSEMOTION && dragging_) {
+            const int dx = ev.motion.x - lastMouseX_;
+            const int dy = ev.motion.y - lastMouseY_;
+            lastMouseX_ = ev.motion.x;
+            lastMouseY_ = ev.motion.y;
+            orbitYaw_ -= static_cast<float>(dx) * 0.0065f;
+            orbitPitch_ = clampf(orbitPitch_ + static_cast<float>(dy) * 0.0055f, 0.08f, 1.38f);
+        } else if (ev.type == SDL_MOUSEWHEEL) {
+            orbitDist_ = clampf(orbitDist_ - static_cast<float>(ev.wheel.y) * 1.1f, 5.5f, 48.0f);
+        } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0) {
+            const SDL_Keycode k = ev.key.keysym.sym;
+            if (k == SDLK_ESCAPE) return false;
+            if (k == SDLK_1) applyUiAction(UiAction::SetCamOverlay, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_2) applyUiAction(UiAction::SetCamOverlay, 1, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_3) applyUiAction(UiAction::SetCamOverlay, 2, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_4) applyUiAction(UiAction::SetCamOverlay, 3, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_5) applyUiAction(UiAction::SetCamOverlay, 4, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_v) applyUiAction(UiAction::SetViewMode, (static_cast<int>(toggles.viewMode) + 1) % 3, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_SPACE) applyUiAction(UiAction::ToggleDriveMode, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_b) applyUiAction(UiAction::ToggleAeb, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_r) applyUiAction(UiAction::ToggleRes, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_TAB) applyUiAction(UiAction::SelectCam, (toggles.selectedCam + 1) % 8, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_c) applyUiAction(UiAction::ToggleSoilSelected, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_F1) applyUiAction(UiAction::ScenarioJaywalk, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_F2) applyUiAction(UiAction::ScenarioOccluded, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_F3) applyUiAction(UiAction::ScenarioHardBrake, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_F4) applyUiAction(UiAction::ScenarioSoilFront, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_F5) applyUiAction(UiAction::ScenarioReset, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_F6) applyUiAction(UiAction::ToggleForcedRed, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_o) applyUiAction(UiAction::ToggleLayerVoxels, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_h) applyUiAction(UiAction::ToggleLayerShadows, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_f) applyUiAction(UiAction::ToggleLayerFlow, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_m) applyUiAction(UiAction::ToggleLayerGhosts, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_e) applyUiAction(UiAction::ToggleLayerRss, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_k) applyUiAction(UiAction::ToggleLayerColliders, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_g) applyUiAction(UiAction::ToggleLayerFrustums, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_p) applyUiAction(UiAction::ToggleLayerPlanner, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+        }
+    }
+
+    const Uint8* ks = SDL_GetKeyboardState(nullptr);
+    manual.forward  = ks[SDL_SCANCODE_W] || ks[SDL_SCANCODE_UP];
+    manual.backward = ks[SDL_SCANCODE_S] || ks[SDL_SCANCODE_DOWN];
+    manual.left     = ks[SDL_SCANCODE_A] || ks[SDL_SCANCODE_LEFT];
+    manual.right    = ks[SDL_SCANCODE_D] || ks[SDL_SCANCODE_RIGHT];
+    return true;
+}
+
+void VulkanViewer::buildVoxelAndGhostGeometry(const WorldEngine& world, const PerceptionFrameOutput& perc,
+                                              const ViewerToggleState& toggles) {
+    voxelVertsScratch_.clear();
+    voxelIdxScratch_.clear();
+
+    if (toggles.showVoxels) {
+        int count = 0;
+        for (const auto& v : perc.activeVoxels) {
+            if (count++ >= 3400) break;
+            const float scale = 0.55f + 0.45f * v.confidence;
+            const float bright = (v.confidence > 0.85f) ? 1.0f : (0.55f * v.confidence + 0.25f);
+            const Vec3 col = semanticColor(v.sem) * bright;
+            appendCube(voxelVertsScratch_, voxelIdxScratch_, {v.wx, v.wy, v.wz},
+                       {0.84f * scale, 0.42f * scale, 0.84f * scale}, world.ego().yaw, col, 0.86f, 0.15f);
+        }
+    }
+    if (toggles.showShadows) {
+        int count = 0;
+        for (const auto& v : perc.shadowVoxels) {
+            if (count++ >= 800) break;
+            appendCube(voxelVertsScratch_, voxelIdxScratch_, {v.wx, v.wy, v.wz},
+                       {0.58f, 0.28f, 0.58f}, world.ego().yaw, semanticColor(SemanticClass::OccShadow), 0.72f, 0.08f);
+        }
+    }
+    if (toggles.showWorldGhosts) {
