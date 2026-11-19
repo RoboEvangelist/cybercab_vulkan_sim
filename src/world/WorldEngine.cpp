@@ -1018,3 +1018,173 @@ void WorldEngine::triggerJaywalkerCutIn() {
     ped.targetX = ped.bx;
     ped.targetZ = ped.bz;
     ped.jaywalking = true;
+    ego_.speed = std::max(ego_.speed, 8.5f);
+}
+
+void WorldEngine::triggerOccludedDartOut() {
+    AIVehicle& truck = vehicles_.at(0);
+    float loopLen = centerline_.getLength();
+    truck.lane = 0;
+    truck.u = std::fmod(ego_.loopProgressU + 13.5f / loopLen, 1.0f);
+    truck.speed = 0.0f;
+    truck.hardBrakeTimer = 5.5f;
+
+    Vec3 tPt = laneCurves_[0].getPointAt(truck.u);
+    Vec3 tTan = laneCurves_[0].getTangentAt(truck.u);
+    Vec3 tLeft{-tTan.z, 0.0f, tTan.x};
+    truck.pos = tPt;
+    truck.yaw = std::atan2(tTan.x, tTan.z);
+    truck.vx = 0.0f;
+    truck.vz = 0.0f;
+
+    Pedestrian& ped = pedestrians_.at(6);
+    ped.x = tPt.x + tTan.x * 3.6f - tLeft.x * 1.4f;
+    ped.z = tPt.z + tTan.z * 3.6f - tLeft.z * 1.4f;
+    ped.ax = ped.x;
+    ped.az = ped.z;
+    ped.bx = tPt.x + tTan.x * 3.6f + tLeft.x * 5.5f;
+    ped.bz = tPt.z + tTan.z * 3.6f + tLeft.z * 5.5f;
+    ped.targetX = ped.bx;
+    ped.targetZ = ped.bz;
+    ped.jaywalking = true;
+    ego_.speed = std::max(ego_.speed, 8.0f);
+}
+
+void WorldEngine::triggerLeadHardBrake() {
+    AIVehicle& lead = vehicles_.at(1);
+    float loopLen = centerline_.getLength();
+    lead.lane = (ego_.currentLateralOffset > 0.0f) ? 1 : 0;
+    lead.u = std::fmod(ego_.loopProgressU + 12.0f / loopLen, 1.0f);
+    lead.speed = ego_.speed * 0.8f;
+    lead.hardBrakeTimer = 4.0f;
+    Vec3 pt = laneCurves_[lead.lane].getPointAt(lead.u);
+    Vec3 tan = laneCurves_[lead.lane].getTangentAt(lead.u);
+    lead.pos = pt;
+    lead.yaw = std::atan2(tan.x, tan.z);
+    lead.vx = tan.x * lead.speed;
+    lead.vz = tan.z * lead.speed;
+    ego_.speed = std::max(ego_.speed, 9.5f);
+}
+
+void WorldEngine::setForcedRedSignal(bool forcedRed) {
+    forcedRed_ = forcedRed;
+    if (forcedRed) signalPhase_ = SignalPhase::Red;
+}
+
+void WorldEngine::buildStaticWorldGeometry(std::vector<SceneVertex>& verts, std::vector<uint32_t>& indices) const {
+    verts.clear();
+    indices.clear();
+
+    // Ground plane
+    appendQuadXZ(verts, indices, {0.0f, 0.0f, 0.0f}, 360.0f, 360.0f, 0.0f, {0.118f, 0.161f, 0.231f}, 0.0f, SemanticClass::Static);
+
+    // Loop Asphalt Road
+    const float roadWidth = 9.2f;
+    const int samples = 240;
+    const Vec3 roadCol{0.149f, 0.169f, 0.204f};
+    uint32_t roadBase = static_cast<uint32_t>(verts.size());
+    for (int i = 0; i <= samples; ++i) {
+        float u = static_cast<float>(i % samples) / static_cast<float>(samples);
+        Vec3 pt = centerline_.getPointAt(u);
+        Vec3 tan = centerline_.getTangentAt(u);
+        Vec3 left{-tan.z, 0.0f, tan.x};
+        Vec3 pL = pt + left * (roadWidth * 0.5f);
+        Vec3 pR = pt - left * (roadWidth * 0.5f);
+        verts.push_back({pL.x, 0.03f, pL.z, 0, 1, 0, roadCol.x, roadCol.y, roadCol.z, 1, 0, 4, 0, 0});
+        verts.push_back({pR.x, 0.03f, pR.z, 0, 1, 0, roadCol.x, roadCol.y, roadCol.z, 1, 0, 4, 0, 0});
+        if (i < samples) {
+            uint32_t b = roadBase + static_cast<uint32_t>(i * 2);
+            indices.push_back(b); indices.push_back(b + 2); indices.push_back(b + 1);
+            indices.push_back(b + 1); indices.push_back(b + 2); indices.push_back(b + 3);
+        }
+    }
+
+    // Cross-Avenue Asphalt
+    appendQuadXZ(verts, indices, {0.0f, 0.028f, 25.0f}, 11.0f, 130.0f, 0.0f, roadCol, 0.0f, SemanticClass::Static);
+
+    // Lane dashes and edges
+    const Vec3 dashCol{0.945f, 0.961f, 0.976f};
+    const Vec3 curbCol{0.961f, 0.620f, 0.043f};
+    for (int i = 0; i < samples; ++i) {
+        float u = static_cast<float>(i) / static_cast<float>(samples);
+        Vec3 pt = centerline_.getPointAt(u);
+        Vec3 tan = centerline_.getTangentAt(u);
+        Vec3 left{-tan.z, 0.0f, tan.x};
+        float yaw = std::atan2(tan.x, tan.z);
+        if (std::abs(pt.x) < 7.5f && std::abs(pt.z - kLoopHalfZ) < 7.5f) continue;
+
+        if (i % 2 == 0) {
+            appendQuadXZ(verts, indices, {pt.x, 0.045f, pt.z}, 0.16f, 1.4f, yaw, dashCol, 0.1f, SemanticClass::Static);
+        }
+        Vec3 edgeL = pt + left * (roadWidth * 0.46f);
+        Vec3 edgeR = pt - left * (roadWidth * 0.46f);
+        appendQuadXZ(verts, indices, {edgeL.x, 0.042f, edgeL.z}, 0.14f, 1.9f, yaw, curbCol, 0.1f, SemanticClass::Curb);
+        appendQuadXZ(verts, indices, {edgeR.x, 0.042f, edgeR.z}, 0.14f, 1.9f, yaw, dashCol, 0.1f, SemanticClass::Static);
+    }
+
+    // Stop Bar & Crosswalks
+    appendQuadXZ(verts, indices, {kStopLineX, 0.05f, kLoopHalfZ}, 0.6f, 8.6f, 0.0f, dashCol, 0.15f, SemanticClass::Static);
+    for (float zOff = -3.8f; zOff <= 3.81f; zOff += 1.25f) {
+        appendQuadXZ(verts, indices, {-7.6f, 0.05f, kLoopHalfZ + zOff}, 2.6f, 0.65f, 0.0f, dashCol, 0.12f, SemanticClass::Static);
+        appendQuadXZ(verts, indices, {17.5f, 0.05f, -kLoopHalfZ + zOff}, 2.6f, 0.65f, 0.0f, dashCol, 0.12f, SemanticClass::Static);
+    }
+
+    // Traffic light cylindrical mast arm pole & housings
+    const Vec3 poleCol{0.20f, 0.255f, 0.333f};
+    const Vec3 housingCol{0.059f, 0.090f, 0.165f};
+    appendCylinderY(verts, indices, Mat4::translation({6.5f, 3.1f, kLoopHalfZ - 6.2f}), 0.16f, 0.22f, 6.2f, 16, poleCol, 1.0f, 0.0f, SemanticClass::SignalSign);
+    appendCylinderY(verts, indices, Mat4::translation({6.5f, 5.9f, kLoopHalfZ - 2.6f}) * Mat4::rotX(kPi * 0.5f), 0.12f, 0.15f, 7.6f, 12, poleCol, 1.0f, 0.0f, SemanticClass::SignalSign);
+    for (const float zArm : {3.2f, 6.2f}) {
+        appendBox(verts, indices, Mat4::translation({6.4f, 5.4f, kLoopHalfZ - 6.2f + zArm}),
+                  {0.42f, 1.25f, 0.45f}, housingCol, 1.0f, 0.0f, SemanticClass::SignalSign);
+    }
+
+    // Overhanging Pedestrian Gantry
+    appendBox(verts, indices, Mat4::translation({kLoopHalfX - 6.0f, 2.6f, 0.0f}), {0.9f, 5.2f, 1.2f}, poleCol, 1.0f, 0.0f, SemanticClass::Static);
+    appendBox(verts, indices, Mat4::translation({kLoopHalfX + 6.0f, 2.6f, 0.0f}), {0.9f, 5.2f, 1.2f}, poleCol, 1.0f, 0.0f, SemanticClass::Static);
+    appendBox(verts, indices, Mat4::translation({kLoopHalfX, 4.75f, 0.0f}), {13.2f, 0.95f, 1.6f}, {0.278f, 0.333f, 0.412f}, 1.0f, 0.0f, SemanticClass::Overhang);
+
+    // Road signs (STOP octagon-style & SPEED LIMIT 35) with cylindrical posts
+    auto addSign = [&](float x, float z, float rotY, Vec3 boardCol, bool stopOct) {
+        const Mat4 base = Mat4::translation({x, 0.0f, z}) * Mat4::rotY(rotY);
+        appendCylinderY(verts, indices, base * Mat4::translation({0.0f, 1.35f, 0.0f}), 0.055f, 0.065f, 2.7f, 10, poleCol, 1.0f, 0.0f, SemanticClass::SignalSign);
+        if (stopOct) {
+            appendCylinderY(verts, indices, base * Mat4::translation({0.0f, 2.45f, 0.0f}) * Mat4::rotX(kPi * 0.5f), 0.52f, 0.52f, 0.08f, 8, boardCol, 1.0f, 0.35f, SemanticClass::SignalSign);
+        } else {
+            appendBox(verts, indices, base * Mat4::translation({0.0f, 2.45f, 0.0f}), {0.90f, 1.05f, 0.08f}, boardCol, 1.0f, 0.35f, SemanticClass::SignalSign);
+        }
+    };
+    addSign(12.5f, -kLoopHalfZ - 5.6f, kPi * 0.5f, {0.86f, 0.15f, 0.15f}, true);
+    addSign(-34.0f, kLoopHalfZ + 5.6f, -kPi * 0.5f, {0.96f, 0.98f, 0.99f}, false);
+
+    // Buildings + subtle window strips for real gradient texture in camera images
+    for (const auto& b : buildingDefs()) {
+        appendBox(verts, indices, Mat4::translation({b.x, b.h * 0.5f, b.z}), {b.w, b.h, b.d}, b.baseCol, 1.0f, 0.0f, SemanticClass::Static);
+        for (float wy = 2.5f; wy < b.h - 1.5f; wy += 3.2f) {
+            appendBox(verts, indices, Mat4::translation({b.x, wy, b.z}), {b.w + 0.08f, 1.1f, b.d + 0.08f}, b.winCol, 1.0f, 0.25f, SemanticClass::Static);
+        }
+    }
+
+    // Concrete Barriers
+    for (float z = -22.0f; z <= 22.0f; z += 4.5f) {
+        appendBox(verts, indices, Mat4::translation({-kLoopHalfX - 5.4f, 0.45f, z}), {0.6f, 0.9f, 3.8f}, {0.39f, 0.45f, 0.55f}, 1.0f, 0.0f, SemanticClass::Curb);
+    }
+}
+
+void WorldEngine::appendDynamicGeometry(std::vector<SceneVertex>& verts, std::vector<uint32_t>& indices,
+                                        bool fsdWireMode, bool includeEgo) const {
+    // 1. Dynamic Traffic Light Lenses (spherical emissive lenses, ALWAYS visible even in FSD mode)
+    for (const float zArm : {3.2f, 6.2f}) {
+        const Vec3 rCol = (signalPhase_ == SignalPhase::Red) ? Vec3{0.96f, 0.24f, 0.24f} : Vec3{0.25f, 0.05f, 0.07f};
+        const Vec3 yCol = (signalPhase_ == SignalPhase::Yellow) ? Vec3{0.98f, 0.64f, 0.05f} : Vec3{0.26f, 0.13f, 0.02f};
+        const Vec3 gCol = (signalPhase_ == SignalPhase::Green) ? Vec3{0.08f, 0.78f, 0.52f} : Vec3{0.02f, 0.18f, 0.09f};
+        const float rEm = (signalPhase_ == SignalPhase::Red) ? 2.6f : 0.0f;
+        const float yEm = (signalPhase_ == SignalPhase::Yellow) ? 2.6f : 0.0f;
+        const float gEm = (signalPhase_ == SignalPhase::Green) ? 2.6f : 0.0f;
+        const float zW = kLoopHalfZ - 6.2f + zArm;
+        appendSphere(verts, indices, Mat4::translation({6.18f, 5.78f, zW}), 0.14f, 8, 12, rCol, 1.0f, rEm, SemanticClass::SignalSign);
+        appendSphere(verts, indices, Mat4::translation({6.18f, 5.40f, zW}), 0.14f, 8, 12, yCol, 1.0f, yEm, SemanticClass::SignalSign);
+        appendSphere(verts, indices, Mat4::translation({6.18f, 5.02f, zW}), 0.14f, 8, 12, gCol, 1.0f, gEm, SemanticClass::SignalSign);
+    }
+
+    // 2. Ego Tesla Cybercab (matched to real Robotaxi fastback coupe profile & solid gold aero wheel covers)
