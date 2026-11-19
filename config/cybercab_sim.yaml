@@ -1,0 +1,167 @@
+# ==============================================================================
+# Tesla Cybercab 8-Camera Vision, Deep Perception & Multi-Body Physics Config
+# ==============================================================================
+
+simulation:
+  control_hz: 36.0
+  cam_width: 320
+  cam_height: 240
+  full_cam_width: 640
+  full_cam_height: 480
+  initial_res_mode: "half"       # "half" (320x240) | "full" (640x480)
+  initial_view_mode: "chase"     # "chase" (3D Twin) | "fsd" (FSD Voxel) | "bev" (BEV Tactical)
+  initial_cam_overlay: "neural"  # "neural" | "rgb" | "calib" | "features" | "reproj"
+  drive_mode: "auto"             # "auto" | "manual"
+  aeb_enabled: true
+  use_vulkan_validation: false
+
+perception:
+  # Feature & Transformer dimensions (pure Vulkan compute shaders)
+  backbone:
+    feat_width: 40               # Downsampled FPN feature grid width (from 320x240 -> 8x stride)
+    feat_height: 30              # Downsampled FPN feature grid height
+    channels: 16                 # Feature channels per spatial token
+  soil_detector:
+    patch_cols: 10               # Spatial patch grid columns per camera
+    patch_rows: 8                # Spatial patch grid rows per camera
+    edge_threshold: 0.045        # Low gradient energy indicates blur / mud occlusion
+    glare_threshold: 0.82        # Over-bright / hazy saturation indicator
+    min_token_weight: 0.12       # Minimum transformer token weight when fully soiled
+    base_epistemic_var: 0.04     # Base normalized variance sigma_0^2
+    soil_var_gain: 0.85          # Variance inflation scale for soiled lenses
+  rtdetr:
+    num_queries: 16              # Top-K object queries per camera (total 8 * 16 = 128 max)
+    num_decoder_layers: 2
+    high_conf_thresh: 0.52       # ByteTrack stage-1 high-confidence detection threshold
+    low_conf_thresh: 0.24        # ByteTrack stage-2 low-confidence detection threshold
+    nms_iou_thresh: 0.45
+    max_det_range_m: 65.0
+  bytetrack:
+    max_tracks: 64
+    max_time_lost_sec: 1.5
+    high_match_dist_m: 3.5
+    low_match_dist_m: 4.5
+    process_noise_pos: 0.18
+    process_noise_vel: 0.85
+    base_meas_noise_m: 0.45      # Multiplied by 1 / max(cam_weight, 0.12)
+  bevformer:
+    grid_nx: 60                  # X in [-22, 38] m -> 1.0 m/cell
+    grid_ny: 40                  # Y in [-20, 20] m -> 1.0 m/cell
+    min_x: -22.0
+    max_x: 38.0
+    min_y: -20.0
+    max_y: 20.0
+    z_anchors: [0.45, 1.05, 1.75, 2.65]
+    channels: 16
+    temporal_blend: 0.58         # Temporal self-attention retention weight across ego-warped frames
+  occupancy_flow:
+    min_x: -22.0
+    max_x: 38.0
+    step_x: 1.0                  # 60 bins
+    min_y: -20.0
+    max_y: 20.0
+    step_y: 1.0                  # 40 bins
+    min_z: 0.25
+    max_z: 4.25
+    step_z: 0.5                  # 8 bins
+    confidence_decay_rate: 1.15
+    occ_threshold: 0.38
+    enable_shadows: true
+  world_model:
+    horizons_sec: [0.5, 1.0, 1.5, 2.0]
+    uncertainty_growth_rate: 0.55
+
+planning:
+  target_cruise_speed_ms: 10.5
+  num_candidates: 9
+  traj_steps: 24
+  rss:
+    t_react_sec: 0.25
+    a_brake_rss_ms2: 6.5
+    a_brake_aeb_ms2: 8.5
+    d_buffer_m: 2.6
+    uncertainty_buffer_gain: 1.8 # Extra stopping buffer per unit forward epistemic sigma
+
+vehicle:
+  wheelbase_m: 2.75
+  max_steer_rad: 0.54
+  half_width_m: 0.96
+  half_height_m: 0.70
+  half_length_m: 2.19
+  center_offset_fwd_m: 1.25
+  suspension_k_spring: 68.0
+  suspension_c_damper: 11.5
+
+cameras:
+  - id: "CAM_FRONT_MAIN"
+    short_name: "FRONT MAIN"
+    hfov_deg: 50.0
+    max_range_m: 58.0
+    pos_iso: [1.48, 0.00, 1.42]
+    rpy_deg: [0.0, -1.5, 0.0]
+    distortion: [-0.062, 0.014, 0.0002, -0.0001]
+    color: [0.220, 0.741, 0.973]
+    desc: "Windshield Header Primary Forward Imager (50 deg HFOV)"
+  - id: "CAM_FRONT_NARROW"
+    short_name: "FRONT NARROW"
+    hfov_deg: 28.0
+    max_range_m: 85.0
+    pos_iso: [1.49, -0.07, 1.42]
+    rpy_deg: [0.0, -0.8, 0.0]
+    distortion: [-0.018, 0.004, 0.0001, 0.0001]
+    color: [0.984, 0.749, 0.141]
+    desc: "Long-Range Telephoto Imager for Signals & Horizon (28 deg HFOV)"
+  - id: "CAM_FRONT_WIDE"
+    short_name: "FRONT WIDE"
+    hfov_deg: 120.0
+    max_range_m: 36.0
+    pos_iso: [1.49, 0.07, 1.42]
+    rpy_deg: [0.0, -3.5, 0.0]
+    distortion: [-0.245, 0.072, -0.0004, 0.0002]
+    color: [0.204, 0.827, 0.600]
+    desc: "Wide Fisheye Crosswalk, Cut-In & Intersection Imager (120 deg HFOV)"
+  - id: "CAM_PILLAR_LEFT"
+    short_name: "PILLAR L"
+    hfov_deg: 90.0
+    max_range_m: 38.0
+    pos_iso: [0.65, 0.84, 1.30]
+    rpy_deg: [0.0, -3.0, 55.0]
+    distortion: [-0.112, 0.024, 0.0002, 0.0001]
+    color: [0.655, 0.545, 0.980]
+    desc: "Left B-Pillar Forward-Oblique Cross-Traffic Imager (90 deg HFOV)"
+  - id: "CAM_PILLAR_RIGHT"
+    short_name: "PILLAR R"
+    hfov_deg: 90.0
+    max_range_m: 38.0
+    pos_iso: [0.65, -0.84, 1.30]
+    rpy_deg: [0.0, -3.0, -55.0]
+    distortion: [-0.112, 0.024, -0.0002, 0.0001]
+    color: [0.655, 0.545, 0.980]
+    desc: "Right B-Pillar Forward-Oblique Curb & Pedestrian Imager (90 deg HFOV)"
+  - id: "CAM_REPEATER_LEFT"
+    short_name: "REPEATER L"
+    hfov_deg: 85.0
+    max_range_m: 34.0
+    pos_iso: [1.72, 0.88, 0.78]
+    rpy_deg: [0.0, -2.5, 138.0]
+    distortion: [-0.105, 0.022, 0.0001, -0.0002]
+    color: [0.957, 0.447, 0.714]
+    desc: "Left Front Fender Rearward Blind-Spot & Lane-Change Imager (85 deg HFOV)"
+  - id: "CAM_REPEATER_RIGHT"
+    short_name: "REPEATER R"
+    hfov_deg: 85.0
+    max_range_m: 34.0
+    pos_iso: [1.72, -0.88, 0.78]
+    rpy_deg: [0.0, -2.5, -138.0]
+    distortion: [-0.105, 0.022, -0.0001, -0.0002]
+    color: [0.957, 0.447, 0.714]
+    desc: "Right Front Fender Rearward Blind-Spot & Curb Imager (85 deg HFOV)"
+  - id: "CAM_REAR"
+    short_name: "REAR"
+    hfov_deg: 100.0
+    max_range_m: 38.0
+    pos_iso: [-1.15, 0.00, 1.12]
+    rpy_deg: [0.0, -5.0, 180.0]
+    distortion: [-0.165, 0.038, 0.0000, 0.0003]
+    color: [0.984, 0.443, 0.522]
+    desc: "Rear Decklid Surround & Following-Traffic Imager (100 deg HFOV)"
