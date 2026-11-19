@@ -13,9 +13,6 @@ cybercab_preview.bmp
 *.ppm
 *.bmp
 
-# Legacy root starter scratch file
-/main.cpp
-
 # IDE / editor files
 .vscode/
 .idea/
