@@ -1,0 +1,93 @@
+#version 450
+
+// Stage 5a: BEVFormer Temporal Self-Attention (Ego-Motion Warping of Past BEV Feature Map)
+// Grid: 60 x 40 cells (X_ego in [-22, 38], Y_ego in [-20, 20]), 16 channels (4 vec4) per cell.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer PrevBevFeatIn {
+    vec4 feat[]; // [ny][nx][4]
+} uPrevBevFeat;
+
+layout(std430, binding = 1) readonly buffer PrevBevMetaIn {
+    vec4 meta[]; // [ny][nx]: vec4(obsWeight, epistemicVar, temporalAge, flowConf)
+} uPrevBevMeta;
+
+layout(std430, binding = 2) writeonly buffer WarpedBevFeatOut {
+    vec4 feat[];
+} uWarpedBevFeat;
+
+layout(std430, binding = 3) writeonly buffer WarpedBevMetaOut {
+    vec4 meta[];
+} uWarpedBevMeta;
+
+layout(push_constant) uniform BevTemporalPC {
+    mat4 prevEgoFromCurrEgo; // Transforms ISO Ego_t -> ISO Ego_{t-1}
+    uint nx;
+    uint ny;
+    float minX;
+    float maxX;
+    float minY;
+    float maxY;
+    float temporalBlend;
+    float dt;
+} pc;
+
+vec4 samplePrevFeat(float fx, float fy, uint slot) {
+    int x0 = int(floor(fx));
+    int y0 = int(floor(fy));
+    int x1 = x0 + 1;
+    int y1 = y0 + 1;
+    float ax = fx - float(x0);
+    float ay = fy - float(y0);
+
+    if (x0 < 0 || y0 < 0 || x1 >= int(pc.nx) || y1 >= int(pc.ny)) {
+        int cx = clamp(int(round(fx)), 0, int(pc.nx) - 1);
+        int cy = clamp(int(round(fy)), 0, int(pc.ny) - 1);
+        return uPrevBevFeat.feat[(uint(cy) * pc.nx + uint(cx)) * 4u + slot];
+    }
+
+    vec4 v00 = uPrevBevFeat.feat[(uint(y0) * pc.nx + uint(x0)) * 4u + slot];
+    vec4 v10 = uPrevBevFeat.feat[(uint(y0) * pc.nx + uint(x1)) * 4u + slot];
+    vec4 v01 = uPrevBevFeat.feat[(uint(y1) * pc.nx + uint(x0)) * 4u + slot];
+    vec4 v11 = uPrevBevFeat.feat[(uint(y1) * pc.nx + uint(x1)) * 4u + slot];
+    return mix(mix(v00, v10, ax), mix(v01, v11, ax), ay);
+}
+
+void main() {
+    uint ix = gl_GlobalInvocationID.x;
+    uint iy = gl_GlobalInvocationID.y;
+    if (ix >= pc.nx || iy >= pc.ny) return;
+
+    float stepX = (pc.maxX - pc.minX) / float(pc.nx);
+    float stepY = (pc.maxY - pc.minY) / float(pc.ny);
+    float egoX = pc.minX + (float(ix) + 0.5) * stepX;
+    float egoY = pc.minY + (float(iy) + 0.5) * stepY;
+
+    // Warp current BEV cell center into previous frame's ego coordinate frame
+    vec4 pPrev = pc.prevEgoFromCurrEgo * vec4(egoX, egoY, 0.0, 1.0);
+    float fx = (pPrev.x - pc.minX) / stepX - 0.5;
+    float fy = (pPrev.y - pc.minY) / stepY - 0.5;
+
+    uint outBase = (iy * pc.nx + ix) * 4u;
+    bool inBounds = (fx >= 0.0 && fx <= float(pc.nx - 1u) && fy >= 0.0 && fy <= float(pc.ny - 1u));
+    if (!inBounds) {
+        for (uint s = 0u; s < 4u; ++s) {
+            uWarpedBevFeat.feat[outBase + s] = vec4(0.0);
+        }
+        uWarpedBevMeta.meta[iy * pc.nx + ix] = vec4(0.0, 1.0, 0.0, 0.0);
+        return;
+    }
+
+    int cx = clamp(int(round(fx)), 0, int(pc.nx) - 1);
+    int cy = clamp(int(round(fy)), 0, int(pc.ny) - 1);
+    vec4 prevMeta = uPrevBevMeta.meta[uint(cy) * pc.nx + uint(cx)];
+
+    // Decay temporal memory slightly each frame & propagate epistemic uncertainty over time
+    float decayedObs = prevMeta.x * exp(-pc.dt * 0.95);
+    float grownVar = min(1.0, prevMeta.y + pc.dt * 0.28);
+
+    for (uint s = 0u; s < 4u; ++s) {
+        uWarpedBevFeat.feat[outBase + s] = samplePrevFeat(fx, fy, s) * pc.temporalBlend;
+    }
+    uWarpedBevMeta.meta[iy * pc.nx + ix] = vec4(decayedObs, grownVar, prevMeta.z + pc.dt, prevMeta.w);
+}
