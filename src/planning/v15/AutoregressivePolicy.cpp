@@ -79,6 +79,7 @@ void AutoregressivePolicy::plan(const SimConfig& cfg, WorldEngine& world,
     const float totalLoopLen = centerline.getLength(), loopU = world.findClosestLoopU(ego.pos);
     const Vec3 curTan = centerline.getTangentAt(loopU);
     const float currentLat = (ego.pos - centerline.getPointAt(loopU)).dot({curTan.z, 0.0f, -curTan.x});
+    const float latHeading = (std::sin(ego.yaw) * curTan.z) - (std::cos(ego.yaw) * curTan.x);
     const float lookaheadDist = std::max(acfg.lookaheadMinM, std::max(0.0f, ego.speed) * 1.9f + 7.0f);
     const int trajSteps = std::max(8, cfg.trajSteps);
     const bool sirenYield = (perc.v15.sirenDetected && perc.v15.sirenConfidence > 0.35f);
@@ -95,7 +96,12 @@ void AutoregressivePolicy::plan(const SimConfig& cfg, WorldEngine& world,
         candOffsets[c] = sirenYield ? -2.05f : computeTruckShyOffset(baseLats[c], ego, perc.tracks);
         rolloutMiddleOfLane(ego, centerline, loopU, currentLat, candOffsets[c], trajSteps, lookaheadDist,
                             cmd.candidateTrajectories[c], candKappa[c]);
-        float cost = (c == 1) ? (sirenYield ? 1e4f : 12.0f) : 0.0f;
+        float cost = (c == 1) ? (sirenYield ? 1e4f : 36.0f) : 0.0f;
+        cost += std::abs(candOffsets[c] - currentLat) * 4.5f;
+        if (!sirenYield && std::abs(currentLat) < 1.50f) {
+            if (latHeading > 0.04f && c == 0) cost += 55.0f;
+            if (latHeading < -0.04f && c == 1) cost += 55.0f;
+        }
         for (int s = 1; s < trajSteps; ++s) {
             const float distAlong = (static_cast<float>(s) / static_cast<float>(trajSteps - 1)) * lookaheadDist;
             const float tPred = distAlong / std::max(4.0f, std::abs(ego.speed));
@@ -139,9 +145,10 @@ void AutoregressivePolicy::plan(const SimConfig& cfg, WorldEngine& world,
                                 std::max(32.0f, rssDist + 4.0f), corrPts, corrArc);
     const float cruiseSpd = std::min(cfg.targetCruiseSpeedMs * clampf(1.0f - 0.38f * excessSigma, 0.55f, 1.0f),
                                      std::sqrt(acfg.maxLatAccelMs2 / std::max(candKappa[bestIdx], 0.015f)));
+    const bool activelyCrossing = (bestIdx == 1 && currentLat < 1.65f) || (std::abs(std::abs(currentLat) - 1.95f) > 0.30f);
     const SafetyEvalOutput safe = evaluateAutoregSafety(world,
         {cfg, ego, perc, corrPts, corrArc, rssDist, candLeadGap[bestIdx], sirenYield, staticBlocked[0] && staticBlocked[1]},
-        (bestIdx == 1) ? "LANE_CHANGE_OVERTAKE" : "CRUISING", cruiseSpd);
+        activelyCrossing ? "LANE_CHANGE_OVERTAKE" : "CRUISING", cruiseSpd);
 
     cmd.gear = safe.gear;
     cmd.minObstacleDist = safe.minForwardObsDist;
