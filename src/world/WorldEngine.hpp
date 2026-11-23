@@ -3,6 +3,7 @@
 #include "config/SimConfig.hpp"
 #include "world/RoadCurve.hpp"
 #include "world/WorldTypes.hpp"
+#include <array>
 #include <vector>
 
 namespace cybercab {
@@ -19,6 +20,22 @@ struct EmergencySirenState {
     Vec3 vel{};
     float phase = 0.0f;
     float baseFreqHz = 780.0f;
+};
+
+struct UnknownObstacleSpec {
+  static constexpr float kDefaultHalfX = 0.75f;
+  static constexpr float kDefaultHalfY = 0.55f;
+  static constexpr float kDefaultHalfZ = 0.75f;
+  static constexpr float kDefaultColR = 0.84f;
+  static constexpr float kDefaultColG = 0.48f;
+  static constexpr float kDefaultColB = 0.12f;
+
+  std::string id;
+  float cx = 0.0f, cy = kDefaultHalfY, cz = 0.0f;
+  float hx = kDefaultHalfX, hy = kDefaultHalfY, hz = kDefaultHalfZ;
+  float yaw = 0.0f;
+  Vec3 color{kDefaultColR, kDefaultColG, kDefaultColB};
+  bool hazardStripe = true;
 };
 
 class WorldEngine {
@@ -39,6 +56,15 @@ public:
     void triggerLeadHardBrake();
     void triggerEmergencySiren();
     void setForcedRedSignal(bool forcedRed);
+  void setSplitSignalPhase(SignalPhase lane0Phase, SignalPhase lane1Phase);
+  void clearSplitSignalPhase();
+  bool hasSplitSignalPhase() const { return splitSignalActive_; }
+  SignalPhase signalPhaseForLane(int lane) const;
+  void addUnknownRoadObstacle(const UnknownObstacleSpec& obs);
+  void clearUnknownRoadObstacles();
+  const std::vector<UnknownObstacleSpec>& unknownObstacles() const {
+    return unknownObstacles_;
+  }
 
     // Deterministic SAT & Capsule geometry queries (also tested directly)
     static SatHit checkSAT_OBB(const OBB& a, const OBB& b);
@@ -91,6 +117,10 @@ private:
     SignalPhase signalPhase_ = SignalPhase::Green;
     float signalTimer_ = 0.0f;
     bool forcedRed_ = false;
+  bool splitSignalActive_ = false;
+  std::array<SignalPhase, 2> splitSignalPhases_{SignalPhase::Green,
+                                                SignalPhase::Green};
+  std::vector<UnknownObstacleSpec> unknownObstacles_;
 
     ContactEvent lastContact_{};
     float contactFlashAlpha_ = 0.0f;

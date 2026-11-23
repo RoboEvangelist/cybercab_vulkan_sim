@@ -357,6 +357,9 @@ void WorldEngine::reset() {
     signalPhase_ = SignalPhase::Green;
     signalTimer_ = 0.0f;
     forcedRed_ = false;
+  splitSignalActive_ = false;
+  splitSignalPhases_ = {SignalPhase::Green, SignalPhase::Green};
+  unknownObstacles_.clear();
     lastContact_ = {};
     contactFlashAlpha_ = 0.0f;
     siren_ = {};
@@ -663,6 +666,27 @@ void WorldEngine::stepMultiBodyCollisionSolver() {
             egoOBB = getEgoWorldOBB();
         }
     }
+  constexpr float kPushPadM = 0.04f, kContactSpdScale = 0.1f;
+  constexpr float kContactPitch = 0.22f, kContactHoldSec = 1.0f;
+  constexpr float kFlashBackM = 1.5f, kFlashHeightM = 0.3f;
+  for (const auto& uo : unknownObstacles_) {
+    const OBB uOBB{uo.id, uo.cx, uo.cy, uo.cz, uo.hx, uo.hy, uo.hz, uo.yaw,
+                   0.0f, 0.0f, SemanticClass::Static, ""};
+    const SatHit hit = checkSAT_OBB(egoOBB, uOBB);
+    if (hit.hit) {
+      ego_.pos.x += hit.normal.x * (hit.overlap + kPushPadM);
+      ego_.pos.z += hit.normal.y * (hit.overlap + kPushPadM);
+      ego_.speed *= kContactSpdScale;
+      ego_.pitchRate += kContactPitch;
+      ego_.collisionHoldTimer = kContactHoldSec;
+      contactFlashPos_ = {egoOBB.cx - hit.normal.x * kFlashBackM,
+                          kFlashHeightM,
+                          egoOBB.cz - hit.normal.y * kFlashBackM};
+      contactFlashAlpha_ = 1.0f;
+      lastContact_ = {true, contactFlashPos_, uo.id, hit.overlap};
+      egoOBB = getEgoWorldOBB();
+    }
+  }
 }
 
 void WorldEngine::stepAgents(float dt) {
@@ -1058,6 +1082,27 @@ void WorldEngine::setForcedRedSignal(bool forcedRed) {
     if (forcedRed) signalPhase_ = SignalPhase::Red;
 }
 
+void WorldEngine::setSplitSignalPhase(SignalPhase lane0Phase,
+                                      SignalPhase lane1Phase) {
+  splitSignalActive_ = true;
+  splitSignalPhases_[0] = lane0Phase;
+  splitSignalPhases_[1] = lane1Phase;
+  forcedRed_ = false;
+  signalPhase_ = lane0Phase;
+}
+
+void WorldEngine::clearSplitSignalPhase() { splitSignalActive_ = false; }
+
+SignalPhase WorldEngine::signalPhaseForLane(int lane) const {
+  return splitSignalActive_ ? splitSignalPhases_[lane & 1] : signalPhase_;
+}
+
+void WorldEngine::addUnknownRoadObstacle(const UnknownObstacleSpec& obs) {
+  unknownObstacles_.push_back(obs);
+}
+
+void WorldEngine::clearUnknownRoadObstacles() { unknownObstacles_.clear(); }
+
 void WorldEngine::buildStaticWorldGeometry(std::vector<SceneVertex>& verts, std::vector<uint32_t>& indices) const {
     verts.clear();
     indices.clear();
@@ -1161,13 +1206,24 @@ void WorldEngine::buildStaticWorldGeometry(std::vector<SceneVertex>& verts, std:
 void WorldEngine::appendDynamicGeometry(std::vector<SceneVertex>& verts, std::vector<uint32_t>& indices,
                                         bool fsdWireMode, bool includeEgo) const {
     // 1. Dynamic Traffic Light Lenses (spherical emissive lenses, ALWAYS visible even in FSD mode)
-    for (const float zArm : {3.2f, 6.2f}) {
-        const Vec3 rCol = (signalPhase_ == SignalPhase::Red) ? Vec3{0.96f, 0.24f, 0.24f} : Vec3{0.25f, 0.05f, 0.07f};
-        const Vec3 yCol = (signalPhase_ == SignalPhase::Yellow) ? Vec3{0.98f, 0.64f, 0.05f} : Vec3{0.26f, 0.13f, 0.02f};
-        const Vec3 gCol = (signalPhase_ == SignalPhase::Green) ? Vec3{0.08f, 0.78f, 0.52f} : Vec3{0.02f, 0.18f, 0.09f};
-        const float rEm = (signalPhase_ == SignalPhase::Red) ? 2.6f : 0.0f;
-        const float yEm = (signalPhase_ == SignalPhase::Yellow) ? 2.6f : 0.0f;
-        const float gEm = (signalPhase_ == SignalPhase::Green) ? 2.6f : 0.0f;
+  constexpr float kSplitHeadLaneZThreshM = 4.5f;
+  constexpr float kStripeOffYM = 0.12f, kStripePadM = 0.04f;
+  constexpr float kStripeHFrac = 0.34f, kStripeEmis = 0.15f;
+  const Vec3 kStripeCol{0.96f, 0.94f, 0.90f};
+  for (const float zArm : {3.2f, 6.2f}) {
+        const SignalPhase ph =
+          signalPhaseForLane((zArm < kSplitHeadLaneZThreshM) ? 1 : 0);
+        const Vec3 rCol = (ph == SignalPhase::Red) ? Vec3{0.96f, 0.24f, 0.24f}
+                                                   : Vec3{0.25f, 0.05f, 0.07f};
+        const Vec3 yCol = (ph == SignalPhase::Yellow)
+                            ? Vec3{0.98f, 0.64f, 0.05f}
+                            : Vec3{0.26f, 0.13f, 0.02f};
+        const Vec3 gCol = (ph == SignalPhase::Green)
+                            ? Vec3{0.08f, 0.78f, 0.52f}
+                            : Vec3{0.02f, 0.18f, 0.09f};
+        const float rEm = (ph == SignalPhase::Red) ? 2.6f : 0.0f;
+        const float yEm = (ph == SignalPhase::Yellow) ? 2.6f : 0.0f;
+        const float gEm = (ph == SignalPhase::Green) ? 2.6f : 0.0f;
         const float zW = kLoopHalfZ - 6.2f + zArm;
         appendSphere(verts, indices, Mat4::translation({6.18f, 5.78f, zW}), 0.14f, 8, 12, rCol, 1.0f, rEm, SemanticClass::SignalSign);
         appendSphere(verts, indices, Mat4::translation({6.18f, 5.40f, zW}), 0.14f, 8, 12, yCol, 1.0f, yEm, SemanticClass::SignalSign);
@@ -1180,6 +1236,20 @@ void WorldEngine::appendDynamicGeometry(std::vector<SceneVertex>& verts, std::ve
     }
 
     if (fsdWireMode) return;
+
+  for (const auto& uo : unknownObstacles_) {
+    const Mat4 um =
+      Mat4::translation({uo.cx, uo.cy, uo.cz}) * Mat4::rotY(uo.yaw);
+    appendBox(verts, indices, um, {uo.hx * 2.0f, uo.hy * 2.0f, uo.hz * 2.0f},
+              uo.color, 1.0f, 0.0f, SemanticClass::Static);
+    if (uo.hazardStripe) {
+      appendBox(verts, indices,
+                um * Mat4::translation({0.0f, kStripeOffYM, 0.0f}),
+                {uo.hx * 2.0f + kStripePadM, uo.hy * kStripeHFrac,
+                 uo.hz * 2.0f + kStripePadM},
+                kStripeCol, 1.0f, kStripeEmis, SemanticClass::Static);
+    }
+  }
 
     // 3. AI Traffic Vehicles (tapered cabins, glass, wheel assemblies, emissive headlights & taillights)
     for (const auto& v : vehicles_) {
