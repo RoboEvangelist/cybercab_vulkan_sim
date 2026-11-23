@@ -33,12 +33,20 @@ V15PolicyConfig V15PolicyConfig::loadFromYaml(const std::string& path) {
         rdF(n, "heading_commit_thresh", c.headingCommitThresh);
         rdF(n, "heading_commit_cost", c.headingCommitCost);
         rdF(n, "crossing_dev_thresh_m", c.crossingDevThreshM);
+        rdF(n, "intersection_lane_lock_cost", c.intersectionLaneLockCost);
+        rdF(n, "blind_spot_rear_gap_m", c.blindSpotRearGapM); rdF(n, "blind_spot_fwd_gap_m", c.blindSpotFwdGapM);
+        rdF(n, "blind_spot_closing_time_s", c.blindSpotClosingTimeS); rdF(n, "blind_spot_lat_pad_m", c.blindSpotLatPadM);
+        rdF(n, "blind_spot_block_cost", c.blindSpotBlockCost); rdF(n, "obb_hull_sample_scale", c.obbHullSampleScale);
+        rdF(n, "veh_clearance_pad_m", c.vehClearancePadM);
     }
     if (const auto n = r["safety_shield"]) {
         rdF(n, "track_corridor_veh_m", c.trackCorridorVehM); rdF(n, "track_corridor_ped_m", c.trackCorridorPedM);
         rdF(n, "voxel_corridor_veh_m", c.voxelCorridorVehM); rdF(n, "voxel_corridor_ped_m", c.voxelCorridorPedM);
         rdF(n, "voxel_min_conf", c.voxelMinConf); rdF(n, "adj_veh_voxel_suppress_m", c.adjVehVoxelSuppressM);
-        rdF(n, "adj_veh_track_min_lat_m", c.adjVehTrackMinLatM); rdF(n, "siren_conf_thresh", c.sirenConfThresh);
+        rdF(n, "adj_veh_track_min_lat_m", c.adjVehTrackMinLatM); rdF(n, "veh_hull_safety_pad_m", c.vehHullSafetyPadM);
+        rdF(n, "min_hard_aeb_dist_m", c.minHardAebDistM); rdF(n, "aeb_rss_frac", c.aebRssFrac);
+        rdF(n, "aeb_rel_speed_min_ms", c.aebRelSpeedMinMs); rdF(n, "follow_ramp_span_m", c.followRampSpanM);
+        rdF(n, "follow_speed_gain", c.followSpeedGain); rdF(n, "siren_conf_thresh", c.sirenConfThresh);
         rdF(n, "siren_stop_conf_thresh", c.sirenStopConfThresh);
         rdF(n, "siren_yield_speed_ms", c.sirenYieldSpeedMs); rdF(n, "siren_right_pull_m", c.sirenRightPullM);
         rdF(n, "autoshift_min_rear_clear_m", c.autoshiftMinRearClearM);
@@ -50,7 +58,8 @@ V15PolicyConfig V15PolicyConfig::loadFromYaml(const std::string& path) {
         rdF(n, "sigma_gain", c.latentSigmaGain);
     }
     if (c.minLaneAbsM <= 0.0f || c.minLaneAbsM >= c.maxLaneAbsM || c.laneCenterAbsM < c.minLaneAbsM ||
-        c.laneCenterAbsM > c.maxLaneAbsM || c.latentSurpriseScale <= 0.0f || c.maxLatAccelMs2 <= 0.0f) {
+        c.laneCenterAbsM > c.maxLaneAbsM || c.latentSurpriseScale <= 0.0f || c.maxLatAccelMs2 <= 0.0f ||
+        c.obbHullSampleScale <= 0.0f || c.minHardAebDistM <= 0.0f || c.aebRssFrac <= 0.0f || c.aebRssFrac > 1.0f) {
         throw std::runtime_error("Invalid numeric bounds in V15PolicyConfig YAML");
     }
     return c;

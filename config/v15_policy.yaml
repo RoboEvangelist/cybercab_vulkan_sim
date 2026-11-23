@@ -30,6 +30,14 @@ lane_hysteresis:
   heading_commit_thresh: 0.03
   heading_commit_cost: 260.0
   crossing_dev_thresh_m: 0.45
+  intersection_lane_lock_cost: 1400.0
+  blind_spot_rear_gap_m: 3.60
+  blind_spot_fwd_gap_m: 4.80
+  blind_spot_closing_time_s: 2.00
+  blind_spot_lat_pad_m: 0.55
+  blind_spot_block_cost: 2600.0
+  obb_hull_sample_scale: 0.75
+  veh_clearance_pad_m: 0.35
 
 safety_shield:
   track_corridor_veh_m: 1.22
@@ -39,6 +47,12 @@ safety_shield:
   voxel_min_conf: 0.56
   adj_veh_voxel_suppress_m: 2.60
   adj_veh_track_min_lat_m: 1.30
+  veh_hull_safety_pad_m: 0.38
+  min_hard_aeb_dist_m: 1.85
+  aeb_rss_frac: 0.75
+  aeb_rel_speed_min_ms: 1.10
+  follow_ramp_span_m: 12.0
+  follow_speed_gain: 0.50
   siren_conf_thresh: 0.35
   siren_stop_conf_thresh: 0.55
   siren_yield_speed_ms: 1.20

@@ -28,6 +28,7 @@ struct CliArgs {
     std::string dumpDir;
     std::string carDumpPath;
     std::string resMode;
+    std::string pipelineVer;
 };
 
 CliArgs parseArgs(int argc, char** argv) {
@@ -42,8 +43,9 @@ CliArgs parseArgs(int argc, char** argv) {
         else if (a == "--dump-dir" && i + 1 < argc) args.dumpDir = argv[++i];
         else if (a == "--car-dump" && i + 1 < argc) args.carDumpPath = argv[++i];
         else if (a == "--res" && i + 1 < argc) args.resMode = argv[++i];
+        else if (a == "--pipeline" && i + 1 < argc) args.pipelineVer = argv[++i];
         else if (a == "--help" || a == "-h") {
-            std::cout << "Usage: cybercab_sim [--config path.yaml] [--headless] [--steps N] "
+            std::cout << "Usage: cybercab_sim [--config path.yaml] [--pipeline v14|v15] [--headless] [--steps N] "
                       << "[--scenario nominal|jaywalk|occluded|hardbrake|soil_front|siren] "
                       << "[--trace out.jsonl] [--dump-dir dir] [--car-dump out.bmp] [--res half|full]\n";
             std::exit(0);
@@ -79,6 +81,12 @@ int main(int argc, char** argv) {
                                 : cybercab::SimConfig::defaultConfig();
         if (!args.resMode.empty()) {
             cfg.initialResMode = args.resMode;
+        }
+        if (!args.pipelineVer.empty()) {
+            if (args.pipelineVer != "v14" && args.pipelineVer != "v15") {
+                throw std::runtime_error("--pipeline must be \"v14\" or \"v15\", got \"" + args.pipelineVer + "\"");
+            }
+            cfg.pipelineVersion = args.pipelineVer;
         }
 
         cybercab::WorldEngine world(cfg);

@@ -123,7 +123,7 @@ void V15Pipeline::finishBackEnd(const VulkanContext& ctx, const EgoState& ego,
              [&] { gaussianWorld_.dispatchRealitySplat(cmd, *cfg_, ego); });
     ctx.endSingleTimeCommands(cmd);
 
-    const LatentEvalResult lat = latentPred_.evaluate(patchTokenizer_, staticMem_);
+    const LatentEvalResult lat = latentPred_.evaluate(patchTokenizer_, staticMem_, cfg_->v15Policy);
     const Mat4 isoFromWorld = BEVFormer::worldFromIsoEgo(ego).inverseRigid();
     float rearClearM = 40.0f;
     for (const auto& g : gaussianWorld_.gaussians()) {

@@ -1,5 +1,6 @@
 #pragma once
 // FSD v15 Module 4: Self-supervised next-frame latent predictor & sparse/KV/FP16 compute telemetry.
+#include "config/V15PolicyConfig.hpp"
 #include "perception/v15/PatchTokenizer.hpp"
 #include "perception/v15/StaticSpatialMemory.hpp"
 #include "world/WorldTypes.hpp"
@@ -23,11 +24,13 @@ struct LatentEvalResult {
 class LatentPredictor {
 public:
     void reset();
-    LatentEvalResult evaluate(const PatchTokenizer& patches, const StaticSpatialMemory& staticMem);
+    LatentEvalResult evaluate(const PatchTokenizer& patches, const StaticSpatialMemory& staticMem,
+                              const V15PolicyConfig& policy = {});
 
     static LatentEvalResult evaluateTokens(const PatchTokenGpu* prevSlot, const PatchTokenGpu* currSlot,
                                            const EgoState& prevEgo, const EgoState& currEgo,
-                                           uint32_t validSlots, float staticSkipRatio);
+                                           uint32_t validSlots, float staticSkipRatio,
+                                           const V15PolicyConfig& policy = {});
     const LatentEvalResult& lastResult() const { return last_; }
 
 private:

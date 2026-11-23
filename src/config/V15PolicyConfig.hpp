@@ -35,6 +35,14 @@ struct V15PolicyConfig {
     float headingCommitThresh = 0.03f;
     float headingCommitCost = 260.0f;
     float crossingDevThreshM = 0.45f;
+    float intersectionLaneLockCost = 1400.0f;
+    float blindSpotRearGapM = 3.60f;
+    float blindSpotFwdGapM = 4.80f;
+    float blindSpotClosingTimeS = 2.00f;
+    float blindSpotLatPadM = 0.55f;
+    float blindSpotBlockCost = 2600.0f;
+    float obbHullSampleScale = 0.75f;
+    float vehClearancePadM = 0.35f;
 
     // Safety shield, siren yield & Autoshift D/R
     float trackCorridorVehM = 1.22f;
@@ -44,6 +52,12 @@ struct V15PolicyConfig {
     float voxelMinConf = 0.56f;
     float adjVehVoxelSuppressM = 2.60f;
     float adjVehTrackMinLatM = 1.30f;
+    float vehHullSafetyPadM = 0.38f;
+    float minHardAebDistM = 1.85f;
+    float aebRssFrac = 0.75f;
+    float aebRelSpeedMinMs = 1.10f;
+    float followRampSpanM = 12.0f;
+    float followSpeedGain = 0.50f;
     float sirenConfThresh = 0.35f;
     float sirenStopConfThresh = 0.55f;
     float sirenYieldSpeedMs = 1.20f;
