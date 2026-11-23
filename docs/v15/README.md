@@ -25,7 +25,8 @@ reasoning with a certificate the author cannot fill in by guessing. Here the cer
 | 5a | M1 dark read-noise verification & adaptive FrequencySplit | [step05a_m1_dark_noise_and_scaling.md](step05a_m1_dark_noise_and_scaling.md) | `0691227` |
 | 5b | M1 `V15Pipeline` wiring (`v15()` switch & budget) | [step05b_m1_pipeline_wiring.md](step05b_m1_pipeline_wiring.md) | `886f6e2`, `12ee828` |
 | 6a | M2a online pitch/roll self-calibration | [step06a_m2a_self_calibration.md](step06a_m2a_self_calibration.md) | `035b655`..`191dbeb` |
-| 6b | M2b virtual pinhole rectifier & `V15Pipeline` wiring | [step06b_m2b_virtual_rectifier.md](step06b_m2b_virtual_rectifier.md) | `c5e9d45`..`3c68bef` |
+| 6b | M2b virtual pinhole rectifier & `V15Pipeline` wiring | [step06b_m2b_virtual_rectifier.md](step06b_m2b_virtual_rectifier.md) | `c5e9d45`..`bcf5164` |
+| 7a | M3a simulated 48 kHz emergency siren & `AudioTokenizer` | [step07a_m3_audio_siren.md](step07a_m3_audio_siren.md) | `3861f50`, `56414dd` + tests |
 
 ## Open UNVERIFIED items
 - step02 R2: v14 perception quality under `pipeline_version: v15` not yet re-validated.

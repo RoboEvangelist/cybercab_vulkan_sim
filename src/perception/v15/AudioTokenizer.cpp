@@ -7,10 +7,10 @@ namespace cybercab::v15 {
 namespace {
 
 const Vec3 kMicPosVeh[AudioTokenizer::kNumMics] = {
-    { 0.85f, 0.80f,  1.80f}, // front-left (+X left, +Z fwd)
-    {-0.85f, 0.80f,  1.80f}, // front-right
-    { 0.85f, 0.80f, -1.50f}, // rear-left
-    {-0.85f, 0.80f, -1.50f}, // rear-right
+    { 0.055f, 1.45f,  0.055f}, // compact 11cm roof-pod array (< lambda/2 -> zero grating lobes)
+    {-0.055f, 1.45f,  0.055f},
+    { 0.055f, 1.45f, -0.055f},
+    {-0.055f, 1.45f, -0.055f},
 };
 
 float hashNoise(uint32_t s) {
@@ -50,7 +50,7 @@ float beamPower(const std::array<std::array<float, AudioTokenizer::kFrameSamples
                     static_cast<float>(AudioTokenizer::kSampleRateHz);
     }
     double pSum = 0.0;
-    for (int n = 260; n < AudioTokenizer::kFrameSamples - 260; n += 2) {
+    for (int n = 25; n < AudioTokenizer::kFrameSamples - 25; ++n) {
         float acc = 0.0f;
         for (int m = 0; m < AudioTokenizer::kNumMics; ++m) {
             acc += sampleLinear(pcm[m].data(), static_cast<float>(n) - shifts[m]);
