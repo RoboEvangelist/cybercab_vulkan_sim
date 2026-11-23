@@ -183,6 +183,7 @@ add_executable(cybercab_tests
     tests/test_av_ece_confusion_and_slicing.cpp
     tests/test_av_velocity_stopping_margin.cpp
     tests/test_av_road_structure_and_poles.cpp
+    tests/test_av_confidence_calibration.cpp
     tests/test_v15_e2e_closed_loop.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
