@@ -115,6 +115,7 @@ target_link_libraries(cybercab_perception PUBLIC cybercab_world)
 target_compile_options(cybercab_perception PRIVATE ${CYBERCAB_WARN_FLAGS})
 
 add_library(cybercab_planning SHARED
+    src/app/V15HudOverlay.cpp
     src/planning/TrajectoryPlanner.cpp
     src/planning/v15/AutoregSafety.cpp
     src/planning/v15/GaussianRolloutScorer.cpp
