@@ -1,0 +1,136 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+// FSD v15 Module 5: SE(3) ego-warped static spatial memory & selective refresh (US 2026/0285363 A1).
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+struct StaticCellGpu {
+    vec4 featConf; // occProb, maxHeightM, semanticF, confidence
+    vec4 meta;     // ageSec, viewConsensus, staticLocked, refreshFlag
+};
+
+struct PatchTokenGpu { vec4 app0; vec4 app1; vec4 pluckerD; vec4 pluckerM; };
+struct VirtViewCamGpu { mat4 camFromIsoEgo; vec4 intr; }; // 10 views
+
+layout(std430, binding = 0) readonly buffer PrevMemIn { StaticCellGpu cells[]; } uPrevMem;
+layout(std430, binding = 1) buffer WarpedMemIO { StaticCellGpu cells[]; } uWarpedMem;
+layout(std430, binding = 2) writeonly buffer CurrMemOut { StaticCellGpu cells[]; } uCurrMem;
+layout(std430, binding = 3) readonly buffer PatchRingIn { PatchTokenGpu tok[]; } uRing;
+layout(std430, binding = 4) readonly buffer VirtCamsIn { VirtViewCamGpu views[]; } uViews;
+layout(std430, binding = 5) readonly buffer TrackPriorsIn { TrackPriorGpu tracks[]; } uTracks;
+layout(std430, binding = 6) buffer StatsOut { uint refreshedCount; uint skippedCount; uint lockedCount; uint dynamicMaskedCount; } uStats;
+
+layout(push_constant) uniform StaticMemPC {
+    mat4 prevIsoFromCurrIso;
+    vec4 zAnchors;
+    uint nx, ny, pass, hasHistory;
+    uint currSlot, numViews, gridW, gridH;
+    uint numTracks;
+    float minX, maxX, minY, maxY;
+    float dt, lockThresh, decayRate;
+} pc;
+
+void runWarp(uint ix, uint iy, uint idx) {
+    if (idx == 0u) {
+        uStats.refreshedCount = 0u; uStats.skippedCount = 0u;
+        uStats.lockedCount = 0u; uStats.dynamicMaskedCount = 0u;
+    }
+    if (pc.hasHistory == 0u) {
+        uWarpedMem.cells[idx] = StaticCellGpu(vec4(0.0), vec4(0.0));
+        return;
+    }
+    const float dxCell = (pc.maxX - pc.minX) / float(pc.nx);
+    const float dyCell = (pc.maxY - pc.minY) / float(pc.ny);
+    const float xIso = pc.minX + (float(ix) + 0.5) * dxCell;
+    const float yIso = pc.minY + (float(iy) + 0.5) * dyCell;
+    const vec2 pIso = (pc.prevIsoFromCurrIso * vec4(xIso, yIso, 0.0, 1.0)).xy;
+    const float fx = (pIso.x - pc.minX) / dxCell - 0.5;
+    const float fy = (pIso.y - pc.minY) / dyCell - 0.5;
+    if (fx < -0.5 || fy < -0.5 || fx > float(pc.nx) - 0.5 || fy > float(pc.ny) - 0.5) {
+        uWarpedMem.cells[idx] = StaticCellGpu(vec4(0.0), vec4(0.0));
+        return;
+    }
+    // Nearest-locked warp avoids smearing occupied edges into ghost wakes during turns.
+    const int cx = clamp(int(round(fx)), 0, int(pc.nx) - 1);
+    const int cy = clamp(int(round(fy)), 0, int(pc.ny) - 1);
+    StaticCellGpu c = uPrevMem.cells[uint(cy) * pc.nx + uint(cx)];
+    c.meta.x += pc.dt;
+    uWarpedMem.cells[idx] = c;
+}
+
+void main() {
+    const uint ix = gl_GlobalInvocationID.x, iy = gl_GlobalInvocationID.y;
+    if (ix >= pc.nx || iy >= pc.ny) return;
+    const uint idx = iy * pc.nx + ix;
+    if (pc.pass == 0u) { runWarp(ix, iy, idx); return; }
+
+    const float dxCell = (pc.maxX - pc.minX) / float(pc.nx);
+    const float dyCell = (pc.maxY - pc.minY) / float(pc.ny);
+    const float xIso = pc.minX + (float(ix) + 0.5) * dxCell;
+    const float yIso = pc.minY + (float(iy) + 0.5) * dyCell;
+
+    bool dynMask = false;
+    for (uint k = 0u; k < pc.numTracks; ++k) {
+        const TrackPriorGpu tr = uTracks.tracks[k];
+        if (tr.yawValid.w > 0.5) {
+            const float rMask = max(tr.sizeMeta.x, tr.sizeMeta.y) + 1.0;
+            if (length(vec2(xIso, yIso) - tr.posVel.xy) < rMask) { dynMask = true; break; }
+        }
+    }
+    if (dynMask) atomicAdd(uStats.dynamicMaskedCount, 1u);
+
+    float voteSum = 0.0, viewsHit = 0.0, maxH = 0.0, brightVote = 0.0;
+    const uint frameStride = pc.numViews * pc.gridW * pc.gridH;
+    for (uint v = 0u; v < pc.numViews; ++v) {
+        const VirtViewCamGpu cam = uViews.views[v];
+        bool viewSawCell = false;
+        for (int a = 0; a < 4; ++a) {
+            const float z = pc.zAnchors[a];
+            const vec3 pCam = (cam.camFromIsoEgo * vec4(xIso, yIso, z, 1.0)).xyz;
+            if (pCam.z < 0.7 || pCam.z > 46.0) continue;
+            const float px = cam.intr.z + cam.intr.x * pCam.x / pCam.z;
+            const float py = cam.intr.w + cam.intr.y * pCam.y / pCam.z;
+            const int gx = int(floor(px / 5.0)), gy = int(floor(py / 5.0));
+            if (gx < 0 || gx >= int(pc.gridW) || gy < 0 || gy >= int(pc.gridH)) continue;
+            const PatchTokenGpu tok = uRing.tok[pc.currSlot * frameStride + (v * pc.gridH + uint(gy)) * pc.gridW + uint(gx)];
+            if (tok.app0.w < 0.5) continue;
+            viewSawCell = true;
+            const float e = length(tok.app1.zw) + 1.5 * tok.app1.y;
+            voteSum += clamp(e * 3.0, 0.0, 1.0);
+            if (e > 0.05) { maxH = max(maxH, z); brightVote += (tok.app0.x + tok.app0.y) * 0.5; }
+        }
+        if (viewSawCell) viewsHit += 1.0;
+    }
+
+    const StaticCellGpu prev = uWarpedMem.cells[idx];
+    const float occObs = clamp(voteSum / max(viewsHit * 2.5, 1.0), 0.0, 1.0);
+    const bool lockedPrev = (prev.meta.z > 0.5);
+    const bool unchangedLocked = lockedPrev && !dynMask && viewsHit >= 2.0 && abs(occObs - prev.featConf.x) < 0.12;
+    const bool shouldSkip = lockedPrev && (dynMask || viewsHit < 2.0 || unchangedLocked);
+
+    StaticCellGpu outCell = prev;
+    if (shouldSkip) {
+        outCell.featConf.w = max(0.76, prev.featConf.w * (1.0 - 0.03 * pc.dt));
+        outCell.meta = vec4(prev.meta.x, viewsHit, 1.0, 0.0);
+        atomicAdd(uStats.skippedCount, 1u);
+    } else if (dynMask) {
+        outCell.featConf.w = max(0.0, prev.featConf.w * exp(-pc.decayRate * pc.dt));
+        outCell.meta = vec4(prev.meta.x, 0.0, (outCell.featConf.w >= pc.lockThresh) ? 1.0 : 0.0, 0.0);
+    } else if (viewsHit > 0.0) {
+        const float blend = (prev.featConf.w > 0.05) ? 0.35 : 1.0;
+        outCell.featConf.x = mix(prev.featConf.x, occObs, blend);
+        outCell.featConf.y = max(prev.featConf.y * 0.9, maxH);
+        outCell.featConf.z = (brightVote > 0.5 && outCell.featConf.y > 1.2) ? float(SEM_SIGNAL_SIGN) : float(SEM_STATIC);
+        outCell.featConf.w = clamp(prev.featConf.w * 0.85 + clamp(viewsHit * 0.28, 0.0, 0.55), 0.0, 1.0);
+        const float locked = (outCell.featConf.w >= pc.lockThresh) ? 1.0 : 0.0;
+        outCell.meta = vec4(0.0, viewsHit, locked, 1.0);
+        atomicAdd(uStats.refreshedCount, 1u);
+    } else {
+        outCell.featConf.w = max(0.0, prev.featConf.w * exp(-pc.decayRate * pc.dt));
+        outCell.meta.z = (outCell.featConf.w >= pc.lockThresh) ? 1.0 : 0.0;
+        outCell.meta.w = 0.0;
+    }
+    if (outCell.meta.z > 0.5) atomicAdd(uStats.lockedCount, 1u);
+    uCurrMem.cells[idx] = outCell;
+}
