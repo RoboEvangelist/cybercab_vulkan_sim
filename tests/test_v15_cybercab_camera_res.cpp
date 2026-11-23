@@ -186,7 +186,7 @@ TEST_F(V15CybercabCameraResTest,
 }
 
 TEST_F(V15CybercabCameraResTest, ScaleInvariantSoilAndEmptyRoadAcrossPresets) {
-  for (const char* m : {"half", "cybercab_binned", "cybercab"}) {
+  for (const char* m : {"half", "full", "cybercab_binned", "cybercab"}) {
     verifyEmptySoilAtPreset(s_ctx, m, false);
     verifyEmptySoilAtPreset(s_ctx, m, true);
   }
