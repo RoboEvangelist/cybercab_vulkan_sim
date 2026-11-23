@@ -108,6 +108,30 @@ void TraceLogger::logFrame(int stepIdx, float simTimeSec,
     }
     root["gpu_stage_ms"] = jGpu;
 
+  if (perc.v15.active) {
+    Json::Value jV15;
+    jV15["active"] = true;
+    jV15["gear"] = ego.gear;
+    jV15["lat_offset_m"] = ego.currentLateralOffset;
+    jV15["preferred_lane_offset_m"] = perc.v15.preferredLaneOffsetM;
+    jV15["calib_pitch_deg"] = perc.v15.calibPitchDeg;
+    jV15["calib_roll_deg"] = perc.v15.calibRollDeg;
+    jV15["siren_detected"] = perc.v15.sirenDetected;
+    jV15["siren_confidence"] = perc.v15.sirenConfidence;
+    jV15["siren_bearing_rad"] = perc.v15.sirenBearingRad;
+    jV15["siren_doppler_hz"] = perc.v15.sirenDopplerHz;
+    jV15["rear_clearance_m"] = perc.v15.rearClearanceM;
+    jV15["latent_novelty"] = perc.v15.latentNovelty;
+    jV15["surprise_sigma_delta"] = perc.v15.surpriseSigmaDelta;
+    jV15["static_skip_ratio"] = perc.v15.staticSkipRatio;
+    jV15["token_sparsity_ratio"] = perc.v15.tokenSparsityRatio;
+    jV15["kv_cache_reuse_ratio"] = perc.v15.kvCacheReuseRatio;
+    jV15["effective_speedup_x"] = perc.v15.effectiveSpeedupX;
+    jV15["gaussian_count"] = static_cast<int>(perc.v15Gaussians.size());
+    jV15["reality_view_bytes"] = static_cast<int>(perc.v15RealityRgba.size());
+    root["v15"] = jV15;
+  }
+
     root["sat_contact"] = contact.occurred;
     if (contact.occurred) root["sat_contact_other"] = contact.otherId;
 
