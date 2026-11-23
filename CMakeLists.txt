@@ -171,6 +171,7 @@ add_executable(cybercab_tests
     tests/test_v15_autoshift_and_calib_closed_loop.cpp
     tests/test_v15_voxels_detections_and_hallucinations.cpp
     tests/test_v15_mission_collisions_and_zero_alloc.cpp
+    tests/test_v15_cybercab_camera_res.cpp
     tests/test_v15_e2e_closed_loop.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
