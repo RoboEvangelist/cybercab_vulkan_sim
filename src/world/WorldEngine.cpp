@@ -957,6 +957,7 @@ void WorldEngine::stepEgoAndPhysics(float dt, const PlannerCommand& cmd, const M
     ego_.minObstacleDist = cmd.minObstacleDist;
     ego_.aebActive = cmd.aebActive;
     ego_.behaviorState = cmd.behaviorState;
+    if (cfg_.isV15()) ego_.gear = cmd.gear;
 
     if (ego_.collisionHoldTimer > 0.0f) {
         ego_.collisionHoldTimer = std::max(0.0f, ego_.collisionHoldTimer - dt);
@@ -965,6 +966,16 @@ void WorldEngine::stepEgoAndPhysics(float dt, const PlannerCommand& cmd, const M
     if (ego_.aebActive) {
         ego_.accel = -cfg_.rssABrakeAebMs2;
         ego_.speed = std::max(0.0f, ego_.speed + ego_.accel * dt);
+    } else if (cfg_.isV15() && cmd.gear < 0 && cfg_.driveMode != "manual") {
+        ego_.steerAngle = lerpf(ego_.steerAngle, 0.0f, clampf(8.0f * dt, 0.0f, 1.0f));
+        if (ego_.speed > 0.2f) {
+            ego_.accel = -5.5f;
+            ego_.speed = std::max(0.0f, ego_.speed + ego_.accel * dt);
+        } else {
+            const float revTarget = clampf(cmd.targetSpeed, -2.2f, 0.0f);
+            ego_.accel = clampf((revTarget - ego_.speed) * 2.5f, -3.5f, 3.0f);
+            ego_.speed = clampf(ego_.speed + ego_.accel * dt, -2.2f, 0.0f);
+        }
     } else if (cfg_.driveMode == "manual") {
         float throttle = 0.0f;
         if (manual.forward) throttle += 4.5f;
@@ -979,24 +990,38 @@ void WorldEngine::stepEgoAndPhysics(float dt, const PlannerCommand& cmd, const M
         ego_.steerAngle = lerpf(ego_.steerAngle, targetSteer, clampf(8.5f * dt, 0.0f, 1.0f));
     } else {
         if (cmd.optimalTrajectory.size() > 4) {
-            int lookIdx = std::min(static_cast<int>(cmd.optimalTrajectory.size()) - 1,
-                                   std::max(4, static_cast<int>(std::round(ego_.speed * 0.72f + 4.0f))));
-            const Vec3& targetPt = cmd.optimalTrajectory[lookIdx];
+            Vec3 targetPt = cmd.optimalTrajectory.back();
+            if (cfg_.isV15()) {
+                const float wantLd = clampf(ego_.speed * 0.42f + 2.4f, 3.2f, 5.8f);
+                for (size_t i = 1; i < cmd.optimalTrajectory.size(); ++i) {
+                    const Vec3& p = cmd.optimalTrajectory[i];
+                    if (std::hypot(p.x - ego_.pos.x, p.z - ego_.pos.z) >= wantLd) { targetPt = p; break; }
+                }
+            } else {
+                int lookIdx = std::min(static_cast<int>(cmd.optimalTrajectory.size()) - 1,
+                                       std::max(4, static_cast<int>(std::round(ego_.speed * 0.72f + 4.0f))));
+                targetPt = cmd.optimalTrajectory[lookIdx];
+            }
             float dx = targetPt.x - ego_.pos.x;
             float dz = targetPt.z - ego_.pos.z;
             float targetYaw = std::atan2(dx, dz);
             float alpha = wrapAngle(targetYaw - ego_.yaw);
-            float ld = std::max(3.4f, std::hypot(dx, dz));
+            float ld = std::max(cfg_.isV15() ? 2.4f : 3.4f, std::hypot(dx, dz));
             float rawSteer = std::atan2(2.0f * cfg_.wheelbaseM * std::sin(alpha), ld);
             float clampedSteer = clampf(rawSteer, -cfg_.maxSteerRad, cfg_.maxSteerRad);
-            ego_.steerAngle = lerpf(ego_.steerAngle, clampedSteer, clampf(9.5f * dt, 0.0f, 1.0f));
+            ego_.steerAngle = lerpf(ego_.steerAngle, clampedSteer, clampf((cfg_.isV15() ? 11.5f : 9.5f) * dt, 0.0f, 1.0f));
         }
 
         float speedErr = cmd.targetSpeed - ego_.speed;
         float maxBrake = (ego_.behaviorState == "YIELDING_PEDESTRIAN") ? -7.2f : -5.8f;
         float rawAccel = clampf(speedErr * 2.1f, maxBrake, 2.8f);
         ego_.accel = lerpf(ego_.accel, rawAccel, clampf(8.0f * dt, 0.0f, 1.0f));
-        ego_.speed = std::max(0.0f, ego_.speed + ego_.accel * dt);
+        if (cfg_.isV15() && ego_.speed < -0.02f) {
+            ego_.accel = 4.5f;
+            ego_.speed = std::min(0.0f, ego_.speed + ego_.accel * dt);
+        } else {
+            ego_.speed = std::max(0.0f, ego_.speed + ego_.accel * dt);
+        }
     }
 
     ego_.yawRate = (ego_.speed / cfg_.wheelbaseM) * std::tan(ego_.steerAngle);

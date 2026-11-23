@@ -103,6 +103,7 @@ struct EgoState {
     float roll = 0.0f;
     float rollRate = 0.0f;
     float currentLateralOffset = -1.9f;
+    int gear = 1; // 1 = Drive, -1 = Reverse (v15 Autoshift)
     float stopSignHoldTimer = 0.0f;
     float passedStopSignCooldown = 0.0f;
     std::string behaviorState = "CRUISING";
@@ -129,6 +130,7 @@ struct PlannerCommand {
     float rssSafeDist = 8.5f;
     float minObstacleDist = 40.0f;
     bool aebActive = false;
+    int gear = 1; // 1 = Drive, -1 = Reverse (v15 Autoshift)
     std::string behaviorState = "CRUISING";
     int bestCandIdx = 1;
     std::vector<std::vector<Vec3>> candidateTrajectories;
