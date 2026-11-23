@@ -131,6 +131,7 @@ add_executable(cybercab_tests
     tests/test_model_quality_and_pr.cpp
     tests/test_tracking_and_occlusion.cpp
     tests/test_world_model_and_latency.cpp
+    tests/test_v15_config.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
 target_link_libraries(cybercab_tests PRIVATE

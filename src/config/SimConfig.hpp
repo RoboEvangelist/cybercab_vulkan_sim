@@ -96,6 +96,9 @@ struct SimConfig {
     std::string driveMode = "auto";
     bool aebEnabled = true;
     bool useVulkanValidation = false;
+    // Perception architecture selector: "v14" (RT-DETR/BEVFormer/voxel) | "v15" (photon-count/Plücker/Gaussian)
+    std::string pipelineVersion = "v14";
+    bool isV15() const { return pipelineVersion == "v15"; }
 
     // Backbone
     int featWidth = 40;

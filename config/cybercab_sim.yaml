@@ -14,6 +14,7 @@ simulation:
   drive_mode: "auto"             # "auto" | "manual"
   aeb_enabled: true
   use_vulkan_validation: false
+  pipeline_version: "v14"        # "v14" (RT-DETR/BEVFormer/voxels) | "v15" (photon-count/Plücker/Gaussian world)
 
 perception:
   # Feature & Transformer dimensions (pure Vulkan compute shaders)

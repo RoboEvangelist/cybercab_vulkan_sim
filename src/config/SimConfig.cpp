@@ -75,6 +75,7 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
         cfg.driveMode = readOr(sim, "drive_mode", cfg.driveMode);
         cfg.aebEnabled = readOr(sim, "aeb_enabled", cfg.aebEnabled);
         cfg.useVulkanValidation = readOr(sim, "use_vulkan_validation", cfg.useVulkanValidation);
+        cfg.pipelineVersion = readOr(sim, "pipeline_version", cfg.pipelineVersion);
     }
 
     if (const auto perc = root["perception"]) {
@@ -205,6 +206,10 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
         cfg.soilMinTokenWeight <= 0.0f || cfg.soilMinTokenWeight >= 1.0f ||
         cfg.wheelbaseM <= 0.0f) {
         throw std::runtime_error("Invalid numeric parameter bounds in SimConfig YAML");
+    }
+    if (cfg.pipelineVersion != "v14" && cfg.pipelineVersion != "v15") {
+        throw std::runtime_error("simulation.pipeline_version must be \"v14\" or \"v15\", got \"" +
+                                 cfg.pipelineVersion + "\"");
     }
 
     return cfg;
