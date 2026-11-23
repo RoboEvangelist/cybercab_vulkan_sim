@@ -119,6 +119,22 @@ struct EvalMetrics {
     double totalPipelineMs = 0.0;
 };
 
+struct V15PerceptionSummary {
+    bool active = false;
+    bool sirenDetected = false;
+    float sirenConfidence = 0.0f;
+    float sirenBearingRad = 0.0f;
+    float sirenDopplerHz = 0.0f;
+    float latentNovelty = 0.0f;
+    float surpriseSigmaDelta = 0.0f;
+    float staticSkipRatio = 0.0f;
+    float tokenSparsityRatio = 0.0f;
+    float kvCacheReuseRatio = 0.0f;
+    float effectiveSpeedupX = 1.0f;
+    float preferredLaneOffsetM = -1.95f;
+    float rearClearanceM = 40.0f;
+};
+
 struct PerceptionFrameOutput {
     std::array<SoilCameraSummary, 8> soilCameras{};
     std::vector<SoilPatchStats> soilPatches; // 8 * patchCols * patchRows
@@ -135,6 +151,7 @@ struct PerceptionFrameOutput {
 
     std::map<std::string, double> gpuStageMs;
     EvalMetrics eval{};
+    V15PerceptionSummary v15{};
 };
 
 } // namespace cybercab

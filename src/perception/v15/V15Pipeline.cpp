@@ -1,4 +1,5 @@
 #include "perception/v15/V15Pipeline.hpp"
+#include "perception/BEVFormer.hpp"
 
 #include <stdexcept>
 
@@ -53,6 +54,7 @@ void V15Pipeline::reset() {
     patchTokenizer_.reset();
     staticMem_.reset();
     gaussianWorld_.reset();
+    latentPred_.reset();
     kinNav_.reset();
     audioToken_ = {};
     frameIdx_ = 0;
@@ -70,6 +72,7 @@ void V15Pipeline::destroy() {
     rectifier_.destroy();
     selfCalib_.destroy();
     freqSplit_.destroy();
+    latentPred_.reset();
     kinNav_.reset();
     audioToken_ = {};
     frameIdx_ = 0;
@@ -119,6 +122,22 @@ void V15Pipeline::finishBackEnd(const VulkanContext& ctx, const EgoState& ego,
     runStage(cmd, profiler, "6_v15_gaussian_splat",
              [&] { gaussianWorld_.dispatchRealitySplat(cmd, *cfg_, ego); });
     ctx.endSingleTimeCommands(cmd);
+
+    const LatentEvalResult lat = latentPred_.evaluate(patchTokenizer_, staticMem_);
+    const Mat4 isoFromWorld = BEVFormer::worldFromIsoEgo(ego).inverseRigid();
+    float rearClearM = 40.0f;
+    for (const auto& g : gaussianWorld_.gaussians()) {
+        const Vec3 pIso = isoFromWorld.transformPoint({g.meanOpacity.x, g.meanOpacity.y, g.meanOpacity.z});
+        if (pIso.x < -0.6f && std::abs(pIso.y) < 1.65f) {
+            rearClearM = std::min(rearClearM, std::max(0.0f, (-0.94f - pIso.x) - g.scaleSem.z));
+        }
+    }
+    out.forwardEpistemicSigma += lat.surpriseSigmaDelta;
+    out.v15 = {true, audioToken_.sirenDetected, audioToken_.confidence, audioToken_.bearingVehRad,
+               audioToken_.dopplerShiftHz, lat.latentNovelty, lat.surpriseSigmaDelta,
+               lat.telemetry.staticSkipRatio, lat.telemetry.tokenSparsityRatio,
+               lat.telemetry.kvCacheReuseRatio, lat.telemetry.effectiveSpeedupX,
+               kinNav_.navTokens()[0].laneCenterOffsetM, rearClearM};
 }
 
 } // namespace cybercab::v15

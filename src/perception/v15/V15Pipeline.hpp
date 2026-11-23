@@ -9,6 +9,7 @@
 #include "perception/v15/FrequencySplit.hpp"
 #include "perception/v15/GaussianWorldModel.hpp"
 #include "perception/v15/KinematicNavEncoder.hpp"
+#include "perception/v15/LatentPredictor.hpp"
 #include "perception/v15/PatchTokenizer.hpp"
 #include "perception/v15/StaticSpatialMemory.hpp"
 #include "perception/v15/VirtualCameraRectifier.hpp"
@@ -47,6 +48,7 @@ public:
     const PatchTokenizer& patchTokenizer() const { return patchTokenizer_; }
     const StaticSpatialMemory& staticMemory() const { return staticMem_; }
     const GaussianWorldModel& gaussianWorld() const { return gaussianWorld_; }
+    const LatentPredictor& latentPredictor() const { return latentPred_; }
     const AudioToken& audioToken() const { return audioToken_; }
     const KinematicNavEncoder& kinematicNav() const { return kinNav_; }
 
@@ -59,6 +61,7 @@ private:
     PatchTokenizer patchTokenizer_;
     StaticSpatialMemory staticMem_;
     GaussianWorldModel gaussianWorld_;
+    LatentPredictor latentPred_;
     AudioToken audioToken_{};
     KinematicNavEncoder kinNav_;
     uint32_t frameIdx_ = 0;
