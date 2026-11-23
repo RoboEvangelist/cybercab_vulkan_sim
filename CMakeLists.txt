@@ -151,6 +151,7 @@ add_executable(cybercab_tests
     tests/test_v15_virtual_rectify.cpp
     tests/test_v15_audio_siren.cpp
     tests/test_v15_patch_tokens.cpp
+    tests/test_v15_static_memory.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
 target_link_libraries(cybercab_tests PRIVATE
