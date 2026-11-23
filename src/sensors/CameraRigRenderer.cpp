@@ -32,7 +32,7 @@ struct alignas(16) IspPushConstants {
     uint32_t noiseSeed;
     uint32_t noiseEnable;
   uint32_t rccbEnable;
-  uint32_t pad0;
+  float displayGain;
   uint32_t pad1;
   uint32_t pad2;
 };
@@ -46,13 +46,15 @@ constexpr float kDayAmbient = 0.48f;
 constexpr float kDayFogDens = 0.003f;
 constexpr float kDayDefaultDiffGain = 0.0f;
 constexpr float kDayDefaultEmisGain = 0.0f;
-constexpr float kNightSkyR = 0.015f;
-constexpr float kNightSkyG = 0.022f;
-constexpr float kNightSkyB = 0.048f;
-constexpr float kNightAmbient = 0.055f;
+constexpr float kDayDisplayGain = 1.0f;
+constexpr float kNightSkyR = 0.022f;
+constexpr float kNightSkyG = 0.024f;
+constexpr float kNightSkyB = 0.028f;
+constexpr float kNightAmbient = 0.068f;
 constexpr float kNightDiffGain = 0.14f;
-constexpr float kNightEmisGain = 5.50f;
+constexpr float kNightEmisGain = 3.20f;
 constexpr float kNightFogDens = 0.006f;
+constexpr float kNightDisplayGain = 6.5f;
 
 } // namespace
 
@@ -539,7 +541,7 @@ void CameraRigRenderer::renderAllCameras(const WorldEngine& world, const SimConf
             cfg.photonNoiseSeed ^ frameNoiseKey,
             (hdr_ && cfg.photonNoiseEnabled) ? 1u : 0u,
             (hdr_ && cfg.photonRccbMosaic) ? 1u : 0u,
-            0u,
+            cfg.isNightGlare() ? kNightDisplayGain : kDayDisplayGain,
             0u,
             0u
         };
