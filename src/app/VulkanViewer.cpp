@@ -17,6 +17,7 @@ struct alignas(16) ScenePC {
     Mat4 viewProj;
     Vec4 sunDirAmbient;
     Vec4 fogColorDensity;
+    Vec4 hdrParams; // x = max output radiance (viewer is a display path: always 1.0)
 };
 
 struct alignas(16) LinesPC {
@@ -1425,7 +1426,8 @@ void VulkanViewer::renderFrame(const SimConfig& cfg, const WorldEngine& world, c
     const ScenePC spc{
         viewProj,
         Vec4{Vec3{65.0f, 95.0f, 45.0f}.normalized(), 0.48f},
-        isFsd ? Vec4{0.020f, 0.031f, 0.067f, 0.006f} : Vec4{0.545f, 0.722f, 0.910f, 0.003f}
+        isFsd ? Vec4{0.020f, 0.031f, 0.067f, 0.006f} : Vec4{0.545f, 0.722f, 0.910f, 0.003f},
+        Vec4{1.0f, 0.0f, 0.0f, 0.0f}
     };
     vkCmdPushConstants(frameCmd_, sceneLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(spc), &spc);
 

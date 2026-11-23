@@ -2,7 +2,37 @@
 #include "core/VulkanBuffer.hpp"
 #include "core/VulkanUtils.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+
 namespace cybercab {
+
+namespace {
+// IEEE 754 binary16 -> binary32 (handles zero, subnormal, inf/nan).
+float halfToFloat(uint16_t h) {
+    const uint32_t sign = static_cast<uint32_t>(h & 0x8000u) << 16;
+    uint32_t exp = (h >> 10) & 0x1Fu;
+    uint32_t mant = h & 0x3FFu;
+    uint32_t bits;
+    if (exp == 0) {
+        if (mant == 0) {
+            bits = sign;
+        } else {
+            exp = 127 - 15 + 1;
+            while ((mant & 0x400u) == 0) { mant <<= 1; --exp; }
+            bits = sign | (exp << 23) | ((mant & 0x3FFu) << 13);
+        }
+    } else if (exp == 31) {
+        bits = sign | 0x7F800000u | (mant << 13);
+    } else {
+        bits = sign | ((exp + 127 - 15) << 23) | (mant << 13);
+    }
+    float f;
+    std::memcpy(&f, &bits, sizeof(f));
+    return f;
+}
+} // namespace
 
 VulkanImage::~VulkanImage() {
     destroy();
@@ -200,7 +230,10 @@ void VulkanImage::uploadRGBA8(const uint8_t* pixels, uint32_t width, uint32_t he
 }
 
 std::vector<uint8_t> VulkanImage::downloadRGBA8() const {
-    VkDeviceSize size = static_cast<VkDeviceSize>(width_) * height_ * 4;
+    // RGBA16F (v15 scene-referred raw) is read as half floats and clamped to display white.
+    const bool isHalf = (format_ == VK_FORMAT_R16G16B16A16_SFLOAT);
+    const VkDeviceSize pixels = static_cast<VkDeviceSize>(width_) * height_;
+    VkDeviceSize size = pixels * (isHalf ? 8 : 4);
     VulkanBuffer staging;
     staging.create(*ctx_, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
@@ -214,8 +247,17 @@ std::vector<uint8_t> VulkanImage::downloadRGBA8() const {
     cmdTransitionLayout(cmd, image_, aspect_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, currentLayout_);
     ctx_->endSingleTimeCommands(cmd);
 
-    std::vector<uint8_t> out(size);
-    staging.download(out.data(), size);
+    if (!isHalf) {
+        std::vector<uint8_t> out(size);
+        staging.download(out.data(), size);
+        return out;
+    }
+    std::vector<uint16_t> halfs(static_cast<size_t>(pixels * 4));
+    staging.download(halfs.data(), size);
+    std::vector<uint8_t> out(static_cast<size_t>(pixels * 4));
+    for (size_t i = 0; i < halfs.size(); ++i) {
+        out[i] = static_cast<uint8_t>(std::lround(std::clamp(halfToFloat(halfs[i]), 0.0f, 1.0f) * 255.0f));
+    }
     return out;
 }
 

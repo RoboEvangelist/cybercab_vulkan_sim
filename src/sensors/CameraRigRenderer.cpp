@@ -1,5 +1,6 @@
 #include "sensors/CameraRigRenderer.hpp"
 #include "core/VulkanUtils.hpp"
+#include "sensors/PhotonModel.hpp"
 
 #include <cstring>
 #include <fstream>
@@ -12,6 +13,7 @@ struct alignas(16) ScenePushConstants {
     Mat4 viewProj;
     Vec4 sunDirIntensity;
     Vec4 fogColorDensity;
+    Vec4 hdrParams; // x = max output radiance
 };
 
 struct alignas(16) IspPushConstants {
@@ -23,7 +25,10 @@ struct alignas(16) IspPushConstants {
     Vec4 intr;
     float renderScale;
     float timeSec;
+    uint32_t linearOut;
+    float fullWell;
 };
+static_assert(sizeof(IspPushConstants) == 64, "IspPushConstants must match cam_isp_soil.comp layout");
 
 } // namespace
 
@@ -34,6 +39,7 @@ CameraRigRenderer::~CameraRigRenderer() {
 void CameraRigRenderer::init(const VulkanContext& ctx, const SimConfig& cfg, const WorldEngine& world) {
     destroy();
     ctx_ = &ctx;
+    hdr_ = cfg.isV15();
     camWidth_ = (cfg.initialResMode == "full") ? cfg.fullCamWidth : cfg.camWidth;
     camHeight_ = (cfg.initialResMode == "full") ? cfg.fullCamHeight : cfg.camHeight;
 
@@ -53,6 +59,7 @@ void CameraRigRenderer::init(const VulkanContext& ctx, const SimConfig& cfg, con
                             {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_COMPUTE_BIT, 1},
                             {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT, 1},
                             {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 1},
+                            {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 1},
                         },
                         sizeof(IspPushConstants));
     for (int c = 0; c < kNumCams; ++c) {
@@ -82,6 +89,7 @@ void CameraRigRenderer::destroyCameraTargets() {
         distortedImages_[c].destroy();
     }
     camTensorSSBO_.destroy();
+    camLinearSSBO_.destroy();
 }
 
 void CameraRigRenderer::destroy() {
@@ -112,7 +120,7 @@ void CameraRigRenderer::createRenderPassAndGraphicsPipeline() {
     VkFormat depthFmt = ctx_->findDepthFormat();
 
     VkAttachmentDescription atts[2]{};
-    atts[0].format = VK_FORMAT_R8G8B8A8_UNORM;
+    atts[0].format = rawColorFormat();
     atts[0].samples = VK_SAMPLE_COUNT_1_BIT;
     atts[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     atts[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -270,7 +278,7 @@ void CameraRigRenderer::createCameraTargets(int w, int h) {
     VkFormat depthFmt = ctx_->findDepthFormat();
 
     for (int c = 0; c < kNumCams; ++c) {
-        rawColorImages_[c].create(*ctx_, w, h, VK_FORMAT_R8G8B8A8_UNORM,
+        rawColorImages_[c].create(*ctx_, w, h, rawColorFormat(),
                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                   VK_IMAGE_ASPECT_COLOR_BIT, true, VK_FILTER_LINEAR);
         rawDepthImages_[c].create(*ctx_, w, h, depthFmt,
@@ -296,6 +304,8 @@ void CameraRigRenderer::createCameraTargets(int w, int h) {
     VkDeviceSize tensorBytes = static_cast<VkDeviceSize>(kNumCams) * w * h * 4 * sizeof(float);
     camTensorSSBO_.create(*ctx_, tensorBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    camLinearSSBO_.create(*ctx_, hdr_ ? tensorBytes : 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     updateIspDescriptorSets();
 }
 
@@ -306,8 +316,9 @@ void CameraRigRenderer::updateIspDescriptorSets() {
         VkDescriptorImageInfo outInfo{VK_NULL_HANDLE, distortedImages_[c].view(),
                                       VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorBufferInfo bufInfo = camTensorSSBO_.descriptorInfo();
+        VkDescriptorBufferInfo linInfo = camLinearSSBO_.descriptorInfo();
 
-        VkWriteDescriptorSet writes[3]{};
+        VkWriteDescriptorSet writes[4]{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = ispSets_[c];
         writes[0].dstBinding = 0;
@@ -329,7 +340,11 @@ void CameraRigRenderer::updateIspDescriptorSets() {
         writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[2].pBufferInfo = &bufInfo;
 
-        vkUpdateDescriptorSets(ctx_->device(), 3, writes, 0, nullptr);
+        writes[3] = writes[2];
+        writes[3].dstBinding = 3;
+        writes[3].pBufferInfo = &linInfo;
+
+        vkUpdateDescriptorSets(ctx_->device(), 4, writes, 0, nullptr);
     }
 }
 
@@ -424,6 +439,7 @@ void CameraRigRenderer::renderAllCameras(const WorldEngine& world, const SimConf
         pc.viewProj = projRender * camFromWorld;
         pc.sunDirIntensity = Vec4{Vec3{65.0f, 95.0f, 45.0f}.normalized(), 0.48f};
         pc.fogColorDensity = Vec4{0.545f, 0.722f, 0.910f, 0.003f};
+        pc.hdrParams = Vec4{hdr_ ? photon::kFullWellRadiance : 1.0f, 0.0f, 0.0f, 0.0f};
         vkCmdPushConstants(cmd, gfxLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 
         VkDeviceSize off = 0;
@@ -464,7 +480,9 @@ void CameraRigRenderer::renderAllCameras(const WorldEngine& world, const SimConf
             Vec4{spec.distortion[0], spec.distortion[1], spec.distortion[2], spec.distortion[3]},
             Vec4{intr.fx, intr.fy, intr.cx, intr.cy},
             camMats_[c].renderScale,
-            timeSec
+            timeSec,
+            hdr_ ? 1u : 0u,
+            photon::kFullWellRadiance
         };
         ispPipeline_.bindAndDispatch(cmd, ispSets_[c], gx, gy, 1, &ipc, sizeof(ipc));
     }
@@ -569,6 +587,7 @@ void CameraRigRenderer::dumpEgoShowcaseBMP(const WorldEngine& world, const std::
         pc.viewProj = proj * view;
         pc.sunDirIntensity = Vec4{Vec3{65.0f, 95.0f, 45.0f}.normalized(), 0.52f};
         pc.fogColorDensity = Vec4{0.545f, 0.722f, 0.910f, 0.002f};
+        pc.hdrParams = Vec4{1.0f, 0.0f, 0.0f, 0.0f}; // showcase BMP is a display path
         vkCmdPushConstants(cmd, gfxLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 
         const VkDeviceSize off = 0;

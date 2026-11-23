@@ -10,6 +10,7 @@ layout(push_constant) uniform ScenePC {
     mat4 viewProj;
     vec4 sunDirAmbient;   // xyz = sun direction, w = ambient
     vec4 fogColorDensity; // rgb = fog color, w = FogExp2 density
+    vec4 hdrParams;       // x = max output radiance (1.0 = v14 display clamp, >1 = v15 linear HDR headroom)
 } pc;
 
 layout(location = 0) out vec4 outColor;
@@ -35,5 +36,5 @@ void main() {
     const float viewDist = 1.0 / max(gl_FragCoord.w, 1e-4);
     const float fd = pc.fogColorDensity.w * viewDist;
     const float fogFactor = clamp(1.0 - exp(-fd * fd), 0.0, 1.0);
-    outColor = vec4(clamp(mix(lit, pc.fogColorDensity.rgb, fogFactor), 0.0, 1.0), inColor.a);
+    outColor = vec4(clamp(mix(lit, pc.fogColorDensity.rgb, fogFactor), 0.0, pc.hdrParams.x), inColor.a);
 }

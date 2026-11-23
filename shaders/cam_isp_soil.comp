@@ -1,14 +1,17 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "common.glsl"
+#include "photon.glsl"
 
 // Camera ISP: pinhole render -> Brown-Conrady distortion -> vignetting -> optional physical lens soiling.
 // Writes the displayable RGBA8 image and the normalized float RGB tensor consumed by the neural stages.
+// v15 (linearOut != 0): also writes the ISP-bypass 14-bit linear photon-count tensor (unclipped HDR radiance).
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(binding = 0) uniform sampler2D uRawCam;
 layout(binding = 1, rgba8) uniform writeonly image2D uOutDistorted;
 layout(std430, binding = 2) writeonly buffer CamTensorOut { vec4 pixels[]; } uCamTensor;
+layout(std430, binding = 3) writeonly buffer CamLinearOut { vec4 pixels[]; } uCamLinear;
 
 layout(push_constant) uniform IspPC {
     uint camIndex;
@@ -19,6 +22,8 @@ layout(push_constant) uniform IspPC {
     vec4 intr;        // fx, fy, cx, cy (nominal, distorted image)
     float renderScale; // pinhole render used fx / renderScale (overscan)
     float timeSec;
+    uint linearOut;   // 1 = v15 photon-count tensor enabled
+    float fullWell;   // radiance at sensor saturation (PhotonModel::kFullWellRadiance)
 } pc;
 
 vec3 sampleRaw(vec2 uv) { return texture(uRawCam, clamp(uv, vec2(0.001), vec2(0.999))).rgb; }
@@ -54,6 +59,12 @@ void main() {
         }
     }
 
-    imageStore(uOutDistorted, ivec2(x, y), vec4(rgb, 1.0));
-    uCamTensor.pixels[(pc.camIndex * pc.height + y) * pc.width + x] = vec4(rgb, 1.0);
+    // v14 display/neural tensor stays display-referred (clips at white); v14 raw is UNORM so this is a no-op there.
+    const uint pixIdx = (pc.camIndex * pc.height + y) * pc.width + x;
+    const vec3 display = min(rgb, vec3(1.0));
+    imageStore(uOutDistorted, ivec2(x, y), vec4(display, 1.0));
+    uCamTensor.pixels[pixIdx] = vec4(display, 1.0);
+    if (pc.linearOut != 0u) {
+        uCamLinear.pixels[pixIdx] = vec4(photonLinearNorm(rgb, pc.fullWell), 1.0);
+    }
 }

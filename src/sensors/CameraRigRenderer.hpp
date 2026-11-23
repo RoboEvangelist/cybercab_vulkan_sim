@@ -48,6 +48,10 @@ public:
     const CameraMatrices& cameraMatrices(int camIdx) const { return camMats_.at(camIdx); }
     const VulkanImage& distortedImage(int camIdx) const { return distortedImages_.at(camIdx); }
     const VulkanBuffer& cameraTensorSSBO() const { return camTensorSSBO_; }
+    // v15 ISP-bypass tensor: 8 * H * W vec4, rgb = 14-bit linear code / 16383 (x kFullWellRadiance = radiance).
+    // Allocated only when cfg.isV15(); otherwise a 16-byte placeholder.
+    const VulkanBuffer& cameraLinearSSBO() const { return camLinearSSBO_; }
+    bool linearHdrEnabled() const { return hdr_; }
     const VulkanBuffer& staticVertexBuffer() const { return staticVB_; }
     const VulkanBuffer& staticIndexBuffer() const { return staticIB_; }
     uint32_t staticIndexCount() const { return staticIndexCount_; }
@@ -76,6 +80,10 @@ private:
     VulkanComputePipeline ispPipeline_;
     std::array<VkDescriptorSet, kNumCams> ispSets_{};
     VulkanBuffer camTensorSSBO_;
+    VulkanBuffer camLinearSSBO_;
+    bool hdr_ = false; // v15: float16 scene-referred raw render + linear photon tensor
+
+    VkFormat rawColorFormat() const { return hdr_ ? VK_FORMAT_R16G16B16A16_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM; }
 
     VulkanBuffer staticVB_;
     VulkanBuffer staticIB_;

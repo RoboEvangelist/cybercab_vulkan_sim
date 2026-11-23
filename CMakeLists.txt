@@ -34,6 +34,7 @@ foreach(SHADER ${SHADER_SOURCES})
                 -V ${SHADER}
                 -o ${SPV_OUT}
         DEPENDS ${SHADER} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/include/common.glsl"
+                          "${CMAKE_CURRENT_SOURCE_DIR}/shaders/include/photon.glsl"
         COMMENT "Compiling GLSL -> SPIR-V: ${FILE_NAME}"
         VERBATIM
     )
@@ -132,6 +133,7 @@ add_executable(cybercab_tests
     tests/test_tracking_and_occlusion.cpp
     tests/test_world_model_and_latency.cpp
     tests/test_v15_config.cpp
+    tests/test_v15_photon_frontend.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
 target_link_libraries(cybercab_tests PRIVATE
