@@ -1,37 +1,39 @@
 # cybercab_vulkan_sim
 
-A modular, zero-hot-path-allocation **C++17 + Vulkan** simulation of the **Tesla Cybercab** 8-camera surround vision, GPU deep perception, 4D occupancy & flow, predictive world modeling, Uncertainty-Aware RSS/AEB planning, and SAT multi-body physics.
+A modular, zero-hot-path-allocation **C++ + Vulkan** simulation of the **Tesla Cybercab** 8-camera surround vision, GPU deep perception (v14 & opt-in FSD v15), 4D occupancy/Gaussian world modeling, uncertainty-aware planning, and SAT multi-body physics.
 
 ## Key Capabilities
-- **100% C++17 + GLSL Compute/Graphics (Vulkan):** No Python runtime or external heavy model downloads required; shaders compile directly to SPIR-V via `glslangValidator`.
-- **8-Camera Calibrated Surround Matrix:** Concurrent offscreen rendering for `CAM_FRONT_MAIN`, `CAM_FRONT_NARROW`, `CAM_FRONT_WIDE`, `CAM_PILLAR_{LEFT,RIGHT}`, `CAM_REPEATER_{LEFT,RIGHT}`, and `CAM_REAR`, with Brown-Conrady distortion/glare/mud injection in [`cam_isp_soil.comp`](shaders/cam_isp_soil.comp).
-- **GPU Deep Perception Pipeline (`shaders/*.comp`):**
-  1. `01_soil_detect.comp` — Patch-wise gradient/glare/soiling confidence weights `w_c(u, v)` and epistemic variance `sigma^2`.
-  2. `02_backbone_fpn.comp` — Spatial-temporal S4/S5 FPN feature extraction with soil weight modulation.
-  3. `03_rtdetr_encoder.comp` & `03_rtdetr_decoder.comp` — AIFI/CCFM hybrid encoder + Top-K query self/cross-attention decoder + 3D lifting.
-  4. `ByteTracker` (`src/perception/ByteTrack.*`) — Two-stage Kuhn-Munkres Hungarian assignment + 4D Kalman tracking with uncertainty propagation.
-  5. `04_bevformer_temporal.comp` & `04_bevformer_spatial.comp` — Ego-motion BEV feature warping + multi-camera 3D pillar spatial cross-attention.
-  6. `05_occupancy_flow.comp` & `05_occlusion_shadow.comp` — 60x40x8 4D occupancy/velocity volume & ray-marched occlusion shadow casting.
-  7. `06_world_model.comp` — Kinematic rollout ghosts with horizon-growing uncertainty (`t = 0.5..2.0 s`).
-- **Trajectory Planning & SAT Physics:** Quintic polynomial lateral lane-change planner, uncertainty-scaled RSS stopping envelope + AEB shield, IDM vehicles, Helbing pedestrians, spring-damper pitch/roll suspension, and OBB SAT collision solver.
+- **100% C++ + GLSL Compute/Graphics (Vulkan):** No Python runtime or external heavy model downloads required; shaders compile directly to SPIR-V via `glslangValidator`.
+- **Configurable Architecture Switch (`simulation.pipeline_version` in `config/cybercab_sim.yaml`):**
+  - **`v14` (default):** RT-DETR + ByteTrack + BEVFormer + 4D Occupancy/Flow + Occlusion Shadows + World Model + quintic RSS planner (`01_soil_detect`..`06_world_model`).
+  - **`v15` (opt-in):** All 7 FSD v15 modules gated behind `cfg.isV15()`:
+    1. **ISP-Bypass Photon Front-End:** 14-bit linear photon tensor (`photon.glsl`), Poisson-Gaussian sensor noise, log illumination/detail frequency split (`v15_freq_split.comp`).
+    2. **Online Self-Calibration & Dual-Branch Virtual Rectifier:** 36-frame sliding-window Manhattan IRLS pitch/roll solver (`v15_self_calib.comp`) + 10 virtual pinhole views incl. VRU `-12 deg` and Elevated `+5 deg` (`v15_virtual_rectify.comp`).
+    3. **Multimodal Tokenization:** 48 kHz quad-mic `AudioTokenizer` (Doppler + 360-deg siren bearing), 100 Hz `KinematicNavEncoder`, and 5x5 Plucker `PatchTokenizer` ring (`7,680` tokens/frame, `v15_patch_tokenize.comp`).
+    4. **Self-Supervised Latent Predictor (`LatentPredictor`):** Forward-corridor novelty inflation on `forwardEpistemicSigma` plus sparse/KV-cache/FP16 compute telemetry.
+    5. **Persistent SE(3) Static Spatial Memory:** Ego-warped `60x40` static map with dynamic occlusion masking & selective refresh skipping (`v15_static_memory.comp`).
+    6. **3D/4D Gaussian World Model & EWA Reality View:** GaussianFormer-2 occupancy, 4D rollout, and Zwicker/Kerbl EWA `320x180` splatting (`v15_gaussian_splat.comp`).
+    7. **Autoregressive Middle-of-Lane Planner (`AutoregressivePolicy` + `AutoregSafety`):** Sequential `(x, y, v, kappa)` lane-center rollout (`+/-1.95 m`), bounded truck shy-away, `YIELDING_SIREN`, and `Autoshift D/R`.
+- **8-Camera Calibrated Surround Matrix:** Concurrent offscreen rendering for `CAM_FRONT_{MAIN,NARROW,WIDE}`, `CAM_PILLAR_{LEFT,RIGHT}`, `CAM_REPEATER_{LEFT,RIGHT}`, and `CAM_REAR` via [`cam_isp_soil.comp`](shaders/cam_isp_soil.comp).
 - **Interactive HUD & Telemetry:** Clickable mode/layer/scenario controls, 8-camera live matrix overlays (`Neural`, `RGB`, `Calib`, `SoilHeatmap`, `VoxelReproj`), per-stage Vulkan GPU query profiling, and JSONL trace logging.
 
 ## Project Structure
 ```text
 cybercab_vulkan_sim/
 ├── CMakeLists.txt                  # Modular libs: cybercab_core/world/perception/planning
-├── config/cybercab_sim.yaml        # 8-camera calibration, perception, RSS & vehicle parameters
-├── shaders/                        # GLSL graphics & compute shaders + common.glsl
+├── config/cybercab_sim.yaml        # 8-camera calibration, pipeline_version (v14/v15), RSS & vehicle params
+├── docs/v15/                       # Semi-formal change certificates (Steps 1–11) & index
+├── shaders/                        # GLSL graphics & compute shaders (v14 + v15_*.comp + include/*.glsl)
 ├── src/
 │   ├── core/                       # VulkanContext, Buffer, Image, Pipeline, Profiler, TraceLogger, Math
 │   ├── config/                     # YAML config loader (SimConfig)
-│   ├── world/                      # Road splines, SAT/IDM/Helbing physics, Cybercab mesh (WorldEngine)
+│   ├── world/                      # Road splines, SAT/IDM/Helbing physics, siren state, Cybercab mesh
 │   ├── sensors/                    # 8-camera Vulkan renderer & Brown-Conrady ISP (CameraRigRenderer)
-│   ├── perception/                 # GPU perception stages & ByteTrack
-│   ├── planning/                   # Quintic lattice + RSS/AEB safety planner (TrajectoryPlanner)
+│   ├── perception/                 # v14 stages, ByteTrack, and v15/ modules (M1–M6)
+│   ├── planning/                   # v14 quintic RSS planner & v15/ autoregressive policy (M7)
 │   ├── app/                        # Interactive SDL2 + Vulkan HUD viewer & bitmap font
 │   └── main.cpp                    # Interactive / headless CLI entry point
-└── tests/                          # GoogleTest unit & Vulkan GPU integration tests
+└── tests/                          # 136 GoogleTest tests (96 v14 regression + 40 v15 unit/GPU/E2E)
 ```
 
 ## Dependencies (Ubuntu / Debian)
@@ -53,17 +55,23 @@ ctest --test-dir build --output-on-failure
 
 ### Interactive Vulkan GUI (requires display)
 ```bash
-./build/cybercab_sim
+# Run default v14
+./build/cybercab_sim --config config/cybercab_sim.yaml
+
+# Or run FSD v15 without altering config/cybercab_sim.yaml
+sed 's/pipeline_version: "v14"/pipeline_version: "v15"/' config/cybercab_sim.yaml > /tmp/cybercab_v15.yaml
+./build/cybercab_sim --config /tmp/cybercab_v15.yaml
 ```
 - **Mouse:** Drag to orbit 3D view, scroll to zoom; click HUD buttons/checkboxes or camera cards directly.
 - **Keys:** `1`–`5` (camera overlays), `V` (3D Twin / FSD Voxel / BEV Tactical), `R` (320x240 / 640x480), `Space` (Auto / `WASD` manual drive), `B` (RSS/AEB shield), `Tab` / `C` (select/soil camera), `O/H/F/M/E/K/G/P` (toggle overlays), `F1`–`F6` (Jaywalk, Occluded, HardBrake, SoilFront, Reset, ForceRed).
 
 ### Headless GPU Mode & Tracing
 ```bash
-./build/cybercab_sim --headless --scenario nominal --steps 120 --trace build/trace_nominal.jsonl
+./build/cybercab_sim --config /tmp/cybercab_v15.yaml --headless --scenario nominal --steps 120 --trace /tmp/trace_v15.jsonl
 ```
 Options:
-- `--scenario nominal|jaywalk|occluded|hardbrake|soil_front`
+- `--config <path.yaml>` (defaults to `config/cybercab_sim.yaml`; set `simulation.pipeline_version` to `"v14"` or `"v15"`)
+- `--scenario nominal|jaywalk|occluded|hardbrake|soil_front|siren`
 - `--steps N` (control ticks at 36 Hz)
 - `--res half|full` (`320x240` or `640x480` per camera)
 - `--trace <out.jsonl>` (per-frame telemetry, tracks, perception metrics & GPU stage timings)
