@@ -22,7 +22,7 @@ constexpr float kNearM = 20.f, kMidM = 35.f, kFarM = 50.f, kBndR = 52.f;
 constexpr double kMaxEceNom = 0.28, kMaxOceNom = 0.22, kMaxCostNom = 36.0;
 constexpr double kMinNearNom = 0.52, kMinMidNom = 0.60;
 constexpr double kMinFrontNom = 0.68, kMinSig2Nom = 0.58;
-constexpr double kMaxEceNight = 0.46, kMaxOceEnv = 0.30, kMaxCostNight = 45.0;
+constexpr double kMaxEceNight = 0.28, kMaxOceEnv = 0.30, kMaxCostNight = 45.0;
 constexpr double kMinNearNight = 0.45, kMinMidNight = 0.45;
 constexpr double kMinFrontNight = 0.60, kMinSig2Night = 0.55;
 constexpr double kMinRecNight = 0.45, kMinPrecEnv = 0.65, kMaxEceSoil = 0.30;

@@ -1,4 +1,5 @@
 #include "perception/PerceptionPipeline.hpp"
+#include "perception/ConfidenceCalibrator.hpp"
 #include <cmath>
 #include <limits>
 
@@ -137,6 +138,7 @@ void PerceptionPipeline::runFrame(const VulkanContext& ctx,
     if (v15_) {
         v15_->finishBackEnd(ctx, ego, out, profiler);
     }
+    if (cfg_.isV15()) calib::calibrateFrame(cfg_, out);
 
     if (profiler) {
         out.gpuStageMs = profiler->resolveTimingsMs();
