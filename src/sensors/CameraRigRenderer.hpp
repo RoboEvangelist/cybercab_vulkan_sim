@@ -63,8 +63,8 @@ public:
 
 private:
     const VulkanContext* ctx_ = nullptr;
-    int camWidth_ = 320;
-    int camHeight_ = 240;
+  int camWidth_ = kLegacyHalfCamW;
+  int camHeight_ = kLegacyHalfCamH;
     static constexpr int kNumCams = 8;
 
     VkRenderPass offscreenPass_ = VK_NULL_HANDLE;

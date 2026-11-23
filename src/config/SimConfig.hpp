@@ -8,6 +8,22 @@
 
 namespace cybercab {
 
+inline constexpr int kLegacyHalfCamW = 320;
+inline constexpr int kLegacyHalfCamH = 240;
+inline constexpr int kLegacyFullCamW = 640;
+inline constexpr int kLegacyFullCamH = 480;
+inline constexpr int kCybercabBinnedCamW = 1448;
+inline constexpr int kCybercabBinnedCamH = 938;
+inline constexpr int kCybercabNativeCamW = 2896;
+inline constexpr int kCybercabNativeCamH = 1876;
+
+struct CamResPreset {
+  const char* mode;
+  int width;
+  int height;
+  const char* label;
+};
+
 struct CameraIntrinsics {
     float fx = 0.0f;
     float fy = 0.0f;
@@ -16,8 +32,8 @@ struct CameraIntrinsics {
     float hfovRad = 0.0f;
     float vfovRad = 0.0f;
     float vfovDeg = 0.0f;
-    int width = 320;
-    int height = 240;
+  int width = kLegacyHalfCamW;
+  int height = kLegacyHalfCamH;
 };
 
 struct CameraSpec {
@@ -90,11 +106,15 @@ struct CameraSpec {
 struct SimConfig {
     // Simulation
     float controlHz = 36.0f;
-    int camWidth = 320;
-    int camHeight = 240;
-    int fullCamWidth = 640;
-    int fullCamHeight = 480;
-    std::string initialResMode = "half";
+  int camWidth = kLegacyHalfCamW;
+  int camHeight = kLegacyHalfCamH;
+  int fullCamWidth = kLegacyFullCamW;
+  int fullCamHeight = kLegacyFullCamH;
+  int cybercabBinnedCamWidth = kCybercabBinnedCamW;
+  int cybercabBinnedCamHeight = kCybercabBinnedCamH;
+  int cybercabCamWidth = kCybercabNativeCamW;
+  int cybercabCamHeight = kCybercabNativeCamH;
+  std::string initialResMode = "half";
     std::string initialViewMode = "chase";
     std::string initialCamOverlay = "neural";
     std::string driveMode = "auto";
@@ -202,6 +222,11 @@ struct SimConfig {
     float suspensionCDamper = 11.5f;
 
     std::vector<CameraSpec> cameras;
+
+  std::array<CamResPreset, 4> resolutionPresets() const;
+  CamResPreset resolveInitialRes() const;
+  CamResPreset nextResolutionPreset(int curW, int curH) const;
+  static bool isValidResMode(const std::string& mode);
 
     static SimConfig loadFromYaml(const std::string& path);
     static SimConfig defaultConfig();

@@ -8,7 +8,11 @@ simulation:
   cam_height: 240
   full_cam_width: 640
   full_cam_height: 480
-  initial_res_mode: "half"       # "half" (320x240) | "full" (640x480)
+  cybercab_binned_cam_width: 1448
+  cybercab_binned_cam_height: 938
+  cybercab_cam_width: 2896
+  cybercab_cam_height: 1876
+  initial_res_mode: "half"       # "half" (320x240) | "full" (640x480) | "cybercab_binned" (1448x938) | "cybercab" (2896x1876)
   initial_view_mode: "chase"     # "chase" (3D Twin) | "fsd" (FSD Voxel) | "bev" (BEV Tactical)
   initial_cam_overlay: "neural"  # "neural" | "rgb" | "calib" | "features" | "reproj"
   drive_mode: "auto"             # "auto" | "manual"

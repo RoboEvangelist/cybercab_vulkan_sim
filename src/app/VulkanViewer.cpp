@@ -640,12 +640,14 @@ void VulkanViewer::applyUiAction(UiAction action, int param, SimConfig& cfg, Wor
           break;
         }
         case UiAction::ToggleRes: {
-            const bool toFull = (rig.camWidth() == cfg.camWidth);
-            rig.resize(toFull ? cfg.fullCamWidth : cfg.camWidth, toFull ? cfg.fullCamHeight : cfg.camHeight);
-            pipeline.onCameraResized(rig);
-            refreshCameraDescriptors(rig);
-            toastMsg = toFull ? "8x 640x480 Full Res" : "8x 320x240 Half Res";
-            break;
+          const auto next =
+            cfg.nextResolutionPreset(rig.camWidth(), rig.camHeight());
+          rig.resize(next.width, next.height);
+          pipeline.onCameraResized(rig);
+          refreshCameraDescriptors(rig);
+          toastMsg = "8x " + std::to_string(next.width) + "x" +
+                     std::to_string(next.height) + " (" + next.label + ")";
+          break;
         }
         case UiAction::ToggleDriveMode: {
             cfg.driveMode = (cfg.driveMode == "auto") ? "manual" : "auto";
@@ -1296,10 +1298,12 @@ void VulkanViewer::buildUiOverlay(const SimConfig& cfg, const WorldEngine& world
   }
   ly += kModeRowAdvY;
 
-    const std::string resLbl = (rig.camWidth() == cfg.camWidth) ? "Res:320x240" : "Res:640x480";
+  const std::string resLbl = "Res:" + std::to_string(rig.camWidth()) + "x" +
+                             std::to_string(rig.camHeight());
     const bool isAuto = (cfg.driveMode == "auto");
     addChipButton(pad + 10.0f, ly, thirdW, 22.0f, resLbl,
-                  rig.camWidth() == cfg.fullCamWidth, {0.06f, 0.35f, 0.45f, 0.95f}, {0.13f, 0.83f, 0.93f, 1.0f},
+                  rig.camWidth() != cfg.camWidth,
+                  {0.06f, 0.35f, 0.45f, 0.95f}, {0.13f, 0.83f, 0.93f, 1.0f},
                   UiAction::ToggleRes);
     addChipButton(pad + 10.0f + thirdW + 4.0f, ly, thirdW, 22.0f, isAuto ? "Auto FSD" : "WASD Man",
                   isAuto, {0.06f, 0.36f, 0.24f, 0.95f}, {0.20f, 0.83f, 0.60f, 1.0f},

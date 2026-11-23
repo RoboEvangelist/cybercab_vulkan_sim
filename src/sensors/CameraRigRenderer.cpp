@@ -64,8 +64,9 @@ void CameraRigRenderer::init(const VulkanContext& ctx, const SimConfig& cfg, con
     destroy();
     ctx_ = &ctx;
     hdr_ = cfg.isV15();
-    camWidth_ = (cfg.initialResMode == "full") ? cfg.fullCamWidth : cfg.camWidth;
-    camHeight_ = (cfg.initialResMode == "full") ? cfg.fullCamHeight : cfg.camHeight;
+  const auto initRes = cfg.resolveInitialRes();
+  camWidth_ = initRes.width;
+  camHeight_ = initRes.height;
 
     createRenderPassAndGraphicsPipeline();
     uploadStaticWorld(world);

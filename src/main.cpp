@@ -52,7 +52,8 @@ CliArgs parseArgs(int argc, char** argv) {
             << " [--lighting day|night_glare] [--headless] [--steps N] "
             << "[--scenario nominal|jaywalk|occluded|hardbrake|soil_front|"
             << "siren] [--trace out.jsonl] [--dump-dir dir]"
-            << " [--car-dump out.bmp] [--res half|full]\n";
+            << " [--car-dump out.bmp]"
+            << " [--res half|full|cybercab_binned|cybercab]\n";
             std::exit(0);
         }
     }
@@ -85,7 +86,12 @@ int main(int argc, char** argv) {
                                 ? cybercab::SimConfig::loadFromYaml(resolvedCfg)
                                 : cybercab::SimConfig::defaultConfig();
         if (!args.resMode.empty()) {
-            cfg.initialResMode = args.resMode;
+          if (!cybercab::SimConfig::isValidResMode(args.resMode)) {
+            throw std::runtime_error(
+              "--res must be half|full|cybercab_binned|cybercab, got \"" +
+              args.resMode + "\"");
+          }
+          cfg.initialResMode = args.resMode;
         }
         if (!args.pipelineVer.empty()) {
             if (args.pipelineVer != "v14" && args.pipelineVer != "v15") {

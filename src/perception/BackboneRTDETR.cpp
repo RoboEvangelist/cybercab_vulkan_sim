@@ -140,9 +140,8 @@ void BackboneRTDETR::init(const VulkanContext& ctx, const SimConfig& cfg,
     encSet_ = detrEncPipe_.allocateDescriptorSet();
     decSet_ = detrDecPipe_.allocateDescriptorSet();
 
-    int initW = (cfg.initialResMode == "full") ? cfg.fullCamWidth : cfg.camWidth;
-    int initH = (cfg.initialResMode == "full") ? cfg.fullCamHeight : cfg.camHeight;
-    updateCameraTensorBinding(camTensorSSBO, initW, initH);
+  const auto initRes = cfg.resolveInitialRes();
+  updateCameraTensorBinding(camTensorSSBO, initRes.width, initRes.height);
 }
 
 void BackboneRTDETR::updateCameraTensorBinding(const VulkanBuffer& camTensorSSBO, int camW, int camH) {
@@ -152,8 +151,9 @@ void BackboneRTDETR::updateCameraTensorBinding(const VulkanBuffer& camTensorSSBO
     tensorBytes_ = static_cast<VkDeviceSize>(8 * camW * camH * 4) * sizeof(float);
     prevCamTensorSSBO_.create(*ctx_, tensorBytes_, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    std::vector<float> zeros(static_cast<size_t>(8 * camW * camH * 4), 0.0f);
-    prevCamTensorSSBO_.uploadVector(zeros);
+  VkCommandBuffer cmd = ctx_->beginSingleTimeCommands();
+  vkCmdFillBuffer(cmd, prevCamTensorSSBO_.handle(), 0, tensorBytes_, 0u);
+  ctx_->endSingleTimeCommands(cmd);
 
     VkDescriptorBufferInfo b0 = currCamTensorRef_->descriptorInfo();
     VkDescriptorBufferInfo b1 = prevCamTensorSSBO_.descriptorInfo();

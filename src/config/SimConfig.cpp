@@ -29,6 +29,37 @@ Vec3 readVec3Or(const YAML::Node& node, const char* key, const Vec3& fallback) {
 
 } // namespace
 
+bool SimConfig::isValidResMode(const std::string& mode) {
+  return mode == "half" || mode == "full" ||
+         mode == "cybercab_binned" || mode == "cybercab";
+}
+
+std::array<CamResPreset, 4> SimConfig::resolutionPresets() const {
+  return {{
+    {"half", camWidth, camHeight, "Legacy Half"},
+    {"full", fullCamWidth, fullCamHeight, "Legacy Full"},
+    {"cybercab_binned", cybercabBinnedCamWidth, cybercabBinnedCamHeight,
+     "Cybercab 2x2"},
+    {"cybercab", cybercabCamWidth, cybercabCamHeight, "Cybercab 5MP"}}};
+}
+
+CamResPreset SimConfig::resolveInitialRes() const {
+  for (const auto& p : resolutionPresets()) {
+    if (initialResMode == p.mode) return p;
+  }
+  return resolutionPresets()[0];
+}
+
+CamResPreset SimConfig::nextResolutionPreset(int curW, int curH) const {
+  const auto presets = resolutionPresets();
+  for (size_t i = 0; i < presets.size(); ++i) {
+    if (presets[i].width == curW && presets[i].height == curH) {
+      return presets[(i + 1u) % presets.size()];
+    }
+  }
+  return presets[0];
+}
+
 SimConfig SimConfig::defaultConfig() {
     SimConfig cfg;
     cfg.cameras = {
@@ -70,6 +101,14 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
         cfg.camHeight = readOr(sim, "cam_height", cfg.camHeight);
         cfg.fullCamWidth = readOr(sim, "full_cam_width", cfg.fullCamWidth);
         cfg.fullCamHeight = readOr(sim, "full_cam_height", cfg.fullCamHeight);
+    cfg.cybercabBinnedCamWidth = readOr(
+      sim, "cybercab_binned_cam_width", cfg.cybercabBinnedCamWidth);
+    cfg.cybercabBinnedCamHeight = readOr(
+      sim, "cybercab_binned_cam_height", cfg.cybercabBinnedCamHeight);
+    cfg.cybercabCamWidth =
+      readOr(sim, "cybercab_cam_width", cfg.cybercabCamWidth);
+    cfg.cybercabCamHeight =
+      readOr(sim, "cybercab_cam_height", cfg.cybercabCamHeight);
         cfg.initialResMode = readOr(sim, "initial_res_mode", cfg.initialResMode);
         cfg.initialViewMode = readOr(sim, "initial_view_mode", cfg.initialViewMode);
         cfg.initialCamOverlay = readOr(sim, "initial_cam_overlay", cfg.initialCamOverlay);
@@ -211,8 +250,12 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
         }
     }
 
-    if (cfg.controlHz <= 0.0f || cfg.camWidth <= 0 || cfg.camHeight <= 0 ||
-        cfg.featWidth <= 0 || cfg.featHeight <= 0 ||
+  if (cfg.controlHz <= 0.0f || cfg.camWidth <= 0 || cfg.camHeight <= 0 ||
+      cfg.fullCamWidth < cfg.camWidth || cfg.fullCamHeight < cfg.camHeight ||
+      cfg.cybercabBinnedCamWidth <= 0 || cfg.cybercabBinnedCamHeight <= 0 ||
+      cfg.cybercabCamWidth < cfg.cybercabBinnedCamWidth ||
+      cfg.cybercabCamHeight < cfg.cybercabBinnedCamHeight ||
+      cfg.featWidth <= 0 || cfg.featHeight <= 0 ||
         cfg.occStepX <= 0.0f || cfg.occStepY <= 0.0f || cfg.occStepZ <= 0.0f ||
         cfg.occNx() <= 0 || cfg.occNy() <= 0 || cfg.occNz() <= 0 ||
         cfg.rtdetrLowConfThresh <= 0.0f || cfg.rtdetrLowConfThresh >= cfg.rtdetrHighConfThresh ||
@@ -220,6 +263,10 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
         cfg.wheelbaseM <= 0.0f) {
         throw std::runtime_error("Invalid numeric parameter bounds in SimConfig YAML");
     }
+  if (!SimConfig::isValidResMode(cfg.initialResMode)) {
+    throw std::runtime_error(
+      "simulation.initial_res_mode invalid: \"" + cfg.initialResMode + "\"");
+  }
     if (cfg.pipelineVersion != "v14" && cfg.pipelineVersion != "v15") {
         throw std::runtime_error("simulation.pipeline_version must be \"v14\" or \"v15\", got \"" +
                                  cfg.pipelineVersion + "\"");
