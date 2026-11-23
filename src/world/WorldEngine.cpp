@@ -1,4 +1,5 @@
 #include "world/WorldEngine.hpp"
+#include "world/CybercabMesh.hpp"
 
 #include <cmath>
 #include <limits>
@@ -187,26 +188,6 @@ void appendWheelAssembly(std::vector<SceneVertex>& verts, std::vector<uint32_t>&
     appendCylinderY(verts, idx, axMat, tireRadius, tireRadius, tireWidth, 24, tireCol, 1.0f, 0.0f, sem);
     appendCylinderY(verts, idx, axMat, tireRadius * 0.78f, tireRadius * 0.78f, tireWidth + 0.016f, 24, rimCol, 1.0f, 0.0f, sem);
     appendCylinderY(verts, idx, axMat, tireRadius * 0.28f, tireRadius * 0.28f, tireWidth + 0.028f, 16, {0.10f, 0.12f, 0.15f}, 1.0f, 0.0f, sem);
-}
-
-// Solid champagne-gold shallow-dished Cybercab aero wheel cover (32-segment circular profile)
-void appendCybercabAeroWheel(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx,
-                             const Mat4& wheelMat, float sideSign,
-                             Vec3 tireCol, Vec3 rimGold, Vec3 centerDimpleCol, SemanticClass sem) {
-    const float tireR = 0.365f;
-    const float tireW = 0.245f;
-    const Mat4 axMat = wheelMat * Mat4::rotZ(kPi * 0.5f);
-    // Main round tire + black inner bezel ring
-    appendCylinderY(verts, idx, axMat, tireR, tireR, tireW, 32, tireCol, 1.0f, 0.0f, sem);
-    appendCylinderY(verts, idx, axMat, 0.334f, 0.334f, tireW + 0.008f, 32, {0.035f, 0.040f, 0.055f}, 1.0f, 0.0f, sem);
-    // Giant solid champagne-gold outer collar covering 90% of wheel diameter
-    appendCylinderY(verts, idx, axMat, 0.324f, 0.324f, tireW + 0.016f, 32, rimGold, 1.0f, 0.0f, sem);
-    // Shallow aerodynamic dished cone on outboard wheel face + tiny recessed dimple pin
-    const Mat4 dishRot = (sideSign > 0.0f) ? Mat4::rotZ(-kPi * 0.5f) : Mat4::rotZ(kPi * 0.5f);
-    const Mat4 outboardMat = wheelMat * Mat4::translation({sideSign * (tireW * 0.5f + 0.014f), 0.0f, 0.0f}) * dishRot;
-    appendCylinderY(verts, idx, outboardMat, 0.038f, 0.318f, 0.018f, 32, rimGold, 1.0f, 0.0f, sem);
-    appendCylinderY(verts, idx, wheelMat * Mat4::translation({sideSign * (tireW * 0.5f + 0.022f), 0.0f, 0.0f}) * dishRot,
-                    0.030f, 0.038f, 0.006f, 16, centerDimpleCol, 1.0f, 0.0f, sem);
 }
 
 // Emits a smooth longitudinally-lofted strip grid (`stations x cols`) without heap allocations.
@@ -1246,13 +1227,7 @@ void WorldEngine::appendDynamicGeometry(std::vector<SceneVertex>& verts, std::ve
 
     // 2. Ego Tesla Cybercab (matched to real Robotaxi fastback coupe profile & solid gold aero wheel covers)
     if (includeEgo) {
-        const Mat4 egoMat = getEgoWorldMatrix();
         const Mat4 sprungMat = getEgoSprungWorldMatrix();
-        const Vec3 goldCol{0.824f, 0.706f, 0.490f};
-        const Vec3 goldBright{0.875f, 0.769f, 0.557f};
-        const Vec3 goldDark{0.620f, 0.522f, 0.345f};
-        const Vec3 canopyCol{0.035f, 0.051f, 0.086f};
-        const Vec3 trimCol{0.075f, 0.086f, 0.114f};
 
         struct CyberStation {
             float z;
@@ -1329,156 +1304,7 @@ void WorldEngine::appendDynamicGeometry(std::vector<SceneVertex>& verts, std::ve
         }
 
         if (!fsdWireMode) {
-            // Strip A: Smooth arched Champagne Roof / Hood spine (+X x +Z -> flipWinding=true for +Y outward!)
-            Vec3 roofGrid[kNumSt][3]{};
-            for (int i = 0; i < kNumSt; ++i) {
-                roofGrid[i][0] = {-st[i].wTop, st[i].yTopSide, st[i].z};
-                roofGrid[i][1] = { 0.0f,       st[i].yCrown,   st[i].z};
-                roofGrid[i][2] = { st[i].wTop, st[i].yTopSide, st[i].z};
-            }
-            emitSmoothStripGrid<kNumSt, 3>(verts, indices, sprungMat, roofGrid, kNumSt, 3, goldBright, 1.0f, 0.0f, SemanticClass::Vehicle, true);
-
-            // Strip B: Smooth Upper Tumblehome / Cabin & Fender Haunches (Right +X & Left -X)
-            Vec3 upR[kNumSt][2]{}, upL[kNumSt][2]{};
-            for (int i = 0; i < kNumSt; ++i) {
-                upR[i][0] = { st[i].wMid, st[i].yMid,     st[i].z};
-                upR[i][1] = { st[i].wTop, st[i].yTopSide, st[i].z};
-                upL[i][0] = {-st[i].wTop, st[i].yTopSide, st[i].z};
-                upL[i][1] = {-st[i].wMid, st[i].yMid,     st[i].z};
-            }
-            emitSmoothStripGrid<kNumSt, 2>(verts, indices, sprungMat, upR, kNumSt, 2, goldBright, 1.0f, 0.0f, SemanticClass::Vehicle, false);
-            emitSmoothStripGrid<kNumSt, 2>(verts, indices, sprungMat, upL, kNumSt, 2, goldBright, 1.0f, 0.0f, SemanticClass::Vehicle, false);
-
-            // Strip C: Lower Door Slab & Sculpted Wheel Arch Fenders
-            Vec3 loR[kNumSt][2]{}, loL[kNumSt][2]{};
-            for (int i = 0; i < kNumSt; ++i) {
-                loR[i][0] = { st[i].wBot, st[i].yBot, st[i].z};
-                loR[i][1] = { st[i].wMid, st[i].yMid, st[i].z};
-                loL[i][0] = {-st[i].wMid, st[i].yMid, st[i].z};
-                loL[i][1] = {-st[i].wBot, st[i].yBot, st[i].z};
-            }
-            emitSmoothStripGrid<kNumSt, 2>(verts, indices, sprungMat, loR, kNumSt, 2, goldCol, 1.0f, 0.0f, SemanticClass::Vehicle, false);
-            emitSmoothStripGrid<kNumSt, 2>(verts, indices, sprungMat, loL, kNumSt, 2, goldCol, 1.0f, 0.0f, SemanticClass::Vehicle, false);
-
-            // Exact gap-free Rear Kammtail & Front Nose closing panels matching cross-section stations
-            auto emitEndCap = [&](const CyberStation& s, bool isFront) {
-                const Vec3 pbL{-s.wBot, s.yBot,     s.z}, pbR{ s.wBot, s.yBot,     s.z};
-                const Vec3 pmL{-s.wMid, s.yMid,     s.z}, pmR{ s.wMid, s.yMid,     s.z};
-                const Vec3 ptL{-s.wTop, s.yTopSide, s.z}, ptR{ s.wTop, s.yTopSide, s.z};
-                const Vec3 pc { 0.0f,   s.yCrown,   s.z};
-                const float nZ = isFront ? 1.0f : -1.0f;
-                const Vec3 wn = sprungMat.transformVector({0.0f, 0.0f, nZ}).normalized();
-                const float semF = static_cast<float>(static_cast<int>(SemanticClass::Vehicle));
-                auto pushPt = [&](const Vec3& p) {
-                    const Vec3 wp = sprungMat.transformPoint(p);
-                    verts.push_back({wp.x, wp.y, wp.z, wn.x, wn.y, wn.z,
-                                     goldDark.x, goldDark.y, goldDark.z, 1.0f, 0.0f, semF, 0.0f, 0.0f});
-                };
-                const uint32_t b = static_cast<uint32_t>(verts.size());
-                pushPt(pbL); pushPt(pbR); pushPt(pmR); pushPt(pmL); // 0,1,2,3
-                pushPt(ptR); pushPt(ptL); pushPt(pc);               // 4,5,6
-                if (isFront) {
-                    indices.push_back(b + 0); indices.push_back(b + 1); indices.push_back(b + 2);
-                    indices.push_back(b + 0); indices.push_back(b + 2); indices.push_back(b + 3);
-                    indices.push_back(b + 3); indices.push_back(b + 2); indices.push_back(b + 4);
-                    indices.push_back(b + 3); indices.push_back(b + 4); indices.push_back(b + 5);
-                    indices.push_back(b + 5); indices.push_back(b + 4); indices.push_back(b + 6);
-                } else {
-                    indices.push_back(b + 0); indices.push_back(b + 2); indices.push_back(b + 1);
-                    indices.push_back(b + 0); indices.push_back(b + 3); indices.push_back(b + 2);
-                    indices.push_back(b + 3); indices.push_back(b + 4); indices.push_back(b + 2);
-                    indices.push_back(b + 3); indices.push_back(b + 5); indices.push_back(b + 4);
-                    indices.push_back(b + 5); indices.push_back(b + 6); indices.push_back(b + 4);
-                }
-            };
-            emitEndCap(st[0], false);
-            emitEndCap(st[kNumSt - 1], true);
-
-            // Recessed dark underbody floorpan, inner wheel-well tubs (compact inside hood height!), door rockers & kicked rear diffuser
-            appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.36f, 1.22f}),
-                      {1.16f, 0.36f, 3.68f}, {0.03f, 0.04f, 0.06f}, 1.0f, 0.0f, SemanticClass::Vehicle);
-            appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.25f, 1.375f}),
-                      {1.80f, 0.17f, 1.90f}, trimCol, 1.0f, 0.0f, SemanticClass::Vehicle);
-            appendFrustumBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.26f, 3.22f}),
-                             {1.42f, 0.18f}, {1.48f, 0.14f}, 0.14f, 0.02f, trimCol, 1.0f, 0.0f, SemanticClass::Vehicle);
-            appendFrustumBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.34f, -0.66f}),
-                             {1.68f, 0.44f}, {1.58f, 0.44f}, 0.22f, -0.04f, trimCol, 1.0f, 0.0f, SemanticClass::Vehicle);
-
-            // Flush Teardrop Side Glass Windows + B-Pillar Mullion + Panoramic Windshield (matching images.jpeg!)
-            constexpr int kWinSt = 6;
-            const float wz[kWinSt]  = { 0.16f, 0.52f, 0.92f, 1.32f, 1.68f, 1.96f};
-            const float wy0[kWinSt] = { 0.96f, 0.92f, 0.89f, 0.86f, 0.84f, 0.82f};
-            const float wy1[kWinSt] = { 0.975f, 1.21f, 1.325f, 1.29f, 1.09f, 0.855f};
-            auto evalBodyW = [&](float zq, float yq) -> float {
-                int seg = kNumSt - 2;
-                for (int s = 0; s < kNumSt - 1; ++s) {
-                    if (zq >= st[s].z && zq <= st[s + 1].z) { seg = s; break; }
-                }
-                const float tz = clampf((zq - st[seg].z) / std::max(1e-4f, st[seg + 1].z - st[seg].z), 0.0f, 1.0f);
-                const float yM = lerpf(st[seg].yMid, st[seg + 1].yMid, tz);
-                const float yT = lerpf(st[seg].yTopSide, st[seg + 1].yTopSide, tz);
-                const float wM = lerpf(st[seg].wMid, st[seg + 1].wMid, tz);
-                const float wT = lerpf(st[seg].wTop, st[seg + 1].wTop, tz);
-                const float ty = clampf((yq - yM) / std::max(1e-4f, yT - yM), 0.0f, 1.0f);
-                return lerpf(wM, wT, ty) + 0.009f;
-            };
-            Vec3 winR[kWinSt][2]{}, winL[kWinSt][2]{};
-            for (int w = 0; w < kWinSt; ++w) {
-                const float x0 = evalBodyW(wz[w], wy0[w]);
-                const float x1 = evalBodyW(wz[w], wy1[w]);
-                winR[w][0] = { x0, wy0[w], wz[w]};
-                winR[w][1] = { x1, wy1[w], wz[w]};
-                winL[w][0] = {-x1, wy1[w], wz[w]};
-                winL[w][1] = {-x0, wy0[w], wz[w]};
-            }
-            emitSmoothStripGrid<kWinSt, 2>(verts, indices, sprungMat, winR, kWinSt, 2, canopyCol, 1.0f, 0.0f, SemanticClass::Vehicle, false);
-            emitSmoothStripGrid<kWinSt, 2>(verts, indices, sprungMat, winL, kWinSt, 2, canopyCol, 1.0f, 0.0f, SemanticClass::Vehicle, false);
-
-            // Raked Panoramic Windshield & Sunroof Glass Inlay between champagne roof rails (flipWinding=true for +Y outward!)
-            const float fz[4] = {1.38f, 1.62f, 1.84f, 2.02f};
-            const float fy[4] = {1.335f, 1.19f, 1.045f, 0.90f};
-            const float fw[4] = {0.56f, 0.59f, 0.63f, 0.67f};
-            Vec3 wsGrid[4][3]{};
-            for (int k = 0; k < 4; ++k) {
-                wsGrid[k][0] = {-fw[k], fy[k] - 0.005f, fz[k]};
-                wsGrid[k][1] = { 0.0f,  fy[k] + 0.012f, fz[k]};
-                wsGrid[k][2] = { fw[k], fy[k] - 0.005f, fz[k]};
-            }
-            emitSmoothStripGrid<4, 3>(verts, indices, sprungMat, wsGrid, 4, 3, canopyCol, 1.0f, 0.0f, SemanticClass::Vehicle, true);
-
-            // Glossy black B-pillar door divider + front fender camera repeater pods + door cutline accents
-            for (const float sx : {-1.0f, 1.0f}) {
-                appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.78f, 1.08f, 0.64f}) * Mat4::rotZ(sx * 0.44f),
-                          {0.025f, 0.34f, 0.055f}, {0.02f, 0.03f, 0.05f}, 1.0f, 0.0f, SemanticClass::Vehicle);
-                // Side fender camera pod (tucked flush right behind front wheel arch)
-                appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.895f, 0.77f, 2.15f}),
-                          {0.045f, 0.048f, 0.12f}, {0.02f, 0.03f, 0.05f}, 1.0f, 0.0f, SemanticClass::Vehicle);
-            }
-
-            // Razor-thin Cyber DRL front lightbar slit + wraparound side LED tips
-            appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.55f, 3.298f}),
-                      {1.34f, 0.032f, 0.045f}, {0.93f, 0.98f, 1.0f}, 1.0f, 2.8f, SemanticClass::Vehicle);
-            for (const float sx : {-0.72f, 0.72f}) {
-                appendBox(verts, indices, sprungMat * Mat4::translation({sx, 0.55f, 3.22f}) * Mat4::rotY(sx > 0 ? -0.45f : 0.45f),
-                          {0.045f, 0.028f, 0.16f}, {0.93f, 0.98f, 1.0f}, 1.0f, 2.6f, SemanticClass::Vehicle);
-            }
-
-            // Kammtail full-width crimson rear tail/brake lightbar flush with rear deck width
-            const bool isBraking = ego_.accel < -0.45f || ego_.speed < 0.25f || ego_.aebActive;
-            appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.855f, -0.870f}),
-                      {1.42f, 0.045f, 0.045f}, {0.96f, 0.14f, 0.14f}, 1.0f, isBraking ? 4.4f : 1.3f, SemanticClass::Vehicle);
-
-            // 4x Giant Flush Champagne-Gold Aero Dish Wheels (32-segment round arches & dished solid covers)
-            const struct { float x, z; bool front; } wheels[4] = {
-                { 0.815f, 2.75f, true}, {-0.815f, 2.75f, true},
-                { 0.835f, 0.00f, false}, {-0.835f, 0.00f, false}
-            };
-            for (const auto& w : wheels) {
-                const float steer = w.front ? ego_.steerAngle : 0.0f;
-                const Mat4 wm = egoMat * Mat4::translation({w.x, 0.365f, w.z}) * Mat4::rotY(steer) * Mat4::rotX(ego_.wheelSpin);
-                appendCybercabAeroWheel(verts, indices, wm, (w.x >= 0.0f) ? 1.0f : -1.0f,
-                                        {0.055f, 0.065f, 0.085f}, goldBright, goldDark, SemanticClass::Vehicle);
-            }
+            appendCybercabVehicleMesh(verts, indices, ego_, getEgoWorldMatrix(), sprungMat, false);
         } else {
             // FSD Voxel holographic Cybercab fastback shell (flipWinding=true for +Y top roof)
             const Vec3 holoCol{0.22f, 0.74f, 0.97f};
