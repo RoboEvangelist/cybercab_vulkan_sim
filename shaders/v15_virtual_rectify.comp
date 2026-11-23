@@ -1,0 +1,82 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+// FSD v15 Module 2b: Rectifies 8 physical cameras (linear photon tensor + M1c bands) into
+// 10 canonical 160x120 upright pinhole views (8 canonical + VRU ground branch + Elevated macro branch).
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+struct VirtViewSpecGpu {
+    mat4 physCamFromVirtCam;
+    vec4 virtIntr; // fx, fy, cx, cy
+    vec4 physIntr; // fx, fy, cx, cy
+    vec4 physDist; // k1, k2, p1, p2
+    uvec4 meta;    // srcCamIdx, srcW, srcH, floatBitsToUint(renderOverscan)
+};
+
+layout(std430, binding = 0) readonly buffer LinearIn { vec4 px[]; } uLinear;
+layout(std430, binding = 1) readonly buffer BandsIn { vec4 px[]; } uBands;
+layout(std430, binding = 2) readonly buffer VirtSpecs { VirtViewSpecGpu views[]; } uSpecs;
+layout(std430, binding = 3) writeonly buffer VirtLinearOut { vec4 px[]; } uVirtLinear;
+layout(std430, binding = 4) writeonly buffer VirtBandsOut { vec4 px[]; } uVirtBands;
+
+layout(push_constant) uniform RectPC {
+    uint virtW;
+    uint virtH;
+    uint numViews;
+    uint pad;
+} pc;
+
+vec4 sampleBuf(uint baseOff, uint w, uint x0, uint y0, uint x1, uint y1, vec2 f, bool isLinear) {
+    const uint r0 = baseOff + y0 * w;
+    const uint r1 = baseOff + y1 * w;
+    if (isLinear) {
+        const vec4 c00 = uLinear.px[r0 + x0], c10 = uLinear.px[r0 + x1];
+        const vec4 c01 = uLinear.px[r1 + x0], c11 = uLinear.px[r1 + x1];
+        return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    }
+    const vec4 c00 = uBands.px[r0 + x0], c10 = uBands.px[r0 + x1];
+    const vec4 c01 = uBands.px[r1 + x0], c11 = uBands.px[r1 + x1];
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
+void main() {
+    const uint vx = gl_GlobalInvocationID.x;
+    const uint vy = gl_GlobalInvocationID.y;
+    const uint v = gl_GlobalInvocationID.z;
+    if (vx >= pc.virtW || vy >= pc.virtH || v >= pc.numViews) return;
+
+    const uint outIdx = (v * pc.virtH + vy) * pc.virtW + vx;
+    const VirtViewSpecGpu sp = uSpecs.views[v];
+    const vec3 rayVirt = normalize(vec3((vec2(vx, vy) + 0.5 - sp.virtIntr.zw) / sp.virtIntr.xy, 1.0));
+    const vec3 rayPhys = mat3(sp.physCamFromVirtCam) * rayVirt;
+    if (rayPhys.z <= 0.05) {
+        uVirtLinear.px[outIdx] = vec4(0.0);
+        uVirtBands.px[outIdx] = vec4(0.0);
+        return;
+    }
+
+    const vec2 xu = rayPhys.xy / rayPhys.z;
+    const float rs = uintBitsToFloat(sp.meta.w);
+    const vec2 sw = vec2(sp.meta.y, sp.meta.z);
+    const float uPin = (xu.x * (sp.physIntr.x / rs) + sp.physIntr.z) / sw.x;
+    const float vPin = (xu.y * (sp.physIntr.y / rs) + sp.physIntr.w) / sw.y;
+    const vec2 xd = brownConradyDistort(xu, sp.physDist);
+    const vec2 px = xd * sp.physIntr.xy + sp.physIntr.zw - 0.5;
+    if (uPin <= 0.01 || uPin >= 0.99 || vPin <= 0.01 || vPin >= 0.99 ||
+        px.x < 1.0 || px.x > sw.x - 2.0 || px.y < 1.0 || px.y > sw.y - 2.0) {
+        uVirtLinear.px[outIdx] = vec4(0.0);
+        uVirtBands.px[outIdx] = vec4(0.0);
+        return;
+    }
+
+    const uint x0 = uint(floor(px.x));
+    const uint y0 = uint(floor(px.y));
+    const uint x1 = min(x0 + 1u, sp.meta.y - 1u);
+    const uint y1 = min(y0 + 1u, sp.meta.z - 1u);
+    const vec2 f = px - vec2(x0, y0);
+    const uint baseOff = sp.meta.x * sp.meta.y * sp.meta.z;
+    const vec4 lin = sampleBuf(baseOff, sp.meta.y, x0, y0, x1, y1, f, true);
+    uVirtLinear.px[outIdx] = vec4(lin.rgb, 1.0);
+    uVirtBands.px[outIdx] = sampleBuf(baseOff, sp.meta.y, x0, y0, x1, y1, f, false);
+}
