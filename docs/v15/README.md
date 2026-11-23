@@ -43,13 +43,15 @@ reasoning with a certificate the author cannot fill in by guessing. Here the cer
 | 19 | Real Cybercab `2896x1876` / `1448x938` presets + `320x240` default & shader scaling | [step19_cybercab_native_camera_resolution.md](step19_cybercab_native_camera_resolution.md) | `6bda981`..`d92ac83` |
 | 20 | Multi-camera corroboration, aspect-invariant RT-DETR & Cybercab full validation | [step20_corroboration_and_cybercab_full_validation.md](step20_corroboration_and_cybercab_full_validation.md) | `b92a036`..`3b2844e` |
 | 21 | All-4-resolution v14/v15 validation, full FMEA suite & descriptor-leak fix | [step21_all_res_validation_and_fmea.md](step21_all_res_validation_and_fmea.md) | `d56b888`..`47f4596` |
-| 22 | Full-vision AV validation (MOT/IDSW, Lane IoU/assoc, ECE/slicing, RSS, poles/gantry) & night-glare fix | [step22_av_validation_framework.md](step22_av_validation_framework.md) | Step 22 |
+| 22 | Full-vision AV validation (MOT/IDSW, Lane IoU/assoc, ECE/slicing, RSS, poles/gantry) & night-glare fix | [step22_av_validation_framework.md](step22_av_validation_framework.md) | `7589de1`..`c5c8c91` |
+| 23 | Per-condition calib, vision signal FSM, open-set road obstacles, hierarchy & shadow replay | [step23_calibration_signal_openset_and_replay.md](step23_calibration_signal_openset_and_replay.md) | Step 23 |
 
 ## Open UNVERIFIED items
 - ~~step02 R2~~ **CLOSED in Step 11**: closed-loop `v15` perception validated (`recall=0.5811`, `precision=0.8077`, 0 collisions, `4.88 ms` half-res / `7.38 ms` full-res).
 - ~~step06a R1~~ **CLOSED in Step 17**: live rendered camera-knock self-calibration validated in `LiveCameraKnockSelfCalibRecoversPitchRoll` (`knock_recov_pitch_deg=1.7545`, `knock_recov_roll_deg=-1.4989`).
+- ~~step22 night ECE~~ **CLOSED in Step 23**: per-condition `v15` calibration lowers `night_glare` ECE `0.3934 -> 0.2527` (`oce 0.2488 -> 0.1041`).
 
 ## Regression gate (every step)
-- `ctest --test-dir build` must show **100%** pass (`182/182`).
-- The 96 pre-v15 tests are the v14 equivalence oracle (`pipeline_version: v14`); 86 v15/all-res/validation tests cover Modules 1–7, policy config bounds, CybercabMesh, 4D Gaussian planner, Reality HUD/telemetry, HDR night-glare/RCCB, params/actions/autoshift/calib, voxels/hallucinations/AP/missions/zero-alloc, all 4 camera presets (`half`/`full`/`cybercab_binned`/`cybercab`), multi-camera corroboration/HW4 range hierarchy, FMEA safety cases, full-vision MOT/ECE/slicing/RSS/lane/pole validation, and end-to-end closed-loop driving.
+- `ctest --test-dir build` must show **100%** pass (`189/189`).
+- The 96 pre-v15 tests are the v14 equivalence oracle (`pipeline_version: v14`); 93 v15/all-res/validation tests cover Modules 1–7, policy config bounds, CybercabMesh, 4D Gaussian planner, Reality HUD/telemetry, HDR night-glare/RCCB, params/actions/autoshift/calib, voxels/hallucinations/AP/missions/zero-alloc, all 4 camera presets (`half`/`full`/`cybercab_binned`/`cybercab`), multi-camera corroboration/HW4 range hierarchy, FMEA safety cases, full-vision MOT/ECE/slicing/RSS/lane/pole validation, per-condition calibration, pure-vision signal FSM/association, open-set road obstacles, zero-tolerance hierarchy, and deterministic shadow replay.
 - New files are kept to **350 lines or fewer**.
