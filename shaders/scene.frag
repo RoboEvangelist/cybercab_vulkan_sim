@@ -23,13 +23,34 @@ void main() {
     const float ambient = pc.sunDirAmbient.w * (0.6 + 0.4 * hemi);
     vec3 lit = inColor.rgb * (ambient + ndotl * 0.85) + inColor.rgb * inEmissive;
 
-    // Soft metallic / clearcoat automotive sheen on vehicle bodies & wheels (SemId == 1)
+    // Soft metallic clearcoat & tinted canopy glass shading on vehicles/wheels (SemId == 1)
     if (abs(inSemId - 1.0) < 0.25 && inEmissive < 0.1) {
-        const vec3 halfH = normalize(L + vec3(0.12, 0.38, 0.18));
-        const float spec = pow(max(dot(N, halfH), 0.0), 22.0) * 0.22;
-        const float crestSheen = pow(max(N.y, 0.0), 2.5) * 0.10;
-        const float warmBounce = max(-N.y, 0.0) * 0.14;
-        lit += inColor.rgb * (crestSheen + warmBounce) + vec3(spec, spec * 0.94, spec * 0.80);
+        const float kSpecTightPow = 42.0, kSpecTightGain = 0.24;
+        const float kSpecBroadPow = 10.0, kSpecBroadGain = 0.09;
+        const float kGlassSpecPow = 96.0, kGlassSpecGain = 0.55;
+        const float kGlassMaxLuma = 0.085, kGlassBlueRatio = 1.45;
+        const vec3 kSkyZenith = vec3(0.42, 0.62, 0.88);
+        const vec3 kSkyHorizon = vec3(0.70, 0.82, 0.95);
+        const vec3 kPaintWarmTint = vec3(1.0, 0.94, 0.80);
+
+        const float luma = dot(inColor.rgb, vec3(0.299, 0.587, 0.114));
+        const bool isTintedGlass = (luma < kGlassMaxLuma) && (inColor.b > inColor.r * kGlassBlueRatio);
+        const vec3 halfH = normalize(L + vec3(0.14, 0.42, 0.20));
+        const float ndoth = max(dot(N, halfH), 0.0);
+        const float skyRefl = clamp(N.y * 0.75 + 0.35, 0.0, 1.0);
+        const vec3 skyCol = mix(kSkyHorizon, kSkyZenith, skyRefl);
+
+        if (isTintedGlass) {
+            const float fresnelGlass = 0.10 + 0.32 * pow(1.0 - abs(N.y), 2.5);
+            const float glassSpec = pow(ndoth, kGlassSpecPow) * kGlassSpecGain;
+            lit = inColor.rgb * (ambient * 0.8 + ndotl * 0.45) + skyCol * fresnelGlass + vec3(glassSpec);
+        } else {
+            const float spec = pow(ndoth, kSpecTightPow) * kSpecTightGain + pow(ndoth, kSpecBroadPow) * kSpecBroadGain;
+            const float crestSheen = pow(max(N.y, 0.0), 2.5) * 0.10;
+            const float warmBounce = max(-N.y, 0.0) * 0.13;
+            const float rimFresnel = smoothstep(0.0, 0.45, 1.0 - abs(N.y)) * 0.05;
+            lit += inColor.rgb * (crestSheen + warmBounce) + kPaintWarmTint * spec + skyCol * rimFresnel;
+        }
     }
 
     // FogExp2 on view depth (1 / w of clip space).

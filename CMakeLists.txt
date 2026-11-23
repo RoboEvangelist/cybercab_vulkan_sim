@@ -83,6 +83,7 @@ target_link_libraries(cybercab_core PUBLIC
 )
 
 add_library(cybercab_world SHARED
+    src/world/CybercabMesh.cpp
     src/world/WorldEngine.cpp
 )
 target_link_libraries(cybercab_world PUBLIC cybercab_core)
