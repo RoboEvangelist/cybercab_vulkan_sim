@@ -408,7 +408,7 @@ void CameraRigRenderer::renderAllCameras(const WorldEngine& world, const SimConf
         const auto& spec = cfg.cameras.at(c);
         CameraIntrinsics intr = spec.intrinsics(camWidth_, camHeight_);
         // Overscan wide/barrel cameras so Brown-Conrady distortion pulls outer scene into edges cleanly
-        float renderScale = (spec.distortion[0] < -0.14f) ? 1.24f : 1.04f;
+        float renderScale = spec.renderOverscan();
 
         Mat4 worldFromCam = worldFromSprung * spec.extrinsicVehicleLocalFromCam();
         Mat4 camFromWorld = worldFromCam.inverseRigid();

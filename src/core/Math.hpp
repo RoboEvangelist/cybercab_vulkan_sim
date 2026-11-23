@@ -257,10 +257,11 @@ inline Vec2 distortNormalized(float xu, float yu, const std::array<float, 4>& d)
 }
 
 // Fixed-point iterative Brown-Conrady undistortion in normalized camera coordinates.
-inline Vec2 undistortNormalized(float xd, float yd, const std::array<float, 4>& d) {
+// iterations = 4 reproduces brownConradyUndistort() in shaders/include/common.glsl bit-for-bit in form.
+inline Vec2 undistortNormalized(float xd, float yd, const std::array<float, 4>& d, int iterations = 6) {
     float xu = xd;
     float yu = yd;
-    for (int it = 0; it < 6; ++it) {
+    for (int it = 0; it < iterations; ++it) {
         const float r2 = xu * xu + yu * yu;
         const float rad = 1.0f + d[0] * r2 + d[1] * r2 * r2;
         const float dxT = 2.0f * d[2] * xu * yu + d[3] * (r2 + 2.0f * xu * xu);

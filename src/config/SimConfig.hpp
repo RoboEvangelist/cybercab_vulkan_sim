@@ -46,6 +46,9 @@ struct CameraSpec {
         return out;
     }
 
+    // Pinhole render overscan so Brown-Conrady barrel distortion fills the image (single source of truth).
+    float renderOverscan() const { return (distortion[0] < -0.14f) ? 1.24f : 1.04f; }
+
     // Extrinsic T_{ego <- cam} in ISO 8855 Ego frame (X fwd, Y left, Z up)
     // to CV Camera frame (X right, Y down, Z fwd).
     Mat4 extrinsicEgoFromCamISO() const {
