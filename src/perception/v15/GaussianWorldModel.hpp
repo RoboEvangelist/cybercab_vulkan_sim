@@ -41,8 +41,11 @@ public:
                              const CameraIntrinsics& intr, Vec2& uvOut,
                              float cov2dOut[3], float& depthOut);
 
-    // GaussianFormer-2 probabilistic superposition P(x, t) = 1 - prod_i (1 - alpha_i f_i(x, t)).
-    float queryOccupancyProb(const Vec3& worldPt, float horizonSec = 0.0f) const;
+  // GaussianFormer-2 P(x, t) = 1 - prod_i (1 - alpha_i f_i(x, t)).
+  static float queryOccupancyProb(const std::vector<V15Gaussian3D>& gaussians,
+                                  const Vec3& worldPt, float horizonSec = 0.0f,
+                                  bool roadBlockingOnly = false);
+  float queryOccupancyProb(const Vec3& worldPt, float horizonSec = 0.0f) const;
     void rollout4D(float horizonSec, std::vector<Gaussian3DGpu>& outPred) const;
     void setGaussiansForTest(std::vector<Gaussian3DGpu> gaussians) { gaussians_ = std::move(gaussians); }
     const std::vector<Gaussian3DGpu>& gaussians() const { return gaussians_; }

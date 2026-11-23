@@ -5,6 +5,20 @@
 #include <cmath>
 
 namespace cybercab::v15 {
+namespace {
+
+constexpr size_t kStaticCellScratchCap = 60u * 40u;
+constexpr float kDynScaleGrowthPerSec = 0.15f;
+constexpr float kDynamicFlagThresh = 0.5f;
+constexpr float kMinRoadGaussianOpacity = 0.05f;
+constexpr float kMinRoadGaussianScaleYM = 0.10f;
+constexpr float kMaxRoadGaussianCenterYM = 2.40f;
+constexpr float kMinGaussianAxisM = 0.15f;
+constexpr float kMahalanobisSqCutoff = 18.0f;
+constexpr float kGaussianExpHalf = -0.5f;
+constexpr float kMaxGaussianOccProb = 0.999f;
+
+}  // namespace
 
 GaussianWorldModel::~GaussianWorldModel() { destroy(); }
 
@@ -29,7 +43,7 @@ void GaussianWorldModel::initSplatGpu(const VulkanContext& ctx) {
     vkUpdateDescriptorSets(ctx.device(), 2, w, 0, nullptr);
   gaussians_.reserve(kMaxGaussians);
   sortedScratch_.reserve(kMaxGaussians);
-  cellScratch_.reserve(60u * 40u);
+  cellScratch_.reserve(kStaticCellScratchCap);
   vruScratch_.reserve(static_cast<size_t>(PatchTokenizer::kGridW) *
                       PatchTokenizer::kGridH);
 }
@@ -108,27 +122,51 @@ void GaussianWorldModel::projectEwa2D(const Gaussian3DGpu& g, const Mat4& camFro
     cov2dOut[2] = cyy;
 }
 
-float GaussianWorldModel::queryOccupancyProb(const Vec3& worldPt, float horizonSec) const {
-    const float t = std::max(0.0f, horizonSec);
-    const float grow = 1.0f + 0.15f * t;
-    double emptyProb = 1.0;
-    for (const auto& g : gaussians_) {
-        const float dyn = (g.velYaw.w > 0.5f) ? t : 0.0f;
-        const float dx = worldPt.x - (g.meanOpacity.x + g.velYaw.x * dyn);
-        const float dy = worldPt.y - g.meanOpacity.y;
-        const float dz = worldPt.z - (g.meanOpacity.z + g.velYaw.y * dyn);
-        const float syaw = std::sin(g.velYaw.z), cyaw = std::cos(g.velYaw.z);
-        const float lx = dx * cyaw - dz * syaw;
-        const float lz = dx * syaw + dz * cyaw;
-        const float sx = std::max(0.15f, g.scaleSem.x * ((g.velYaw.w > 0.5f) ? grow : 1.0f));
-        const float sy = std::max(0.15f, g.scaleSem.y);
-        const float sz = std::max(0.15f, g.scaleSem.z * ((g.velYaw.w > 0.5f) ? grow : 1.0f));
-        const float mSq = (lx * lx) / (sx * sx) + (dy * dy) / (sy * sy) + (lz * lz) / (sz * sz);
-        if (mSq > 18.0f) continue;
-        const double occ = clampf(g.meanOpacity.w * std::exp(-0.5f * mSq), 0.0f, 0.999f);
-        emptyProb *= (1.0 - occ);
+float GaussianWorldModel::queryOccupancyProb(
+  const std::vector<V15Gaussian3D>& gaussians, const Vec3& worldPt,
+  float horizonSec, bool roadBlockingOnly) {
+  const float t = std::max(0.0f, horizonSec);
+  const float grow = 1.0f + kDynScaleGrowthPerSec * t;
+  double emptyProb = 1.0;
+  for (const auto& g : gaussians) {
+    if (roadBlockingOnly) {
+      const int sem = static_cast<int>(std::lround(g.scaleSem.w));
+      const bool roadSem =
+        (sem == static_cast<int>(SemanticClass::Vehicle) ||
+         sem == static_cast<int>(SemanticClass::Pedestrian));
+      if (!roadSem || g.meanOpacity.w < kMinRoadGaussianOpacity ||
+          g.scaleSem.y <= kMinRoadGaussianScaleYM ||
+          g.meanOpacity.y > kMaxRoadGaussianCenterYM) {
+        continue;
+      }
     }
-    return clampf(static_cast<float>(1.0 - emptyProb), 0.0f, 1.0f);
+    const bool isDyn = (g.velYaw.w > kDynamicFlagThresh);
+    const float dyn = isDyn ? t : 0.0f;
+    const float dx = worldPt.x - (g.meanOpacity.x + g.velYaw.x * dyn);
+    const float dy = worldPt.y - g.meanOpacity.y;
+    const float dz = worldPt.z - (g.meanOpacity.z + g.velYaw.y * dyn);
+    const float syaw = std::sin(g.velYaw.z);
+    const float cyaw = std::cos(g.velYaw.z);
+    const float lx = dx * cyaw - dz * syaw;
+    const float lz = dx * syaw + dz * cyaw;
+    const float dynGrow = isDyn ? grow : 1.0f;
+    const float sx = std::max(kMinGaussianAxisM, g.scaleSem.x * dynGrow);
+    const float sy = std::max(kMinGaussianAxisM, g.scaleSem.y);
+    const float sz = std::max(kMinGaussianAxisM, g.scaleSem.z * dynGrow);
+    const float mSq =
+      (lx * lx) / (sx * sx) + (dy * dy) / (sy * sy) + (lz * lz) / (sz * sz);
+    if (mSq > kMahalanobisSqCutoff) continue;
+    const double occ = clampf(
+      g.meanOpacity.w * std::exp(kGaussianExpHalf * mSq), 0.0f,
+      kMaxGaussianOccProb);
+    emptyProb *= (1.0 - occ);
+  }
+  return clampf(static_cast<float>(1.0 - emptyProb), 0.0f, 1.0f);
+}
+
+float GaussianWorldModel::queryOccupancyProb(const Vec3& worldPt,
+                                             float horizonSec) const {
+  return queryOccupancyProb(gaussians_, worldPt, horizonSec, false);
 }
 
 void GaussianWorldModel::rollout4D(float horizonSec, std::vector<Gaussian3DGpu>& outPred) const {
