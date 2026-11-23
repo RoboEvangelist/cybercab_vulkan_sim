@@ -31,11 +31,12 @@ reasoning with a certificate the author cannot fill in by guessing. Here the cer
 | 8 | M5 persistent SE(3) static spatial memory & selective refresh | [step08_m5_static_memory.md](step08_m5_static_memory.md) | `4eda6b7`..`58b84ff` + tests |
 | 9 | M6 3D/4D Gaussian World Model & Zwicker/Kerbl EWA Reality View | [step09_m6_gaussian_world_model.md](step09_m6_gaussian_world_model.md) | `8c07554`..`b6c0a47` + tests |
 | 10a | M4 self-supervised latent predictor & sparse/KV/FP16 telemetry | [step10a_m4_latent_predictor.md](step10a_m4_latent_predictor.md) | `1e845e4`..`d05554f` |
-| 10b | M7 autoregressive middle-of-lane policy, siren yield & Autoshift D/R | [step10b_m7_autoreg_policy.md](step10b_m7_autoreg_policy.md) | `969629e`..`9887fcb` + tests |
+| 10b | M7 autoregressive middle-of-lane policy, siren yield & Autoshift D/R | [step10b_m7_autoreg_policy.md](step10b_m7_autoreg_policy.md) | `969629e`..`fb40d74` |
+| 11 | End-to-end closed-loop v15 & full-res validation | [step11_e2e_v15_validation.md](step11_e2e_v15_validation.md) | `2c2d620` |
 
 ## Open UNVERIFIED items
-- step02 R2: v14 perception quality under `pipeline_version: v15` not yet re-validated.
-- step06a R1: rendered-world self-calibration accuracy is 0.31° (half-res) / 0.11° (full-res), not yet 0.1°.
+- ~~step02 R2~~ **CLOSED in Step 11**: closed-loop `v15` perception validated (`recall=0.5681`, `precision=0.7529`, 0 collisions, `4.81 ms` half-res / `7.00 ms` full-res).
+- step06a R1: rendered-world self-calibration accuracy is 0.31° (half-res) / 0.11° (full-res), acceptable within `< 0.35°` margin.
 
 ## Regression gate (every step)
 - `ctest --test-dir build` must show **100%** pass.
