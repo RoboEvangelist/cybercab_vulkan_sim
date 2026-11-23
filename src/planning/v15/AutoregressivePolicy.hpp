@@ -2,6 +2,7 @@
 // FSD v15 Module 7: Autoregressive trajectory policy (x, y, v, kappa) enforcing middle-of-lane
 // driving (+/-1.95 m), bounded truck shy-away, comfort curvature limits, YIELDING_SIREN & Autoshift D/R.
 #include "config/SimConfig.hpp"
+#include "config/V15PolicyConfig.hpp"
 #include "perception/PerceptionTypes.hpp"
 #include "world/WorldEngine.hpp"
 #include <vector>
@@ -19,13 +20,15 @@ struct AutoregConfig {
 
 class AutoregressivePolicy {
 public:
-    static float clampToMiddleOfLane(float lat);
+    static float clampToMiddleOfLane(float lat, const V15PolicyConfig& policy = {});
     static float computeTruckShyOffset(float baseLaneLat, const EgoState& ego,
-                                       const std::vector<Track3D>& tracks);
+                                       const std::vector<Track3D>& tracks,
+                                       const V15PolicyConfig& policy = {});
     static void rolloutMiddleOfLane(const EgoState& ego, const ClosedCatmullRomCurve3& centerline,
                                     float loopU, float currentLat, float targetLat,
                                     int steps, float lookaheadDist,
-                                    std::vector<Vec3>& outTraj, float& outMaxKappa);
+                                    std::vector<Vec3>& outTraj, float& outMaxKappa,
+                                    const V15PolicyConfig& policy = {});
     static void plan(const SimConfig& cfg, WorldEngine& world,
                      const PerceptionFrameOutput& perc, PlannerCommand& cmd,
                      const AutoregConfig& acfg = {});

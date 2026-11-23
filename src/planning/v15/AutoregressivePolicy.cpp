@@ -6,128 +6,165 @@
 #include <limits>
 
 namespace cybercab::v15 {
-namespace {
 
-float quinticLat(float d0, float d1, float tNorm) {
-    const float t = clampf(tNorm, 0.0f, 1.0f);
-    const float poly = t * t * t * (10.0f + t * (-15.0f + 6.0f * t));
-    return d0 + (d1 - d0) * poly;
-}
-
-} // namespace
-
-float AutoregressivePolicy::clampToMiddleOfLane(float lat) {
+float AutoregressivePolicy::clampToMiddleOfLane(float lat, const V15PolicyConfig& p) {
     const float sign = (lat >= 0.0f) ? 1.0f : -1.0f;
-    return sign * clampf(std::abs(lat), AutoregConfig::kMinLaneAbsM, AutoregConfig::kMaxLaneAbsM);
+    return sign * clampf(std::abs(lat), p.minLaneAbsM, p.maxLaneAbsM);
 }
 
 float AutoregressivePolicy::computeTruckShyOffset(float baseLaneLat, const EgoState& ego,
-                                                  const std::vector<Track3D>& tracks) {
+                                                  const std::vector<Track3D>& tracks,
+                                                  const V15PolicyConfig& p) {
     const float laneSign = (baseLaneLat >= 0.0f) ? 1.0f : -1.0f;
-    float target = laneSign * AutoregConfig::kLaneCenterAbsM;
+    float target = laneSign * p.laneCenterAbsM;
     const float sE = std::sin(ego.yaw), cE = std::cos(ego.yaw);
     for (const auto& tr : tracks) {
-        if (tr.semantic != SemanticClass::Vehicle || tr.halfExtents.z < 3.2f) continue;
+        if (tr.semantic != SemanticClass::Vehicle || tr.halfExtents.z < p.truckHalfLengthMinM) continue;
         const float dx = tr.worldPos.x - ego.pos.x, dz = tr.worldPos.z - ego.pos.z;
         const float sFwd = sE * dx + cE * dz, dLeft = cE * dx - sE * dz;
         const float truckRoadLat = ego.currentLateralOffset + dLeft;
         const float absLat = std::abs(truckRoadLat - baseLaneLat);
-        if (sFwd > -6.0f && sFwd < 26.0f && absLat > 1.8f && absLat < 5.5f) {
+        if (sFwd > p.truckShyFwdMinM && sFwd < p.truckShyFwdMaxM &&
+            absLat > p.adjLaneMinSepM && absLat < p.adjLaneMaxSepM) {
             const float shySign = (truckRoadLat > baseLaneLat) ? -1.0f : 1.0f;
-            const float w = clampf(1.0f - std::max(0.0f, sFwd - 8.0f) / 18.0f, 0.25f, 1.0f);
-            target = laneSign * AutoregConfig::kLaneCenterAbsM + shySign * (AutoregConfig::kMaxTruckShyM * w);
+            const float fadeSpan = std::max(1.0f, p.truckShyFwdMaxM - 8.0f);
+            const float w = clampf(1.0f - std::max(0.0f, sFwd - 8.0f) / fadeSpan, 0.25f, 1.0f);
+            target = laneSign * p.laneCenterAbsM + shySign * (p.maxTruckShyM * w);
             break;
         }
     }
-    return clampToMiddleOfLane(target);
+    return clampToMiddleOfLane(target, p);
 }
 
 void AutoregressivePolicy::rolloutMiddleOfLane(const EgoState& ego, const ClosedCatmullRomCurve3& centerline,
                                                float loopU, float currentLat, float targetLat,
                                                int steps, float lookaheadDist,
-                                               std::vector<Vec3>& outTraj, float& outMaxKappa) {
-    (void)ego;
+                                               std::vector<Vec3>& outTraj, float& outMaxKappa,
+                                               const V15PolicyConfig& p) {
     const int n = std::max(6, steps);
-    const float totalLen = centerline.getLength(), cleanLat = clampToMiddleOfLane(targetLat);
+    const float totalLen = centerline.getLength(), cleanLat = clampToMiddleOfLane(targetLat, p);
+    const float ds = lookaheadDist / static_cast<float>(n - 1);
+    const float dtStep = ds / std::max(std::abs(ego.speed), p.rolloutMinSpeedMs);
     outTraj.resize(static_cast<size_t>(n));
+    // Autoregressive lateral state rollout d_{k+1} = d_k + clamp(k_p*(d_tgt - d_k), +-v_lat_max) * dtStep
+    float lat = currentLat;
     for (int s = 0; s < n; ++s) {
-        const float frac = static_cast<float>(s) / static_cast<float>(n - 1);
-        float u = std::fmod(loopU + (frac * lookaheadDist) / totalLen, 1.0f);
+        const float distAlong = static_cast<float>(s) * ds;
+        float u = std::fmod(loopU + distAlong / totalLen, 1.0f);
         if (u < 0.0f) u += 1.0f;
         const Vec3 cPt = centerline.getPointAt(u), tan = centerline.getTangentAt(u);
         const Vec3 left{tan.z, 0.0f, -tan.x};
-        Vec3 wp = cPt + left * quinticLat(currentLat, cleanLat, std::min(1.0f, frac / 0.55f));
+        Vec3 wp = cPt + left * lat;
         wp.y = 0.12f;
         outTraj[static_cast<size_t>(s)] = wp;
+        const float vLat = clampf((cleanLat - lat) * p.latGainPerS, -p.maxLatSpeedMs, p.maxLatSpeedMs);
+        lat += vLat * dtStep;
     }
     outMaxKappa = 0.0f;
-    const int kLimit = std::min(n - 2, 10);
-    for (int i = 1; i <= kLimit; ++i) {
-        const Vec3 d0 = outTraj[i] - outTraj[i - 1], d1 = outTraj[i + 1] - outTraj[i];
-        const float ds = std::hypot(d0.x, d0.z);
-        if (ds >= 0.2f) {
-            outMaxKappa = std::max(outMaxKappa, std::abs(wrapAngle(std::atan2(d1.x, d1.z) - std::atan2(d0.x, d0.z))) / ds);
-        }
+    const float halfChord = p.curveChordHalfM, duChord = halfChord / std::max(totalLen, 1.0f);
+    for (float sM : {2.0f, 6.0f, 10.0f, 14.0f}) {
+        float uc = std::fmod(loopU + sM / totalLen, 1.0f);
+        if (uc < 0.0f) uc += 1.0f;
+        float um = std::fmod(uc - duChord + 1.0f, 1.0f), up = std::fmod(uc + duChord, 1.0f);
+        const Vec3 t0 = centerline.getTangentAt(um), t1 = centerline.getTangentAt(up);
+        outMaxKappa = std::max(outMaxKappa, std::abs(wrapAngle(std::atan2(t1.x, t1.z) - std::atan2(t0.x, t0.z))) / (2.0f * halfChord));
     }
 }
 
 void AutoregressivePolicy::plan(const SimConfig& cfg, WorldEngine& world,
                                 const PerceptionFrameOutput& perc, PlannerCommand& cmd,
                                 const AutoregConfig& acfg) {
+    (void)acfg;
+    const V15PolicyConfig& p = cfg.v15Policy;
     const EgoState& ego = world.ego();
     const auto& centerline = world.centerline();
     const float totalLoopLen = centerline.getLength(), loopU = world.findClosestLoopU(ego.pos);
     const Vec3 curTan = centerline.getTangentAt(loopU);
     const float currentLat = (ego.pos - centerline.getPointAt(loopU)).dot({curTan.z, 0.0f, -curTan.x});
     const float latHeading = (std::sin(ego.yaw) * curTan.z) - (std::cos(ego.yaw) * curTan.x);
-    const float lookaheadDist = std::max(acfg.lookaheadMinM, std::max(0.0f, ego.speed) * 1.9f + 7.0f);
+    const float lookaheadDist = std::max(p.minLookaheadM, std::max(0.0f, ego.speed) * p.lookaheadTimeSec + p.lookaheadBaseM);
     const int trajSteps = std::max(8, cfg.trajSteps);
-    const bool sirenYield = (perc.v15.sirenDetected && perc.v15.sirenConfidence > 0.35f);
-    const float baseLats[2] = {-AutoregConfig::kLaneCenterAbsM, AutoregConfig::kLaneCenterAbsM};
+    const bool sirenYield = (perc.v15.sirenDetected && perc.v15.sirenConfidence > p.sirenConfThresh);
+    const float baseLats[2] = {-p.laneCenterAbsM, p.laneCenterAbsM};
+    const int curLane = (currentLat >= 0.0f) ? 1 : 0;
+    const float sE = std::sin(ego.yaw), cE = std::cos(ego.yaw);
+
+    bool lane0VehicleNearby = false;
+    for (const auto& tr : perc.tracks) {
+        if (tr.semantic != SemanticClass::Vehicle) continue;
+        const float tu = world.findClosestLoopU(tr.worldPos);
+        const Vec3 tt = centerline.getTangentAt(tu);
+        const float trLat = (tr.worldPos - centerline.getPointAt(tu)).dot({tt.z, 0.0f, -tt.x});
+        const float sFwd = sE * (tr.worldPos.x - ego.pos.x) + cE * (tr.worldPos.z - ego.pos.z);
+        if (trLat < -0.4f && trLat > -3.65f && sFwd > -10.0f && sFwd < 26.0f) lane0VehicleNearby = true;
+    }
 
     cmd.candidateTrajectories.resize(2);
     cmd.candidateBlocked.assign(2, false);
     float candOffsets[2]{}, candKappa[2]{}, candLeadGap[2]{1e4f, 1e4f};
     bool staticBlocked[2]{false, false};
-    int bestIdx = 0;
+    int bestIdx = curLane;
     float bestScore = std::numeric_limits<float>::infinity();
 
     for (int c = 0; c < 2; ++c) {
-        candOffsets[c] = sirenYield ? -2.05f : computeTruckShyOffset(baseLats[c], ego, perc.tracks);
+        candOffsets[c] = sirenYield ? p.sirenRightPullM : computeTruckShyOffset(baseLats[c], ego, perc.tracks, p);
         rolloutMiddleOfLane(ego, centerline, loopU, currentLat, candOffsets[c], trajSteps, lookaheadDist,
-                            cmd.candidateTrajectories[c], candKappa[c]);
-        float cost = (c == 1) ? (sirenYield ? 1e4f : 36.0f) : 0.0f;
-        cost += std::abs(candOffsets[c] - currentLat) * 4.5f;
-        if (!sirenYield && std::abs(currentLat) < 1.50f) {
-            if (latHeading > 0.04f && c == 0) cost += 55.0f;
-            if (latHeading < -0.04f && c == 1) cost += 55.0f;
+                            cmd.candidateTrajectories[c], candKappa[c], p);
+        float cost = 0.0f;
+        if (sirenYield) {
+            cost = (c == 1) ? 1e4f : 0.0f;
+        } else if (curLane == 0 && c == 1) {
+            cost = p.rightLaneSwitchCost;
+        } else if (curLane == 1) {
+            cost = (c == 0) ? (lane0VehicleNearby ? p.leftLaneReturnHoldCost : 0.0f) : (lane0VehicleNearby ? 0.0f : p.leftLaneStayCost);
         }
+        if (!sirenYield && std::abs(currentLat) < p.dividerBandM) {
+            if (latHeading > p.headingCommitThresh && c == 0) cost += p.headingCommitCost;
+            if (latHeading < -p.headingCommitThresh && c == 1) cost += p.headingCommitCost;
+        }
+        int voxHits = 0;
+        float voxCost = 0.0f, obsCost = 0.0f;
         for (int s = 1; s < trajSteps; ++s) {
             const float distAlong = (static_cast<float>(s) / static_cast<float>(trajSteps - 1)) * lookaheadDist;
+            if (distAlong > 22.0f) break;
             const float tPred = distAlong / std::max(4.0f, std::abs(ego.speed));
             const Vec3& wp = cmd.candidateTrajectories[c][s];
-            for (const auto& v : perc.activeVoxels) {
-                if (v.wy > 2.2f || v.confidence <= 0.52f || v.sem == SemanticClass::Overhang ||
-                    v.sem == SemanticClass::SignalSign || v.sem == SemanticClass::Curb || v.sem == SemanticClass::Static) continue;
-                const float r = (v.sem == SemanticClass::Pedestrian) ? 2.1f : 1.55f;
-                const float d = std::hypot(wp.x - (v.wx + v.vx * std::min(1.8f, tPred)), wp.z - (v.wz + v.vz * std::min(1.8f, tPred)));
-                if (d < r) { cost += (r - d) * 400.0f; candLeadGap[c] = std::min(candLeadGap[c], distAlong); }
+            if (distAlong <= 18.0f) {
+                for (size_t k = 0; k < perc.activeVoxels.size(); k += 2) {
+                    const auto& v = perc.activeVoxels[k];
+                    if (v.wy > 2.2f || v.confidence <= p.voxelMinConf || v.sem == SemanticClass::Overhang ||
+                        v.sem == SemanticClass::SignalSign || v.sem == SemanticClass::Curb || v.sem == SemanticClass::Static) continue;
+                    const float r = (v.sem == SemanticClass::Pedestrian) ? 1.95f : 1.35f;
+                    const float d = std::hypot(wp.x - (v.wx + v.vx * std::min(1.5f, tPred)), wp.z - (v.wz + v.vz * std::min(1.5f, tPred)));
+                    if (d < r) { ++voxHits; voxCost += (r - d) * 140.0f; candLeadGap[c] = std::min(candLeadGap[c], distAlong); }
+                }
             }
             for (const auto& tr : perc.tracks) {
                 if (tr.semantic == SemanticClass::Static || tr.semantic == SemanticClass::SignalSign) continue;
-                const float r = ((tr.semantic == SemanticClass::Pedestrian) ? 2.15f : 1.75f) + clampf(tr.posSigmaM * 0.2f, 0.0f, 0.6f);
-                const float d = std::hypot(wp.x - (tr.worldPos.x + tr.worldVel.x * std::min(2.0f, tPred)),
-                                           wp.z - (tr.worldPos.z + tr.worldVel.z * std::min(2.0f, tPred)));
+                if (tr.semantic == SemanticClass::Vehicle) {
+                    const float tu = world.findClosestLoopU(tr.worldPos);
+                    const Vec3 tt = centerline.getTangentAt(tu);
+                    if (std::abs((tr.worldPos - centerline.getPointAt(tu)).dot({tt.z, 0.0f, -tt.x})) > 3.65f) continue;
+                }
+                if (tr.semantic == SemanticClass::Vehicle && std::hypot(tr.worldVel.x, tr.worldVel.z) < 0.35f) {
+                    const float tu = world.findClosestLoopU(tr.worldPos);
+                    const Vec3 tt = centerline.getTangentAt(tu);
+                    const float trLat = (tr.worldPos - centerline.getPointAt(tu)).dot({tt.z, 0.0f, -tt.x});
+                    const float sFwd = sE * (tr.worldPos.x - ego.pos.x) + cE * (tr.worldPos.z - ego.pos.z);
+                    if (sFwd > 0.5f && sFwd < 9.5f && std::abs(trLat - candOffsets[c]) < 1.35f) staticBlocked[c] = true;
+                }
+                const float r = ((tr.semantic == SemanticClass::Pedestrian) ? 2.10f : 1.55f) + clampf(tr.posSigmaM * 0.15f, 0.0f, 0.45f);
+                const float d = std::hypot(wp.x - (tr.worldPos.x + tr.worldVel.x * std::min(1.8f, tPred)),
+                                           wp.z - (tr.worldPos.z + tr.worldVel.z * std::min(1.8f, tPred)));
                 if (d < r) {
-                    cost += (r - d) * ((tr.semantic == SemanticClass::Pedestrian) ? 700.0f : 380.0f);
+                    obsCost += (r - d) * ((tr.semantic == SemanticClass::Pedestrian) ? 650.0f : 320.0f);
                     candLeadGap[c] = std::min(candLeadGap[c], distAlong);
-                    if (tr.semantic == SemanticClass::Vehicle && distAlong < 9.5f && std::hypot(tr.worldVel.x, tr.worldVel.z) < 0.3f) {
-                        staticBlocked[c] = true;
-                    }
                 }
             }
         }
-        cmd.candidateBlocked[c] = (cost > 40.0f);
+        if (voxHits >= 2) obsCost += std::min(voxCost, 280.0f);
+        cost += obsCost;
+        cmd.candidateBlocked[c] = (obsCost > 40.0f);
         if (cost < bestScore) { bestScore = cost; bestIdx = c; }
     }
 
@@ -143,9 +180,9 @@ void AutoregressivePolicy::plan(const SimConfig& cfg, WorldEngine& world,
     rss::buildRssCorridorPoints(ego, centerline, totalLoopLen, loopU, lookaheadDist, currentLat,
                                 candOffsets[bestIdx], cfg.wheelbaseM, cfg.driveMode == "manual",
                                 std::max(32.0f, rssDist + 4.0f), corrPts, corrArc);
-    const float cruiseSpd = std::min(cfg.targetCruiseSpeedMs * clampf(1.0f - 0.38f * excessSigma, 0.55f, 1.0f),
-                                     std::sqrt(acfg.maxLatAccelMs2 / std::max(candKappa[bestIdx], 0.015f)));
-    const bool activelyCrossing = (bestIdx == 1 && currentLat < 1.65f) || (std::abs(std::abs(currentLat) - 1.95f) > 0.30f);
+    const float curveCap = std::max(p.minCurveSpeedMs, std::sqrt(p.maxLatAccelMs2 / std::max(candKappa[bestIdx], 0.015f)));
+    const float cruiseSpd = std::min(cfg.targetCruiseSpeedMs * clampf(1.0f - 0.32f * excessSigma, 0.65f, 1.0f), curveCap);
+    const bool activelyCrossing = (bestIdx != curLane) || (std::abs(std::abs(currentLat) - p.laneCenterAbsM) > p.crossingDevThreshM);
     const SafetyEvalOutput safe = evaluateAutoregSafety(world,
         {cfg, ego, perc, corrPts, corrArc, rssDist, candLeadGap[bestIdx], sirenYield, staticBlocked[0] && staticBlocked[1]},
         activelyCrossing ? "LANE_CHANGE_OVERTAKE" : "CRUISING", cruiseSpd);
