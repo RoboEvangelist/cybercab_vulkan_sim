@@ -1,0 +1,71 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+// FSD v15 Module 1c: pre-network frequency separation (tutorial 1.2).
+// Input: 14-bit linear photon codes (normalized). With radiance I = R * L (reflectance x illumination):
+//   l    = log(Y + eps)            = log R + log L   (Y = Rec.709 luminance in radiance units)
+//   low  = G_sigma * l             -> smooth illumination / ambient context
+//   high = l - low                 -> reflectance detail (edges, curbs, debris); exposure invariant
+//   grad = central difference of l -> edge strength/orientation; exposure invariant
+// Two passes (separable Gaussian): pass 0 = l + horizontal blur, pass 1 = vertical blur + bands.
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer LinearIn { vec4 px[]; } uIn;
+layout(std430, binding = 1) buffer TmpIO { vec2 v[]; } uTmp;          // (l, horizontally blurred l)
+layout(std430, binding = 2) writeonly buffer BandsOut { vec4 v[]; } uBands; // (low, high, gx, gy)
+
+layout(push_constant) uniform FreqPC {
+    uint width;
+    uint height;
+    uint numCams;
+    uint pass;
+    float fullWell;
+    float logEps;
+    float sigmaPx;
+    int radius;
+} pc;
+
+uint pixIndex(uint cam, int x, int y) {
+    const int cx = clamp(x, 0, int(pc.width) - 1);
+    const int cy = clamp(y, 0, int(pc.height) - 1);
+    return (cam * pc.height + uint(cy)) * pc.width + uint(cx);
+}
+
+float logLumAt(uint cam, int x, int y) {
+    const vec3 rad = uIn.px[pixIndex(cam, x, y)].rgb * pc.fullWell;
+    return log(dot(rad, vec3(0.2126, 0.7152, 0.0722)) + pc.logEps);
+}
+
+float gaussW(int k) {
+    return exp(-0.5 * float(k * k) / (pc.sigmaPx * pc.sigmaPx));
+}
+
+void main() {
+    const int x = int(gl_GlobalInvocationID.x);
+    const int y = int(gl_GlobalInvocationID.y);
+    const uint cam = gl_GlobalInvocationID.z;
+    if (x >= int(pc.width) || y >= int(pc.height) || cam >= pc.numCams) return;
+    const uint idx = pixIndex(cam, x, y);
+
+    float acc = 0.0, wsum = 0.0;
+    if (pc.pass == 0u) {
+        for (int k = -pc.radius; k <= pc.radius; ++k) {
+            const float w = gaussW(k);
+            acc += w * logLumAt(cam, x + k, y);
+            wsum += w;
+        }
+        uTmp.v[idx] = vec2(logLumAt(cam, x, y), acc / wsum);
+        return;
+    }
+
+    for (int k = -pc.radius; k <= pc.radius; ++k) {
+        const float w = gaussW(k);
+        acc += w * uTmp.v[pixIndex(cam, x, y + k)].y;
+        wsum += w;
+    }
+    const float low = acc / wsum;
+    const float l = uTmp.v[idx].x;
+    const float gx = 0.5 * (uTmp.v[pixIndex(cam, x + 1, y)].x - uTmp.v[pixIndex(cam, x - 1, y)].x);
+    const float gy = 0.5 * (uTmp.v[pixIndex(cam, x, y + 1)].x - uTmp.v[pixIndex(cam, x, y - 1)].x);
+    uBands.v[idx] = vec4(low, l - low, gx, gy);
+}

@@ -95,6 +95,7 @@ add_library(cybercab_perception SHARED
     src/perception/OccupancyFlowNet.cpp
     src/perception/WorldModel.cpp
     src/perception/PerceptionPipeline.cpp
+    src/perception/v15/FrequencySplit.cpp
 )
 add_dependencies(cybercab_perception compile_shaders)
 target_link_libraries(cybercab_perception PUBLIC cybercab_world)
@@ -135,6 +136,7 @@ add_executable(cybercab_tests
     tests/test_v15_config.cpp
     tests/test_v15_photon_frontend.cpp
     tests/test_v15_photon_noise.cpp
+    tests/test_v15_freq_split.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
 target_link_libraries(cybercab_tests PRIVATE
