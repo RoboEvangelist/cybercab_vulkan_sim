@@ -119,6 +119,13 @@ struct EvalMetrics {
     double totalPipelineMs = 0.0;
 };
 
+struct alignas(16) V15Gaussian3D {
+  Vec4 meanOpacity;  // wx, wy, wz, alpha (Y up, world space)
+  Vec4 scaleSem;     // sx, sy, sz, semF
+  Vec4 velYaw;       // vx, vz, yaw, isDynamic
+  Vec4 colorConf;    // r, g, b, confidence
+};
+
 struct V15PerceptionSummary {
     bool active = false;
     bool sirenDetected = false;
@@ -133,6 +140,8 @@ struct V15PerceptionSummary {
     float effectiveSpeedupX = 1.0f;
     float preferredLaneOffsetM = -1.95f;
     float rearClearanceM = 40.0f;
+  float calibPitchDeg = 0.0f;
+  float calibRollDeg = 0.0f;
 };
 
 struct PerceptionFrameOutput {
@@ -152,6 +161,13 @@ struct PerceptionFrameOutput {
     std::map<std::string, double> gpuStageMs;
     EvalMetrics eval{};
     V15PerceptionSummary v15{};
+  std::vector<V15Gaussian3D> v15Gaussians;
+  std::vector<uint8_t> v15RealityRgba;
+
+  void reserveV15Scratch(size_t maxGaussians, size_t realityBytes) {
+    v15Gaussians.reserve(maxGaussians);
+    v15RealityRgba.reserve(realityBytes);
+  }
 };
 
 } // namespace cybercab

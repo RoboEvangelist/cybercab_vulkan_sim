@@ -12,12 +12,7 @@
 
 namespace cybercab::v15 {
 
-struct alignas(16) Gaussian3DGpu {
-    Vec4 meanOpacity; // wx, wy, wz, alpha (Y up, world space)
-    Vec4 scaleSem;    // sx, sy, sz, semF
-    Vec4 velYaw;      // vx, vz, yaw, isDynamic
-    Vec4 colorConf;   // r, g, b, confidence
-};
+using Gaussian3DGpu = ::cybercab::V15Gaussian3D;
 
 class GaussianWorldModel {
 public:

@@ -1,7 +1,9 @@
 #include "perception/v15/LatentPredictor.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 
 namespace cybercab::v15 {
 namespace {
@@ -55,37 +57,49 @@ LatentEvalResult LatentPredictor::evaluateTokens(const PatchTokenGpu* prevSlot, 
 
     const int yawShift = static_cast<int>(std::lround(wrapAngle(currEgo.yaw - prevEgo.yaw) * kYawShiftPatchGain));
     const int dyHi = (currEgo.speed > kFwdFlowSpeedThreshMs) ? 2 : 1; // radial optical-flow expansion during forward cruise
-    constexpr int kFwdViews[2] = {1, 8};                             // Front-Main + VRU corridor
-    std::vector<float> residuals;
-    residuals.reserve(288);
-    for (int v : kFwdViews) {
-        const size_t base = static_cast<size_t>(v) * static_cast<size_t>(kViewW * kViewH);
-        for (int gy = kCorridorMinGy; gy <= kCorridorMaxGy; ++gy) {
-            for (int gx = kCorridorMinGx; gx <= kCorridorMaxGx; ++gx) {
-                const PatchTokenGpu& c = currSlot[base + static_cast<size_t>(gy) * kViewW + gx];
-                if (c.app0.w < 0.5f) continue;
-                float best = 10.0f;
-                for (int dy = -1; dy <= dyHi; ++dy) {
-                    const int py = std::clamp(gy + dy, 0, kViewH - 1);
-                    for (int dx = -1; dx <= 1; ++dx) {
-                        const int px = std::clamp(gx + yawShift + dx, 0, kViewW - 1);
-                        const PatchTokenGpu& p = prevSlot[base + static_cast<size_t>(py) * kViewW + px];
-                        if (p.app0.w > 0.5f) best = std::min(best, tokenDiff(c, p));
-                    }
-                }
-                if (best < 9.0f) residuals.push_back(best);
-            }
+  constexpr int kFwdViews[2] = {1, 8};  // Front-Main + VRU corridor
+  constexpr size_t kMaxCorridorSamples = 288u;
+  std::array<float, kMaxCorridorSamples> residuals{};
+  size_t resCount = 0u;
+  for (int v : kFwdViews) {
+    const size_t base =
+      static_cast<size_t>(v) * static_cast<size_t>(kViewW * kViewH);
+    for (int gy = kCorridorMinGy; gy <= kCorridorMaxGy; ++gy) {
+      for (int gx = kCorridorMinGx; gx <= kCorridorMaxGx; ++gx) {
+        const PatchTokenGpu& c =
+          currSlot[base + static_cast<size_t>(gy) * kViewW + gx];
+        if (c.app0.w < 0.5f) continue;
+        float best = 10.0f;
+        for (int dy = -1; dy <= dyHi; ++dy) {
+          const int py = std::clamp(gy + dy, 0, kViewH - 1);
+          for (int dx = -1; dx <= 1; ++dx) {
+            const int px = std::clamp(gx + yawShift + dx, 0, kViewW - 1);
+            const PatchTokenGpu& p =
+              prevSlot[base + static_cast<size_t>(py) * kViewW + px];
+            if (p.app0.w > 0.5f) best = std::min(best, tokenDiff(c, p));
+          }
         }
+        if (best < 9.0f && resCount < kMaxCorridorSamples) {
+          residuals[resCount++] = best;
+        }
+      }
     }
-    if (!residuals.empty()) {
-        const size_t topK = std::min<size_t>(kTopKCorridorResiduals, residuals.size());
-        std::nth_element(residuals.begin(), residuals.end() - topK, residuals.end());
-        double topSum = 0.0;
-        for (size_t i = residuals.size() - topK; i < residuals.size(); ++i) topSum += residuals[i];
-        const float peakSurprise = static_cast<float>(topSum / static_cast<double>(topK));
-        res.latentNovelty = clampf((peakSurprise - policy.latentSurpriseBaseline) / policy.latentSurpriseScale, 0.0f, 1.0f);
-        res.surpriseSigmaDelta = policy.latentSigmaGain * res.latentNovelty;
+  }
+  if (resCount > 0u) {
+    const size_t topK = std::min<size_t>(kTopKCorridorResiduals, resCount);
+    auto beginIt = residuals.begin();
+    auto endIt = residuals.begin() + static_cast<std::ptrdiff_t>(resCount);
+    std::nth_element(beginIt, endIt - static_cast<std::ptrdiff_t>(topK), endIt);
+    double topSum = 0.0;
+    for (size_t i = resCount - topK; i < resCount; ++i) {
+      topSum += residuals[i];
     }
+    const float peakSurprise =
+      static_cast<float>(topSum / static_cast<double>(topK));
+    const float excess = peakSurprise - policy.latentSurpriseBaseline;
+    res.latentNovelty = clampf(excess / policy.latentSurpriseScale, 0.0f, 1.0f);
+    res.surpriseSigmaDelta = policy.latentSigmaGain * res.latentNovelty;
+  }
     return res;
 }
 

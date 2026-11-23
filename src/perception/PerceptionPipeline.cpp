@@ -61,7 +61,11 @@ void PerceptionPipeline::runFrame(const VulkanContext& ctx,
 
     // GPU Batch 1: v15 front-end (when enabled) -> SoilDetector -> Backbone + FPN -> RT-DETR
     if (v15_) {
-        v15_->beginFrameCpu(world, dt);
+      out.reserveV15Scratch(
+        static_cast<size_t>(v15::GaussianWorldModel::kMaxGaussians),
+        static_cast<size_t>(v15::GaussianWorldModel::kRealityW) *
+          static_cast<size_t>(v15::GaussianWorldModel::kRealityH) * 4u);
+      v15_->beginFrameCpu(world, dt);
     }
     {
         VkCommandBuffer cmd = ctx.beginSingleTimeCommands();

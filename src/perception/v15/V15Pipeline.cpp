@@ -132,12 +132,25 @@ void V15Pipeline::finishBackEnd(const VulkanContext& ctx, const EgoState& ego,
             rearClearM = std::min(rearClearM, std::max(0.0f, (-0.94f - pIso.x) - g.scaleSem.z));
         }
     }
-    out.forwardEpistemicSigma += lat.surpriseSigmaDelta;
-    out.v15 = {true, audioToken_.sirenDetected, audioToken_.confidence, audioToken_.bearingVehRad,
-               audioToken_.dopplerShiftHz, lat.latentNovelty, lat.surpriseSigmaDelta,
-               lat.telemetry.staticSkipRatio, lat.telemetry.tokenSparsityRatio,
-               lat.telemetry.kvCacheReuseRatio, lat.telemetry.effectiveSpeedupX,
-               kinNav_.navTokens()[0].laneCenterOffsetM, rearClearM};
+  out.v15Gaussians.assign(gaussianWorld_.gaussians().begin(),
+                          gaussianWorld_.gaussians().end());
+  gaussianWorld_.downloadRealityViewRGBA(out.v15RealityRgba);
+  out.forwardEpistemicSigma += lat.surpriseSigmaDelta;
+  out.v15 = {true,
+             audioToken_.sirenDetected,
+             audioToken_.confidence,
+             audioToken_.bearingVehRad,
+             audioToken_.dopplerShiftHz,
+             lat.latentNovelty,
+             lat.surpriseSigmaDelta,
+             lat.telemetry.staticSkipRatio,
+             lat.telemetry.tokenSparsityRatio,
+             lat.telemetry.kvCacheReuseRatio,
+             lat.telemetry.effectiveSpeedupX,
+             kinNav_.navTokens()[0].laneCenterOffsetM,
+             rearClearM,
+             radToDeg(selfCalib_.state().pitchRad),
+             radToDeg(selfCalib_.state().rollRad)};
 }
 
 } // namespace cybercab::v15

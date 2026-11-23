@@ -27,6 +27,11 @@ void GaussianWorldModel::initSplatGpu(const VulkanContext& ctx) {
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, splatSet_, 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &infos[1], nullptr},
     };
     vkUpdateDescriptorSets(ctx.device(), 2, w, 0, nullptr);
+  gaussians_.reserve(kMaxGaussians);
+  sortedScratch_.reserve(kMaxGaussians);
+  cellScratch_.reserve(60u * 40u);
+  vruScratch_.reserve(static_cast<size_t>(PatchTokenizer::kGridW) *
+                      PatchTokenizer::kGridH);
 }
 
 void GaussianWorldModel::reset() { gaussians_.clear(); }
