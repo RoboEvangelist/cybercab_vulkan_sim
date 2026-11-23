@@ -130,6 +130,9 @@ void PerceptionPipeline::runFrame(const VulkanContext& ctx,
     out.bevSummary = bev_.readbackSummary();
     occ_.readbackVoxels(cfg_, ego, out.activeVoxels, out.shadowVoxels);
     wm_.readbackGhosts(out.worldGhosts);
+    if (v15_) {
+        v15_->finishBackEnd(ctx, ego, out, profiler);
+    }
 
     if (profiler) {
         out.gpuStageMs = profiler->resolveTimingsMs();

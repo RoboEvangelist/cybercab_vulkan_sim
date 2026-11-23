@@ -34,6 +34,7 @@ void V15Pipeline::init(const VulkanContext& ctx, const SimConfig& cfg, const Cam
     rectifier_.init(ctx, cfg, rig.cameraLinearSSBO(), freqSplit_.bandsSSBO(), w, h);
     patchTokenizer_.init(ctx, rectifier_);
     staticMem_.init(ctx, cfg, rectifier_, patchTokenizer_);
+    gaussianWorld_.initSplatGpu(ctx);
     initialized_ = true;
 }
 
@@ -51,6 +52,7 @@ void V15Pipeline::reset() {
     selfCalib_.reset();
     patchTokenizer_.reset();
     staticMem_.reset();
+    gaussianWorld_.reset();
     kinNav_.reset();
     audioToken_ = {};
     frameIdx_ = 0;
@@ -62,6 +64,7 @@ void V15Pipeline::reset() {
 }
 
 void V15Pipeline::destroy() {
+    gaussianWorld_.destroy();
     staticMem_.destroy();
     patchTokenizer_.destroy();
     rectifier_.destroy();
@@ -106,6 +109,16 @@ void V15Pipeline::recordBackEnd(VkCommandBuffer cmd, const EgoState& ego, float 
     if (!initialized_ || !cfg_) return;
     runStage(cmd, profiler, "5_v15_static_mem",
              [&] { staticMem_.recordDispatch(cmd, *cfg_, ego, dt, rectifier_, patchTokenizer_, tracks); });
+}
+
+void V15Pipeline::finishBackEnd(const VulkanContext& ctx, const EgoState& ego,
+                                PerceptionFrameOutput& out, GpuProfiler* profiler) {
+    if (!initialized_ || !cfg_) return;
+    gaussianWorld_.updateFromPerception(*cfg_, ego, staticMem_, patchTokenizer_, out);
+    VkCommandBuffer cmd = ctx.beginSingleTimeCommands();
+    runStage(cmd, profiler, "6_v15_gaussian_splat",
+             [&] { gaussianWorld_.dispatchRealitySplat(cmd, *cfg_, ego); });
+    ctx.endSingleTimeCommands(cmd);
 }
 
 } // namespace cybercab::v15

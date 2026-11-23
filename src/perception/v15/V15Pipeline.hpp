@@ -7,6 +7,7 @@
 #include "perception/v15/AudioTokenizer.hpp"
 #include "perception/v15/CameraSelfCalib.hpp"
 #include "perception/v15/FrequencySplit.hpp"
+#include "perception/v15/GaussianWorldModel.hpp"
 #include "perception/v15/KinematicNavEncoder.hpp"
 #include "perception/v15/PatchTokenizer.hpp"
 #include "perception/v15/StaticSpatialMemory.hpp"
@@ -36,6 +37,8 @@ public:
     // Dispatches Batch 2 v15 stages (M5 static spatial memory).
     void recordBackEnd(VkCommandBuffer cmd, const EgoState& ego, float dt,
                        const std::vector<TrackPriorGpu>& tracks, GpuProfiler* profiler = nullptr);
+    void finishBackEnd(const VulkanContext& ctx, const EgoState& ego,
+                       PerceptionFrameOutput& out, GpuProfiler* profiler = nullptr);
 
     bool isInitialized() const { return initialized_; }
     const FrequencySplit& frequencySplit() const { return freqSplit_; }
@@ -43,6 +46,7 @@ public:
     const VirtualCameraRectifier& rectifier() const { return rectifier_; }
     const PatchTokenizer& patchTokenizer() const { return patchTokenizer_; }
     const StaticSpatialMemory& staticMemory() const { return staticMem_; }
+    const GaussianWorldModel& gaussianWorld() const { return gaussianWorld_; }
     const AudioToken& audioToken() const { return audioToken_; }
     const KinematicNavEncoder& kinematicNav() const { return kinNav_; }
 
@@ -54,6 +58,7 @@ private:
     VirtualCameraRectifier rectifier_;
     PatchTokenizer patchTokenizer_;
     StaticSpatialMemory staticMem_;
+    GaussianWorldModel gaussianWorld_;
     AudioToken audioToken_{};
     KinematicNavEncoder kinNav_;
     uint32_t frameIdx_ = 0;

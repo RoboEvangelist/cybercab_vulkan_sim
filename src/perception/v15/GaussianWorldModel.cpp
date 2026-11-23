@@ -6,7 +6,71 @@
 
 namespace cybercab::v15 {
 
+GaussianWorldModel::~GaussianWorldModel() { destroy(); }
+
+void GaussianWorldModel::initSplatGpu(const VulkanContext& ctx) {
+    destroy();
+    ctx_ = &ctx;
+    splatPipe_.create(ctx, "shaders/v15_gaussian_splat.comp.spv",
+                      {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 1},
+                       {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 1}},
+                      sizeof(SplatPC));
+    splatSet_ = splatPipe_.allocateDescriptorSet();
+    const VkMemoryPropertyFlags mem = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    gaussSSBO_.create(ctx, static_cast<VkDeviceSize>(kMaxGaussians) * sizeof(Gaussian3DGpu),
+                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, mem);
+    rgbaSSBO_.create(ctx, static_cast<VkDeviceSize>(kRealityW) * kRealityH * sizeof(uint32_t),
+                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, mem);
+    const VkDescriptorBufferInfo infos[2] = {gaussSSBO_.descriptorInfo(), rgbaSSBO_.descriptorInfo()};
+    VkWriteDescriptorSet w[2]{
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, splatSet_, 0, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &infos[0], nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, splatSet_, 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &infos[1], nullptr},
+    };
+    vkUpdateDescriptorSets(ctx.device(), 2, w, 0, nullptr);
+}
+
 void GaussianWorldModel::reset() { gaussians_.clear(); }
+
+void GaussianWorldModel::destroy() {
+    if (!ctx_) return;
+    rgbaSSBO_.destroy();
+    gaussSSBO_.destroy();
+    splatPipe_.destroy();
+    splatSet_ = VK_NULL_HANDLE;
+    ctx_ = nullptr;
+}
+
+void GaussianWorldModel::dispatchRealitySplat(VkCommandBuffer cmd, const SimConfig& cfg, const EgoState& ego) {
+    const CameraSpec cam = cfg.cameras.empty() ? CameraSpec{} : cfg.cameras[0];
+    const Mat4 camFromWorld = (BEVFormer::worldFromIsoEgo(ego) * cam.extrinsicEgoFromCamISO()).inverseRigid();
+    dispatchRealitySplat(cmd, camFromWorld, cam.intrinsics(kRealityW, kRealityH));
+}
+
+void GaussianWorldModel::dispatchRealitySplat(VkCommandBuffer cmd, const Mat4& camFromWorld,
+                                                const CameraIntrinsics& intr) {
+    if (!ctx_) return;
+    sortedScratch_.clear();
+    for (const auto& g : gaussians_) {
+        const float z = camFromWorld.transformPoint({g.meanOpacity.x, g.meanOpacity.y, g.meanOpacity.z}).z;
+        if (z > 0.35f) sortedScratch_.push_back(g);
+    }
+    std::sort(sortedScratch_.begin(), sortedScratch_.end(), [&](const Gaussian3DGpu& a, const Gaussian3DGpu& b) {
+        return camFromWorld.transformPoint({a.meanOpacity.x, a.meanOpacity.y, a.meanOpacity.z}).z <
+               camFromWorld.transformPoint({b.meanOpacity.x, b.meanOpacity.y, b.meanOpacity.z}).z;
+    });
+    const uint32_t n = static_cast<uint32_t>(std::min<size_t>(sortedScratch_.size(), kMaxGaussians));
+    if (n > 0u) gaussSSBO_.upload(sortedScratch_.data(), n * sizeof(Gaussian3DGpu));
+    SplatPC pc{camFromWorld, {intr.fx, intr.fy, intr.cx, intr.cy},
+               static_cast<uint32_t>(kRealityW), static_cast<uint32_t>(kRealityH), n, 0u};
+    splatPipe_.bindAndDispatch(cmd, splatSet_, (kRealityW + 15) / 16, (kRealityH + 15) / 16, 1, &pc, sizeof(pc));
+    cmdComputeBarrier(cmd);
+}
+
+void GaussianWorldModel::downloadRealityViewRGBA(std::vector<uint8_t>& outRgba) const {
+    if (!ctx_) { outRgba.clear(); return; }
+    outRgba.resize(static_cast<size_t>(kRealityW) * kRealityH * 4);
+    rgbaSSBO_.download(outRgba.data(), outRgba.size());
+}
 
 void GaussianWorldModel::projectEwa2D(const Gaussian3DGpu& g, const Mat4& camFromWorld,
                                       const CameraIntrinsics& intr, Vec2& uvOut,

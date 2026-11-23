@@ -1,0 +1,73 @@
+#version 450
+// FSD v15 Module 6: Zwicker/Kerbl 3D EWA Gaussian splatting Reality View renderer.
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+struct Gaussian3DGpu {
+    vec4 meanOpacity; // wx, wy, wz, alpha
+    vec4 scaleSem;    // sx, sy, sz, semF
+    vec4 velYaw;      // vx, vz, yaw, isDynamic
+    vec4 colorConf;   // r, g, b, confidence
+};
+
+layout(std430, binding = 0) readonly buffer GaussiansIn { Gaussian3DGpu gaussians[]; } uGauss;
+layout(std430, binding = 1) writeonly buffer RealityOut { uint rgba[]; } uOut;
+
+layout(push_constant) uniform SplatPC {
+    mat4 camFromWorld;
+    vec4 intr; // fx, fy, cx, cy
+    uint width, height, numGaussians, pad;
+} pc;
+
+void main() {
+    const uint px = gl_GlobalInvocationID.x, py = gl_GlobalInvocationID.y;
+    if (px >= pc.width || py >= pc.height) return;
+
+    const vec2 pix = vec2(float(px) + 0.5, float(py) + 0.5);
+    const mat3 W = mat3(pc.camFromWorld);
+    vec3 accum = vec3(0.0);
+    float T = 1.0;
+
+    for (uint i = 0u; i < pc.numGaussians; ++i) {
+        const Gaussian3DGpu g = uGauss.gaussians[i];
+        const vec3 pCam = (pc.camFromWorld * vec4(g.meanOpacity.xyz, 1.0)).xyz;
+        if (pCam.z < 0.35) continue;
+
+        const float invZ = 1.0 / pCam.z, invZ2 = invZ * invZ;
+        const vec2 uv = vec2(pc.intr.z + pc.intr.x * pCam.x * invZ, pc.intr.w + pc.intr.y * pCam.y * invZ);
+        const float sy = sin(g.velYaw.z), cy = cos(g.velYaw.z);
+        const vec3 axes[3] = vec3[3](
+            vec3(cy * g.scaleSem.x, 0.0, -sy * g.scaleSem.x),
+            vec3(0.0, g.scaleSem.y, 0.0),
+            vec3(sy * g.scaleSem.z, 0.0, cy * g.scaleSem.z));
+
+        float cxx = 0.3, cxy = 0.0, cyy = 0.3;
+        for (int k = 0; k < 3; ++k) {
+            const vec3 ac = W * axes[k];
+            const float jx = pc.intr.x * (ac.x * invZ - pCam.x * ac.z * invZ2);
+            const float jy = pc.intr.y * (ac.y * invZ - pCam.y * ac.z * invZ2);
+            cxx += jx * jx;
+            cxy += jx * jy;
+            cyy += jy * jy;
+        }
+        const float det = cxx * cyy - cxy * cxy;
+        if (det < 1e-4) continue;
+        const vec2 d = pix - uv;
+        if (abs(d.x) > 3.5 * sqrt(cxx) + 2.0 || abs(d.y) > 3.5 * sqrt(cyy) + 2.0) continue;
+
+        const float power = -0.5 / det * (cyy * d.x * d.x - 2.0 * cxy * d.x * d.y + cxx * d.y * d.y);
+        if (power > 0.0 || power < -10.0) continue;
+        const float a = clamp(g.meanOpacity.w * exp(power), 0.0, 0.99);
+        if (a < 0.004) continue;
+        accum += T * a * g.colorConf.rgb;
+        T *= (1.0 - a);
+        if (T < 0.01) break;
+    }
+
+    const float vFrac = float(py) / float(max(pc.height, 1u));
+    const vec3 bg = (vFrac < 0.45)
+        ? mix(vec3(0.08, 0.14, 0.24), vec3(0.20, 0.32, 0.48), vFrac / 0.45)
+        : mix(vec3(0.14, 0.16, 0.18), vec3(0.06, 0.07, 0.09), (vFrac - 0.45) / 0.55);
+    const vec3 rgb = clamp(accum + T * bg, 0.0, 1.0);
+    const uint r = uint(rgb.r * 255.0 + 0.5), g8 = uint(rgb.g * 255.0 + 0.5), b = uint(rgb.b * 255.0 + 0.5);
+    uOut.rgba[py * pc.width + px] = r | (g8 << 8u) | (b << 16u) | (255u << 24u);
+}
