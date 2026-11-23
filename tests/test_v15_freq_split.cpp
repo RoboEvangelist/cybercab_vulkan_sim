@@ -190,5 +190,19 @@ TEST_F(V15FreqSplitTest, RealV15RenderProducesFiniteZeroMeanDetailBand) {
     rig.destroy();
 }
 
+TEST_F(V15FreqSplitTest, ConfigScalingAdaptsSigmaAndNoiseFloor) {
+    SimConfig cfg = SimConfig::loadFromYaml(resolveAssetPath("config/cybercab_sim.yaml"));
+    const auto halfP = v15::FreqSplitParams::forConfig(cfg.camWidth, cfg);
+    const auto fullP = v15::FreqSplitParams::forConfig(cfg.fullCamWidth, cfg);
+    EXPECT_FLOAT_EQ(halfP.sigmaPx, 4.0f);
+    EXPECT_FLOAT_EQ(fullP.sigmaPx, 8.0f);
+    EXPECT_FLOAT_EQ(fullP.fullWell, photon::kFullWellRadiance);
+    const float expectedEps = std::max(1.0e-3f, 2.0f * std::sqrt(cfg.photonReadNoiseB) /
+                                                    photon::kAdcMaxCode * photon::kFullWellRadiance);
+    EXPECT_FLOAT_EQ(halfP.logEps, expectedEps);
+    cfg.photonReadNoiseB = 100.0f; // noisy sensor raises log floor above 1e-3 default
+    EXPECT_GT(v15::FreqSplitParams::forConfig(cfg.camWidth, cfg).logEps, halfP.logEps);
+}
+
 } // namespace
 } // namespace cybercab

@@ -37,6 +37,11 @@ void FrequencySplit::init(const VulkanContext& ctx, const VulkanBuffer& linearIn
     rebind(linearIn, camW, camH);
 }
 
+void FrequencySplit::rebind(const VulkanBuffer& linearIn, int camW, int camH, const FreqSplitParams& params) {
+    params_ = params;
+    rebind(linearIn, camW, camH);
+}
+
 void FrequencySplit::rebind(const VulkanBuffer& linearIn, int camW, int camH) {
     if (!ctx_) return;
     w_ = camW;

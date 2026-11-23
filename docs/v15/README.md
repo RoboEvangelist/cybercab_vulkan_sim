@@ -21,12 +21,11 @@ reasoning with a certificate the author cannot fill in by guessing. Here the cer
 | 1 | Config switch `pipeline_version` | [step01_config_switch.md](step01_config_switch.md) | `84b73e4` |
 | 2 | M1a ISP-bypass linear 14-bit photon tensor | [step02_m1a_linear_photon_tensor.md](step02_m1a_linear_photon_tensor.md) | `47f26e2` |
 | 3 | M1b Poisson-Gaussian sensor noise | [step03_m1b_sensor_noise.md](step03_m1b_sensor_noise.md) | `fbfa1fa` |
-| 4 | M1c frequency separation (illumination vs. detail) | [step04_m1c_frequency_split.md](step04_m1c_frequency_split.md) | this commit |
+| 4 | M1c frequency separation (illumination vs. detail) | [step04_m1c_frequency_split.md](step04_m1c_frequency_split.md) | `8d4c767` |
+| 5a | M1 dark read-noise verification & adaptive FrequencySplit | [step05a_m1_dark_noise_and_scaling.md](step05a_m1_dark_noise_and_scaling.md) | this commit |
 
 ## Open UNVERIFIED items
-- step03 R1: read-noise floor `b` only loosely identified (needs dark-scene test).
 - step02 R2: v14 perception quality under `pipeline_version: v15` not yet re-validated.
-- step04 R1/R3: `logEps` not yet tied to the noise floor; sigma not resolution-adaptive.
 
 ## Regression gate (every step)
 - `ctest --test-dir build` must show **100%** pass.

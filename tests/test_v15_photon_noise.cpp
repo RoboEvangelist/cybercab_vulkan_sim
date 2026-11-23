@@ -3,6 +3,7 @@
 // slope/intercept recovery, unbiasedness, determinism, and spatial/temporal/channel independence.
 #include "config/SimConfig.hpp"
 #include "core/VulkanContext.hpp"
+#include "core/VulkanImage.hpp"
 #include "core/VulkanPipeline.hpp"
 #include "sensors/CameraRigRenderer.hpp"
 #include "sensors/PhotonModel.hpp"
@@ -156,6 +157,85 @@ TEST(V15PhotonNoiseGpuTest, DisabledNoiseEqualsNoiselessAdc) {
         if (a[i].x == b[i].x && a[i].y == b[i].y && a[i].z == b[i].z) ++same;
     }
     EXPECT_EQ(same, r.n) << "With noise off the tensor must not depend on frame time";
+}
+
+TEST(V15PhotonNoiseGpuTest, DarkScenePinsReadNoiseInterceptB) {
+    const SimConfig cfg = SimConfig::loadFromYaml(resolveAssetPath("config/cybercab_sim.yaml"));
+    VulkanContext ctx;
+    ctx.init(false, nullptr);
+    constexpr int kS = 128;
+    struct IspPC { uint32_t c, w, h, soil; Vec4 dist, intr; float rs, t; uint32_t lin; float fw, a, b; uint32_t seed, en; };
+    VulkanComputePipeline pipe;
+    pipe.create(ctx, "shaders/cam_isp_soil.comp.spv",
+                {{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_COMPUTE_BIT, 1},
+                 {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT, 1},
+                 {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 1},
+                 {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 1}}, sizeof(IspPC));
+    VulkanImage raw, dst;
+    raw.create(ctx, kS, kS, VK_FORMAT_R16G16B16A16_SFLOAT,
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT, true);
+    dst.create(ctx, kS, kS, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_STORAGE_BIT, VK_IMAGE_ASPECT_COLOR_BIT, false);
+    dst.transitionLayoutImmediate(VK_IMAGE_LAYOUT_GENERAL);
+    VulkanBuffer dispBuf, linBuf;
+    const size_t n = kS * kS;
+    dispBuf.create(ctx, n * sizeof(Vec4), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    linBuf.create(ctx, n * sizeof(Vec4), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VkDescriptorSet set = pipe.allocateDescriptorSet();
+    VkDescriptorImageInfo i0{raw.sampler(), raw.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo i1{VK_NULL_HANDLE, dst.view(), VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorBufferInfo b2 = dispBuf.descriptorInfo(), b3 = linBuf.descriptorInfo();
+    VkWriteDescriptorSet w[4]{
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &i0, nullptr, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &i1, nullptr, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &b2, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 3, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &b3, nullptr},
+    };
+    vkUpdateDescriptorSets(ctx.device(), 4, w, 0, nullptr);
+
+    double sx = 0, sy = 0, sxx = 0, sxy = 0;
+    const float darkDns[4] = {8.0f, 16.0f, 24.0f, 36.0f};
+    std::vector<Vec4> clean(n), noisy(n);
+    for (float dn : darkDns) {
+        const float r = dn / photon::kAdcMaxCode * photon::kFullWellRadiance;
+        const VkClearColorValue clr{{r, r, r, 1.0f}};
+        const VkImageSubresourceRange rng{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        for (int pass = 0; pass < 2; ++pass) {
+            VkCommandBuffer cmd = ctx.beginSingleTimeCommands();
+            VulkanImage::cmdTransitionLayout(cmd, raw.handle(), VK_IMAGE_ASPECT_COLOR_BIT,
+                                             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdClearColorImage(cmd, raw.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clr, 1, &rng);
+            VulkanImage::cmdTransitionLayout(cmd, raw.handle(), VK_IMAGE_ASPECT_COLOR_BIT,
+                                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            raw.setLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            IspPC pc{0, kS, kS, 0, {}, {140, 140, kS * 0.5f, kS * 0.5f}, 1.0f, 0.0f,
+                     1u, photon::kFullWellRadiance, cfg.photonShotNoiseA, cfg.photonReadNoiseB, 42u, uint32_t(pass)};
+            pipe.bindAndDispatch(cmd, set, kS / 16, kS / 16, 1, &pc, sizeof(pc));
+            ctx.endSingleTimeCommands(cmd);
+            linBuf.downloadVector(pass == 0 ? clean : noisy);
+        }
+        double sMu = 0, sE = 0, sE2 = 0;
+        for (size_t i = 0; i < n; ++i) {
+            for (int c = 0; c < 3; ++c) {
+                const double mu = ch(clean[i], c) * photon::kAdcMaxCode;
+                const double e = ch(noisy[i], c) * photon::kAdcMaxCode - mu;
+                sMu += mu; sE += e; sE2 += e * e;
+            }
+        }
+        const double cnt = static_cast<double>(n * 3);
+        const double mu = sMu / cnt, mean = sE / cnt, var = sE2 / cnt - mean * mean;
+        sx += mu; sy += var; sxx += mu * mu; sxy += mu * var;
+    }
+    const double aHat = (4 * sxy - sx * sy) / (4 * sxx - sx * sx);
+    const double bHat = (sy - aHat * sx) / 4.0;
+    const double bExpect = cfg.photonReadNoiseB + 1.0 / 6.0;
+    RecordProperty("dark_fit_a_hat", fmt(aHat));
+    RecordProperty("dark_fit_b_hat", fmt(bHat));
+    RecordProperty("dark_b_expect", fmt(bExpect));
+    EXPECT_NEAR(aHat, cfg.photonShotNoiseA, 0.04);
+    EXPECT_NEAR(bHat, bExpect, 0.35);
+
+    pipe.destroy(); dispBuf.destroy(); linBuf.destroy(); raw.destroy(); dst.destroy();
+    ctx.cleanup();
 }
 
 } // namespace
