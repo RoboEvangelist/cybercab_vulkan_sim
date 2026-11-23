@@ -186,6 +186,7 @@ add_executable(cybercab_tests
     tests/test_av_confidence_calibration.cpp
     tests/test_av_vision_signal_fsm_and_assoc.cpp
     tests/test_av_open_set_obstacles_and_freespace.cpp
+    tests/test_av_shadow_replay_and_hierarchy.cpp
     tests/test_v15_e2e_closed_loop.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
