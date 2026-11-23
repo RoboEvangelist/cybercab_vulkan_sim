@@ -180,37 +180,87 @@ void appendCybercabVehicleMesh(std::vector<SceneVertex>& verts,
   emitSculptedEndCap(verts, indices, sprungMat, st[0], false);
   emitSculptedEndCap(verts, indices, sprungMat, st[kNumSt - 1], true);
   emitSideWindows(verts, indices, sprungMat, st);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.34f, 1.24f}), {1.12f, 0.34f, 3.60f}, kTrimDark);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.305f, 1.38f}), {1.845f, 0.130f, 1.92f}, kCharcoalTrim);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.290f, 3.280f}), {1.38f, 0.045f, 0.22f}, kCharcoalTrim);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.335f, 3.295f}), {1.16f, 0.075f, 0.12f}, kTrimDark);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.380f, -0.825f}), {1.52f, 0.165f, 0.13f}, kCharcoalTrim);
-    for (const float sx : {-1.0f, 1.0f}) {
-        appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.76f, 0.380f, -0.60f}), {0.09f, 0.155f, 0.44f}, kCharcoalTrim);
-        appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.818f, 1.13f, 0.78f}) * Mat4::rotZ(sx * 0.50f), {0.024f, 0.34f, 0.040f}, kTrimDark);
-        appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.902f, 0.80f, 2.24f}), {0.046f, 0.042f, 0.13f}, kTrimDark);
-        appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.835f, 0.435f, 3.09f}), {0.022f, 0.095f, 0.024f}, kAmberMarker, 1.0f, 0.35f);
-        appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.620f, 0.562f, 3.25f}) * Mat4::rotY(sx > 0 ? -0.35f : 0.35f), {0.26f, 0.045f, 0.07f}, kTrimDark);
-    }
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.430f, 3.356f}), {0.28f, 0.13f, 0.014f}, kPlateWhite);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.385f, -0.892f}), {0.28f, 0.13f, 0.012f}, kPlateWhite);
-    const bool isBraking = ego.accel < -0.45f || ego.speed < 0.25f || ego.aebActive;
-    for (const float rx : {-0.58f, 0.58f}) appendBox(verts, indices, sprungMat * Mat4::translation({rx, 0.468f, -0.890f}), {0.28f, 0.020f, 0.018f}, kTailLed, 1.0f, isBraking ? 2.4f : 0.9f);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.558f, 3.31f}), {1.40f, 0.048f, 0.05f}, kTrimDark);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.558f, 3.332f}), {1.34f, 0.024f, 0.04f}, kDrlLed, 1.0f, 2.9f);
-    for (const float sx : {-0.72f, 0.72f}) appendBox(verts, indices, sprungMat * Mat4::translation({sx, 0.558f, 3.24f}) * Mat4::rotY(sx > 0 ? -0.46f : 0.46f), {0.04f, 0.022f, 0.15f}, kDrlLed, 1.0f, 2.6f);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.880f, -0.888f}), {1.50f, 0.032f, 0.055f}, kTrimDark);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.848f, -0.884f}), {1.46f, 0.030f, 0.036f}, kTailLed, 1.0f, isBraking ? 4.4f : 1.5f);
-    if (ego.gear < 0) appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.818f, -0.888f}), {0.48f, 0.024f, 0.03f}, kRevLed, 1.0f, 3.2f);
-    const struct { float x, y, z, r, lr; bool front; } wheels[4] = {
-        { kTrackHalfF, kWheelAxleYF, kFrontAxleZ, kTireOuterRF, 0.398f, true},  {-kTrackHalfF, kWheelAxleYF, kFrontAxleZ, kTireOuterRF, 0.398f, true},
-        { kTrackHalfR, kWheelAxleYR, kRearAxleZ,  kTireOuterRR, 0.424f, false}, {-kTrackHalfR, kWheelAxleYR, kRearAxleZ,  kTireOuterRR, 0.424f, false}
-    };
-    for (const auto& w : wheels) {
-        emitWheelWellLiner(verts, indices, sprungMat, w.x * 0.90f, w.z, w.y, w.lr);
-        const Mat4 wm = egoMat * Mat4::translation({w.x, w.y, w.z}) * Mat4::rotY(w.front ? ego.steerAngle : 0.0f) * Mat4::rotX(ego.wheelSpin);
-        emitAeroWheel(verts, indices, wm, w.r, (w.x >= 0.0f) ? 1.0f : -1.0f);
-    }
+  appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.34f, 1.24f}),
+            {1.12f, 0.34f, 3.60f}, kTrimDark);
+  appendBox(verts, indices,
+            sprungMat * Mat4::translation({0.0f, 0.305f, 1.38f}),
+            {1.845f, 0.130f, 1.92f}, kCharcoalTrim);
+  appendBox(verts, indices,
+            sprungMat * Mat4::translation({0.0f, 0.290f, 3.280f}),
+            {1.38f, 0.045f, 0.22f}, kCharcoalTrim);
+  appendBox(verts, indices,
+            sprungMat * Mat4::translation({0.0f, 0.335f, 3.295f}),
+            {1.16f, 0.075f, 0.12f}, kTrimDark);
+  appendBox(verts, indices,
+            sprungMat * Mat4::translation({0.0f, 0.380f, -0.825f}),
+            {1.52f, 0.165f, 0.13f}, kCharcoalTrim);
+  for (const float sx : {-1.0f, 1.0f}) {
+    appendBox(verts, indices,
+              sprungMat * Mat4::translation({sx * 0.76f, 0.380f, -0.60f}),
+              {0.09f, 0.155f, 0.44f}, kCharcoalTrim);
+    appendBox(verts, indices,
+              sprungMat * Mat4::translation({sx * 0.818f, 1.13f, 0.78f}) *
+                Mat4::rotZ(sx * 0.50f),
+              {0.024f, 0.34f, 0.040f}, kTrimDark);
+    appendBox(verts, indices,
+              sprungMat * Mat4::translation({sx * 0.902f, 0.80f, 2.24f}),
+              {0.046f, 0.042f, 0.13f}, kTrimDark);
+    appendBox(verts, indices,
+              sprungMat * Mat4::translation({sx * 0.835f, 0.435f, 3.09f}),
+              {0.022f, 0.095f, 0.024f}, kAmberMarker, 1.0f, 0.35f);
+    appendBox(verts, indices,
+              sprungMat * Mat4::translation({sx * 0.620f, 0.562f, 3.25f}) *
+                Mat4::rotY(sx > 0 ? -0.35f : 0.35f),
+              {0.26f, 0.045f, 0.07f}, kTrimDark);
+  }
+  appendBox(verts, indices,
+            sprungMat * Mat4::translation({0.0f, 0.430f, 3.356f}),
+            {0.28f, 0.13f, 0.014f}, kPlateWhite);
+  appendBox(verts, indices,
+            sprungMat * Mat4::translation({0.0f, 0.385f, -0.892f}),
+            {0.28f, 0.13f, 0.012f}, kPlateWhite);
+  const bool isBraking =
+    ego.accel < -0.45f || ego.speed < 0.25f || ego.aebActive;
+  for (const float rx : {-0.58f, 0.58f})
+    appendBox(verts, indices,
+              sprungMat * Mat4::translation({rx, 0.468f, -0.890f}),
+              {0.28f, 0.020f, 0.018f}, kTailLed, 1.0f, isBraking ? 2.4f : 0.9f);
+  appendBox(verts, indices,
+            sprungMat * Mat4::translation({0.0f, 0.558f, 3.31f}),
+            {1.40f, 0.048f, 0.05f}, kTrimDark);
+  appendBox(verts, indices,
+            sprungMat * Mat4::translation({0.0f, 0.558f, 3.332f}),
+            {1.34f, 0.024f, 0.04f}, kDrlLed, 1.0f, 2.9f);
+  for (const float sx : {-0.72f, 0.72f})
+    appendBox(verts, indices,
+              sprungMat * Mat4::translation({sx, 0.558f, 3.24f}) *
+                Mat4::rotY(sx > 0 ? -0.46f : 0.46f),
+              {0.04f, 0.022f, 0.15f}, kDrlLed, 1.0f, 2.6f);
+  appendBox(verts, indices,
+            sprungMat * Mat4::translation({0.0f, 0.880f, -0.888f}),
+            {1.50f, 0.032f, 0.055f}, kTrimDark);
+  appendBox(verts, indices,
+            sprungMat * Mat4::translation({0.0f, 0.848f, -0.884f}),
+            {1.46f, 0.030f, 0.036f}, kTailLed, 1.0f, isBraking ? 4.4f : 1.5f);
+  if (ego.gear < 0)
+    appendBox(verts, indices,
+              sprungMat * Mat4::translation({0.0f, 0.818f, -0.888f}),
+              {0.48f, 0.024f, 0.03f}, kRevLed, 1.0f, 3.2f);
+  const struct {
+    float x, y, z, r, lr;
+    bool front;
+  } wheels[4] = {
+    {kTrackHalfF, kWheelAxleYF, kFrontAxleZ, kTireOuterRF, 0.398f, true},
+    {-kTrackHalfF, kWheelAxleYF, kFrontAxleZ, kTireOuterRF, 0.398f, true},
+    {kTrackHalfR, kWheelAxleYR, kRearAxleZ, kTireOuterRR, 0.424f, false},
+    {-kTrackHalfR, kWheelAxleYR, kRearAxleZ, kTireOuterRR, 0.424f, false}};
+  for (const auto& w : wheels) {
+    emitWheelWellLiner(verts, indices, sprungMat, w.x * 0.90f, w.z, w.y, w.lr);
+    const Mat4 wm = egoMat * Mat4::translation({w.x, w.y, w.z}) *
+                    Mat4::rotY(w.front ? ego.steerAngle : 0.0f) *
+                    Mat4::rotX(ego.wheelSpin);
+    emitAeroWheel(verts, indices, wm, w.r, (w.x >= 0.0f) ? 1.0f : -1.0f);
+  }
 }
 
-} // namespace cybercab
+}  // namespace cybercab
