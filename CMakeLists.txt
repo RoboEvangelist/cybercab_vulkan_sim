@@ -99,6 +99,7 @@ add_library(cybercab_perception SHARED
     src/perception/v15/V15Pipeline.cpp
     src/perception/v15/CalibSolver.cpp
     src/perception/v15/CameraSelfCalib.cpp
+    src/perception/v15/VirtualCameraRectifier.cpp
 )
 add_dependencies(cybercab_perception compile_shaders)
 target_link_libraries(cybercab_perception PUBLIC cybercab_world)
