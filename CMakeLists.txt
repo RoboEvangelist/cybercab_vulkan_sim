@@ -172,6 +172,8 @@ add_executable(cybercab_tests
     tests/test_v15_voxels_detections_and_hallucinations.cpp
     tests/test_v15_mission_collisions_and_zero_alloc.cpp
     tests/test_v15_cybercab_camera_res.cpp
+    tests/test_camera_corrob_and_bounds.cpp
+    tests/test_cybercab_res_full_validation.cpp
     tests/test_v15_e2e_closed_loop.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
