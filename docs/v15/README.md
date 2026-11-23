@@ -39,13 +39,14 @@ reasoning with a certificate the author cannot fill in by guessing. Here the cer
 | 15 | Dynamic-range `day` / `night_glare` lighting, RCCB mosaic & HDR closed-loop | [step15_hdr_lighting_rccb_and_glare_test.md](step15_hdr_lighting_rccb_and_glare_test.md) | `d96829b`..`c92759a` |
 | 16 | Post-v15 SOTA declaration-only headers (`GaussianSurfel2DWorld`, `TruncatedDiffusionPolicy`) | — (syntax-checked declarations, no tests per user request) | Step 16 |
 | 17 | Parameter effects, all 11 driving actions, `Autoshift` D->R->D & camera-knock calib | [step17_params_actions_autoshift_and_calib_tests.md](step17_params_actions_autoshift_and_calib_tests.md) | `3efb471`..`d2431a4` |
-| 18 | Voxels, detections/AP, empty-road hallucinations, 6 missions, ISO 34502 & 0-alloc | [step18_voxels_hallucinations_mission_and_zero_alloc.md](step18_voxels_hallucinations_mission_and_zero_alloc.md) | Step 18 |
+| 18 | Voxels, detections/AP, empty-road hallucinations, 6 missions, ISO 34502 & 0-alloc | [step18_voxels_hallucinations_mission_and_zero_alloc.md](step18_voxels_hallucinations_mission_and_zero_alloc.md) | `8ecc082`..`5cc12a4` |
+| 19 | Real Cybercab `2896x1876` / `1448x938` presets + `320x240` default & shader scaling | [step19_cybercab_native_camera_resolution.md](step19_cybercab_native_camera_resolution.md) | Step 19 |
 
 ## Open UNVERIFIED items
 - ~~step02 R2~~ **CLOSED in Step 11**: closed-loop `v15` perception validated (`recall=0.5811`, `precision=0.8077`, 0 collisions, `4.88 ms` half-res / `7.38 ms` full-res).
 - ~~step06a R1~~ **CLOSED in Step 17**: live rendered camera-knock self-calibration validated in `LiveCameraKnockSelfCalibRecoversPitchRoll` (`knock_recov_pitch_deg=1.7545`, `knock_recov_roll_deg=-1.4989`).
 
 ## Regression gate (every step)
-- `ctest --test-dir build` must show **100%** pass (`163/163`).
-- The 96 pre-v15 tests are the v14 equivalence oracle (`pipeline_version: v14`); 67 v15 tests cover Modules 1–7, policy config bounds, CybercabMesh, 4D Gaussian planner, Reality HUD/telemetry, HDR night-glare/RCCB, params/actions/autoshift/calib, voxels/hallucinations/AP/missions/zero-alloc, and end-to-end closed-loop driving.
+- `ctest --test-dir build` must show **100%** pass (`166/166`).
+- The 96 pre-v15 tests are the v14 equivalence oracle (`pipeline_version: v14`); 70 v15 tests cover Modules 1–7, policy config bounds, CybercabMesh, 4D Gaussian planner, Reality HUD/telemetry, HDR night-glare/RCCB, params/actions/autoshift/calib, voxels/hallucinations/AP/missions/zero-alloc, Cybercab `2896x1876`/`1448x938` camera presets, and end-to-end closed-loop driving.
 - New files are kept to **350 lines or fewer**.
