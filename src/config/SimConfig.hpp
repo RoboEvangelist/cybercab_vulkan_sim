@@ -103,6 +103,8 @@ struct SimConfig {
     // Perception architecture selector: "v14" (RT-DETR/BEVFormer/voxel) | "v15" (photon-count/Plücker/Gaussian)
     std::string pipelineVersion = "v14";
     bool isV15() const { return pipelineVersion == "v15"; }
+  std::string lightingMode = "day";
+  bool isNightGlare() const { return lightingMode == "night_glare"; }
     std::string v15PolicyPath = "config/v15_policy.yaml";
     V15PolicyConfig v15Policy{};
 
@@ -176,6 +178,7 @@ struct SimConfig {
     float photonShotNoiseA = 0.4096f; // DN per DN (= 1 / gain[e-/DN]); 40000 e- full well over 14-bit ADC
     float photonReadNoiseB = 1.51f;   // DN^2 (= (read_noise_e / gain)^2); 3 e- read noise
     uint32_t photonNoiseSeed = 1234u;
+  bool photonRccbMosaic = false;
 
     // Planning & RSS
     float targetCruiseSpeedMs = 10.5f;

@@ -15,6 +15,7 @@ simulation:
   aeb_enabled: true
   use_vulkan_validation: false
   pipeline_version: "v14"        # "v14" (RT-DETR/BEVFormer/voxels) | "v15" (photon-count/Plücker/Gaussian world)
+  lighting_mode: "day"           # "day" | "night_glare"
 
 perception:
   # Feature & Transformer dimensions (pure Vulkan compute shaders)
@@ -76,6 +77,7 @@ perception:
     shot_noise_a_dn: 0.4096      # 1 / gain; gain = 40000 e- full well / 16383 DN
     read_noise_b_dn2: 1.51       # (3 e- read noise / gain)^2
     seed: 1234
+    enable_rccb_mosaic: false
 
 planning:
   target_cruise_speed_ms: 10.5

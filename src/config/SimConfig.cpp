@@ -77,6 +77,7 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
         cfg.aebEnabled = readOr(sim, "aeb_enabled", cfg.aebEnabled);
         cfg.useVulkanValidation = readOr(sim, "use_vulkan_validation", cfg.useVulkanValidation);
         cfg.pipelineVersion = readOr(sim, "pipeline_version", cfg.pipelineVersion);
+    cfg.lightingMode = readOr(sim, "lighting_mode", cfg.lightingMode);
         cfg.v15PolicyPath = readOr(sim, "v15_policy_config", cfg.v15PolicyPath);
     }
 
@@ -156,6 +157,8 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
             cfg.photonShotNoiseA = readOr(ps, "shot_noise_a_dn", cfg.photonShotNoiseA);
             cfg.photonReadNoiseB = readOr(ps, "read_noise_b_dn2", cfg.photonReadNoiseB);
             cfg.photonNoiseSeed = readOr(ps, "seed", cfg.photonNoiseSeed);
+      cfg.photonRccbMosaic =
+        readOr(ps, "enable_rccb_mosaic", cfg.photonRccbMosaic);
         }
     }
 
@@ -219,6 +222,11 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
         throw std::runtime_error("simulation.pipeline_version must be \"v14\" or \"v15\", got \"" +
                                  cfg.pipelineVersion + "\"");
     }
+  if (cfg.lightingMode != "day" && cfg.lightingMode != "night_glare") {
+    throw std::runtime_error(
+      "simulation.lighting_mode must be \"day\" or \"night_glare\", got \"" +
+      cfg.lightingMode + "\"");
+  }
     if (!(cfg.photonShotNoiseA >= 0.0f) || !(cfg.photonReadNoiseB >= 0.0f)) {
         throw std::runtime_error("perception.photon_sensor noise parameters must be >= 0");
     }
