@@ -102,48 +102,84 @@ void emitWheelWellLiner(std::vector<SceneVertex>& verts,
 
 }  // namespace
 
-void appendCybercabVehicleMesh(std::vector<SceneVertex>& verts, std::vector<uint32_t>& indices,
-                               const EgoState& ego, const Mat4& egoMat, const Mat4& sprungMat,
-                               bool fsdWireMode) {
-    Station st[kNumSt]{};
-    for (int i = 0; i < kNumSt; ++i) st[i] = evalStation(kZStations[i]);
+void appendCybercabVehicleMesh(std::vector<SceneVertex>& verts,
+                               std::vector<uint32_t>& indices,
+                               const EgoState& ego, const Mat4& egoMat,
+                               const Mat4& sprungMat, bool fsdWireMode) {
+  Station st[kNumSt]{};
+  for (int i = 0; i < kNumSt; ++i) st[i] = evalStation(kZStations[i]);
 
-    if (fsdWireMode) {
-        Vec3 hRoof[kNumSt][3]{}, hSideR[kNumSt][2]{}, hSideL[kNumSt][2]{};
-        for (int i = 0; i < kNumSt; ++i) {
-            hRoof[i][0] = {-st[i].wCan, st[i].yCan, st[i].z}; hRoof[i][1] = {0.0f, st[i].yRoof, st[i].z};
-            hRoof[i][2] = { st[i].wCan, st[i].yCan, st[i].z};
-            hSideR[i][0] = { st[i].wBot, st[i].yBot, st[i].z}; hSideR[i][1] = { st[i].wCan, st[i].yCan, st[i].z};
-            hSideL[i][0] = {-st[i].wCan, st[i].yCan, st[i].z}; hSideL[i][1] = {-st[i].wBot, st[i].yBot, st[i].z};
-        }
-        emitGrid<kNumSt, 3>(verts, indices, sprungMat, hRoof, kNumSt, 3, kHoloCyan, 0.45f, 1.0f, true);
-        emitGrid<kNumSt, 2>(verts, indices, sprungMat, hSideR, kNumSt, 2, kHoloCyan, 0.40f, 0.9f, false);
-        emitGrid<kNumSt, 2>(verts, indices, sprungMat, hSideL, kNumSt, 2, kHoloCyan, 0.40f, 0.9f, false);
-        return;
-    }
-
-    Vec3 loR[kNumSt][3]{}, loL[kNumSt][3]{}, upR[kNumSt][3]{}, upL[kNumSt][3]{};
-    Vec3 roofGrid[18][7]{}, hoodGrid[17][7]{};
-    constexpr float kRoofCols[7] = {-1.0f, -0.68f, -0.36f, 0.0f, 0.36f, 0.68f, 1.0f};
+  if (fsdWireMode) {
+    Vec3 hRoof[kNumSt][3]{}, hSideR[kNumSt][2]{}, hSideL[kNumSt][2]{};
     for (int i = 0; i < kNumSt; ++i) {
-        loR[i][0] = { st[i].wBot, st[i].yBot, st[i].z}; loR[i][1] = { st[i].wBelly, st[i].yBelly, st[i].z}; loR[i][2] = { st[i].wShld, st[i].yShld, st[i].z};
-        loL[i][0] = {-st[i].wShld, st[i].yShld, st[i].z}; loL[i][1] = {-st[i].wBelly, st[i].yBelly, st[i].z}; loL[i][2] = {-st[i].wBot, st[i].yBot, st[i].z};
-        upR[i][0] = { st[i].wShld, st[i].yShld, st[i].z}; upR[i][1] = { st[i].wUpMid, st[i].yUpMid, st[i].z}; upR[i][2] = { st[i].wCan, st[i].yCan, st[i].z};
-        upL[i][0] = {-st[i].wCan, st[i].yCan, st[i].z};   upL[i][1] = {-st[i].wUpMid, st[i].yUpMid, st[i].z}; upL[i][2] = {-st[i].wShld, st[i].yShld, st[i].z};
-        if (i < 18) {
-            const float rFade = (st[i].z > -0.82f && st[i].z < 1.02f) ? std::sin(kPi * clampf((st[i].z + 0.82f) / 1.84f, 0.0f, 1.0f)) : 0.0f;
-            for (int c = 0; c < 7; ++c) roofGrid[i][c] = {kRoofCols[c] * st[i].wCan, lerpf(st[i].yRoof, st[i].yCan, kRoofCols[c] * kRoofCols[c]) + ((c == 2 || c == 4) ? 0.012f * rFade : 0.0f), st[i].z};
-        } else if (i >= 20) {
-            for (int c = 0; c < 7; ++c) hoodGrid[i - 20][c] = {kRoofCols[c] * st[i].wCan, lerpf(st[i].yRoof, st[i].yCan, kRoofCols[c] * kRoofCols[c]), st[i].z};
-        }
+      hRoof[i][0] = {-st[i].wCan, st[i].yCan, st[i].z};
+      hRoof[i][1] = {0.0f, st[i].yRoof, st[i].z};
+      hRoof[i][2] = {st[i].wCan, st[i].yCan, st[i].z};
+      hSideR[i][0] = {st[i].wBot, st[i].yBot, st[i].z};
+      hSideR[i][1] = {st[i].wCan, st[i].yCan, st[i].z};
+      hSideL[i][0] = {-st[i].wCan, st[i].yCan, st[i].z};
+      hSideL[i][1] = {-st[i].wBot, st[i].yBot, st[i].z};
     }
-    emitGrid<kNumSt, 3>(verts, indices, sprungMat, loR, kNumSt, 3, kGoldBase, 1.0f, 0.0f, false);
-    emitGrid<kNumSt, 3>(verts, indices, sprungMat, loL, kNumSt, 3, kGoldBase, 1.0f, 0.0f, false);
-    emitGrid<kNumSt, 3>(verts, indices, sprungMat, upR, kNumSt, 3, kGoldBright, 1.0f, 0.0f, false);
-    emitGrid<kNumSt, 3>(verts, indices, sprungMat, upL, kNumSt, 3, kGoldBright, 1.0f, 0.0f, false);
-    emitGrid<18, 7>(verts, indices, sprungMat, roofGrid, 18, 7, kGoldBright, 1.0f, 0.0f, true);
-    emitGrid<17, 7>(verts, indices, sprungMat, hoodGrid, 17, 7, kGoldBright, 1.0f, 0.0f, true);
-    emitWindshieldAndPillars(verts, indices, sprungMat); emitSculptedEndCap(verts, indices, sprungMat, st[0], false); emitSculptedEndCap(verts, indices, sprungMat, st[kNumSt - 1], true); emitSideWindows(verts, indices, sprungMat, st);
+    emitGrid<kNumSt, 3>(verts, indices, sprungMat, hRoof, kNumSt, 3, kHoloCyan,
+                        0.45f, 1.0f, true);
+    emitGrid<kNumSt, 2>(verts, indices, sprungMat, hSideR, kNumSt, 2, kHoloCyan,
+                        0.40f, 0.9f, false);
+    emitGrid<kNumSt, 2>(verts, indices, sprungMat, hSideL, kNumSt, 2, kHoloCyan,
+                        0.40f, 0.9f, false);
+    return;
+  }
+
+  Vec3 loR[kNumSt][3]{}, loL[kNumSt][3]{}, upR[kNumSt][3]{}, upL[kNumSt][3]{};
+  Vec3 roofGrid[18][7]{}, hoodGrid[17][7]{};
+  constexpr float kRoofCols[7] = {-1.0f, -0.68f, -0.36f, 0.0f,
+                                  0.36f, 0.68f,  1.0f};
+  for (int i = 0; i < kNumSt; ++i) {
+    loR[i][0] = {st[i].wBot, st[i].yBot, st[i].z};
+    loR[i][1] = {st[i].wBelly, st[i].yBelly, st[i].z};
+    loR[i][2] = {st[i].wShld, st[i].yShld, st[i].z};
+    loL[i][0] = {-st[i].wShld, st[i].yShld, st[i].z};
+    loL[i][1] = {-st[i].wBelly, st[i].yBelly, st[i].z};
+    loL[i][2] = {-st[i].wBot, st[i].yBot, st[i].z};
+    upR[i][0] = {st[i].wShld, st[i].yShld, st[i].z};
+    upR[i][1] = {st[i].wUpMid, st[i].yUpMid, st[i].z};
+    upR[i][2] = {st[i].wCan, st[i].yCan, st[i].z};
+    upL[i][0] = {-st[i].wCan, st[i].yCan, st[i].z};
+    upL[i][1] = {-st[i].wUpMid, st[i].yUpMid, st[i].z};
+    upL[i][2] = {-st[i].wShld, st[i].yShld, st[i].z};
+    if (i < 18) {
+      const float rFade =
+        (st[i].z > -0.82f && st[i].z < 1.02f)
+          ? std::sin(kPi * clampf((st[i].z + 0.82f) / 1.84f, 0.0f, 1.0f))
+          : 0.0f;
+      for (int c = 0; c < 7; ++c)
+        roofGrid[i][c] = {
+          kRoofCols[c] * st[i].wCan,
+          lerpf(st[i].yRoof, st[i].yCan, kRoofCols[c] * kRoofCols[c]) +
+            ((c == 2 || c == 4) ? 0.012f * rFade : 0.0f),
+          st[i].z};
+    } else if (i >= 20) {
+      for (int c = 0; c < 7; ++c)
+        hoodGrid[i - 20][c] = {
+          kRoofCols[c] * st[i].wCan,
+          lerpf(st[i].yRoof, st[i].yCan, kRoofCols[c] * kRoofCols[c]), st[i].z};
+    }
+  }
+  emitGrid<kNumSt, 3>(verts, indices, sprungMat, loR, kNumSt, 3, kGoldBase,
+                      1.0f, 0.0f, false);
+  emitGrid<kNumSt, 3>(verts, indices, sprungMat, loL, kNumSt, 3, kGoldBase,
+                      1.0f, 0.0f, false);
+  emitGrid<kNumSt, 3>(verts, indices, sprungMat, upR, kNumSt, 3, kGoldBright,
+                      1.0f, 0.0f, false);
+  emitGrid<kNumSt, 3>(verts, indices, sprungMat, upL, kNumSt, 3, kGoldBright,
+                      1.0f, 0.0f, false);
+  emitGrid<18, 7>(verts, indices, sprungMat, roofGrid, 18, 7, kGoldBright, 1.0f,
+                  0.0f, true);
+  emitGrid<17, 7>(verts, indices, sprungMat, hoodGrid, 17, 7, kGoldBright, 1.0f,
+                  0.0f, true);
+  emitWindshieldAndPillars(verts, indices, sprungMat);
+  emitSculptedEndCap(verts, indices, sprungMat, st[0], false);
+  emitSculptedEndCap(verts, indices, sprungMat, st[kNumSt - 1], true);
+  emitSideWindows(verts, indices, sprungMat, st);
     appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.34f, 1.24f}), {1.12f, 0.34f, 3.60f}, kTrimDark);
     appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.305f, 1.38f}), {1.845f, 0.130f, 1.92f}, kCharcoalTrim);
     appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.290f, 3.280f}), {1.38f, 0.045f, 0.22f}, kCharcoalTrim);
