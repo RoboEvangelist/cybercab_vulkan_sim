@@ -4,7 +4,7 @@ A modular, zero-hot-path-allocation **C++ + Vulkan** simulation of the **Tesla C
 
 ## Key Capabilities
 - **100% C++ + GLSL Compute/Graphics (Vulkan):** No Python runtime or external heavy model downloads required; shaders compile directly to SPIR-V via `glslangValidator`.
-- **Configurable Architecture Switch (`simulation.pipeline_version` in `config/cybercab_sim.yaml`):**
+- **Configurable Architecture Switch (`simulation.pipeline_version` in `config/cybercab_sim.yaml` or `--pipeline v14|v15`):**
   - **`v14` (default):** RT-DETR + ByteTrack + BEVFormer + 4D Occupancy/Flow + Occlusion Shadows + World Model + quintic RSS planner (`01_soil_detect`..`06_world_model`).
   - **`v15` (opt-in):** All 7 FSD v15 modules gated behind `cfg.isV15()`:
     1. **ISP-Bypass Photon Front-End:** 14-bit linear photon tensor (`photon.glsl`), Poisson-Gaussian sensor noise, log illumination/detail frequency split (`v15_freq_split.comp`).
@@ -22,18 +22,19 @@ A modular, zero-hot-path-allocation **C++ + Vulkan** simulation of the **Tesla C
 cybercab_vulkan_sim/
 ├── CMakeLists.txt                  # Modular libs: cybercab_core/world/perception/planning
 ├── config/cybercab_sim.yaml        # 8-camera calibration, pipeline_version (v14/v15), RSS & vehicle params
-├── docs/v15/                       # Semi-formal change certificates (Steps 1–11) & index
+├── config/v15_policy.yaml          # Tunable v15 autoregressive rollout, OBB safety & latent predictor params
+├── docs/v15/                       # Semi-formal change certificates (Steps 1–12) & index
 ├── shaders/                        # GLSL graphics & compute shaders (v14 + v15_*.comp + include/*.glsl)
 ├── src/
 │   ├── core/                       # VulkanContext, Buffer, Image, Pipeline, Profiler, TraceLogger, Math
-│   ├── config/                     # YAML config loader (SimConfig)
-│   ├── world/                      # Road splines, SAT/IDM/Helbing physics, siren state, Cybercab mesh
+│   ├── config/                     # YAML config loaders (SimConfig, V15PolicyConfig)
+│   ├── world/                      # Road splines, SAT/IDM/Helbing physics, siren state, CybercabMesh/BodyLoft
 │   ├── sensors/                    # 8-camera Vulkan renderer & Brown-Conrady ISP (CameraRigRenderer)
 │   ├── perception/                 # v14 stages, ByteTrack, and v15/ modules (M1–M6)
-│   ├── planning/                   # v14 quintic RSS planner & v15/ autoregressive policy (M7)
+│   ├── planning/                   # v14 quintic RSS planner & v15/ autoregressive policy & OBB safety (M7)
 │   ├── app/                        # Interactive SDL2 + Vulkan HUD viewer & bitmap font
 │   └── main.cpp                    # Interactive / headless CLI entry point
-└── tests/                          # 136 GoogleTest tests (96 v14 regression + 40 v15 unit/GPU/E2E)
+└── tests/                          # 140 GoogleTest tests (96 v14 regression + 44 v15 unit/GPU/E2E)
 ```
 
 ## Dependencies (Ubuntu / Debian)
@@ -58,19 +59,19 @@ ctest --test-dir build --output-on-failure
 # Run default v14
 ./build/cybercab_sim --config config/cybercab_sim.yaml
 
-# Or run FSD v15 without altering config/cybercab_sim.yaml
-sed 's/pipeline_version: "v14"/pipeline_version: "v15"/' config/cybercab_sim.yaml > /tmp/cybercab_v15.yaml
-./build/cybercab_sim --config /tmp/cybercab_v15.yaml
+# Or run FSD v15 via CLI flag without altering config/cybercab_sim.yaml
+./build/cybercab_sim --config config/cybercab_sim.yaml --pipeline v15
 ```
 - **Mouse:** Drag to orbit 3D view, scroll to zoom; click HUD buttons/checkboxes or camera cards directly.
 - **Keys:** `1`–`5` (camera overlays), `V` (3D Twin / FSD Voxel / BEV Tactical), `R` (320x240 / 640x480), `Space` (Auto / `WASD` manual drive), `B` (RSS/AEB shield), `Tab` / `C` (select/soil camera), `O/H/F/M/E/K/G/P` (toggle overlays), `F1`–`F6` (Jaywalk, Occluded, HardBrake, SoilFront, Reset, ForceRed).
 
 ### Headless GPU Mode & Tracing
 ```bash
-./build/cybercab_sim --config /tmp/cybercab_v15.yaml --headless --scenario nominal --steps 120 --trace /tmp/trace_v15.jsonl
+./build/cybercab_sim --config config/cybercab_sim.yaml --pipeline v15 --headless --scenario nominal --steps 120 --trace /tmp/trace_v15.jsonl
 ```
 Options:
-- `--config <path.yaml>` (defaults to `config/cybercab_sim.yaml`; set `simulation.pipeline_version` to `"v14"` or `"v15"`)
+- `--config <path.yaml>` (defaults to `config/cybercab_sim.yaml`; loads `config/v15_policy.yaml`)
+- `--pipeline v14|v15` (overrides `simulation.pipeline_version`)
 - `--scenario nominal|jaywalk|occluded|hardbrake|soil_front|siren`
 - `--steps N` (control ticks at 36 Hz)
 - `--res half|full` (`320x240` or `640x480` per camera)
