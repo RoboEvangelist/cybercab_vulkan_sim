@@ -67,10 +67,17 @@ void main() {
     const float baseHorizV = (cam < 4u) ? pc.horizon03[cam] : pc.horizon47[cam - 4u];
     const float horizSlope = (cam < 4u) ? pc.horizonSlope03[cam] : pc.horizonSlope47[cam - 4u];
 
-    const int strideX = int(pc.camWidth / pc.featWidth);
-    const int strideY = int(pc.camHeight / pc.featHeight);
-    const int x0 = int(fx) * strideX;
-    const int y0 = int(fy) * strideY;
+  const float kRefCamW = 320.0;
+  const float kRefCamH = 240.0;
+  const int kMaxCellSteps = 8;
+  const int x0 = int((fx * pc.camWidth) / pc.featWidth);
+  const int x1 = int(((fx + 1u) * pc.camWidth) / pc.featWidth);
+  const int y0 = int((fy * pc.camHeight) / pc.featHeight);
+  const int y1 = int(((fy + 1u) * pc.camHeight) / pc.featHeight);
+  const int stepX = max(1, (x1 - x0) / kMaxCellSteps);
+  const int stepY = max(1, (y1 - y0) / kMaxCellSteps);
+  const int sx = max(1, int(round(float(pc.camWidth) / kRefCamW)));
+  const int sy = max(1, int(round(float(pc.camHeight) / kRefCamH)));
 
     float gxAcc = 0.0, gyAcc = 0.0, motAcc = 0.0;
     float vehScoreAcc = 0.0, pedScoreAcc = 0.0, sigScoreAcc = 0.0, sigStrongAcc = 0.0, poleSignAcc = 0.0, poleStrongAcc = 0.0, roadScoreAcc = 0.0;
@@ -80,10 +87,8 @@ void main() {
     float minObjV = 1.0, maxObjV = 0.0;
     bool hasSubObj = false;
 
-    for (int dy = 0; dy < strideY; ++dy) {
-        for (int dx = 0; dx < strideX; ++dx) {
-            const int px = x0 + dx;
-            const int py = y0 + dy;
+  for (int py = y0; py < y1; py += stepY) {
+    for (int px = x0; px < x1; px += stepX) {
             const vec3 c = fetchCurr(cam, px, py);
             const vec3 p = fetchPrev(cam, px, py);
             const float uFrac = float(px) / float(pc.camWidth);
@@ -91,10 +96,10 @@ void main() {
             const float camHorizV = clamp(baseHorizV + horizSlope * (uFrac - 0.5), 0.34, 0.66);
 
             const float lC = luma(c);
-            const float lL = luma(fetchCurr(cam, px - 2, py));
-            const float lR = luma(fetchCurr(cam, px + 2, py));
-            const float lU = luma(fetchCurr(cam, px, py - 2));
-            const float lD = luma(fetchCurr(cam, px, py + 2));
+      const float lL = luma(fetchCurr(cam, px - 2 * sx, py));
+      const float lR = luma(fetchCurr(cam, px + 2 * sx, py));
+      const float lU = luma(fetchCurr(cam, px, py - 2 * sy));
+      const float lD = luma(fetchCurr(cam, px, py + 2 * sy));
 
             const float gx = abs(lR - lL);
             const float gy = abs(lD - lU);
@@ -115,10 +120,10 @@ void main() {
             if (sat < 0.20 && lC > 0.42 && (vFrac > 0.49 || vFrac > camHorizV + 0.005)) {
                 bool flatRoadStrip = (vFrac > 0.49);
                 if (!flatRoadStrip) {
-                    const vec3 cStripeU4 = fetchCurr(cam, px, py - 4);
-                    const vec3 cStripeU7 = fetchCurr(cam, px, py - 7);
-                    const vec3 cStripeD4 = fetchCurr(cam, px, py + 4);
-                    const vec3 cStripeD7 = fetchCurr(cam, px, py + 7);
+          const vec3 cStripeU4 = fetchCurr(cam, px, py - 4 * sy);
+          const vec3 cStripeU7 = fetchCurr(cam, px, py - 7 * sy);
+          const vec3 cStripeD4 = fetchCurr(cam, px, py + 4 * sy);
+          const vec3 cStripeD7 = fetchCurr(cam, px, py + 7 * sy);
                     const bool darkAboveStripe = (luma(cStripeU4) < 0.28 && satOf(cStripeU4) < 0.45) ||
                                                  (luma(cStripeU7) < 0.28 && satOf(cStripeU7) < 0.45);
                     const bool darkBelowStripe = (luma(cStripeD4) < 0.28 && satOf(cStripeD4) < 0.45) ||
@@ -155,14 +160,14 @@ void main() {
             bool isPoleMatch = false;
             if (!isEgoSelf && (1.0 - isSky) > 0.5 && vFrac > 0.05 && vFrac < 0.78 &&
                 c.b > c.g && c.g > c.r && sat >= 0.32 && sat <= 0.50 && lC >= 0.060 && lC <= 0.54) {
-                const vec3 cU4 = fetchCurr(cam, px, py - 4);
-                const vec3 cD4 = fetchCurr(cam, px, py + 4);
-                const float vertDiff = min(length(cU4 - c), length(cD4 - c));
-                if (vertDiff < 0.045) {
-                    const vec3 cL4 = fetchCurr(cam, px - 4, py);
-                    const vec3 cR4 = fetchCurr(cam, px + 4, py);
-                    const vec3 cL8 = fetchCurr(cam, px - 8, py);
-                    const vec3 cR8 = fetchCurr(cam, px + 8, py);
+        const vec3 cU4 = fetchCurr(cam, px, py - 4 * sy);
+        const vec3 cD4 = fetchCurr(cam, px, py + 4 * sy);
+        const float vertDiff = min(length(cU4 - c), length(cD4 - c));
+        if (vertDiff < 0.045) {
+          const vec3 cL4 = fetchCurr(cam, px - 4 * sx, py);
+          const vec3 cR4 = fetchCurr(cam, px + 4 * sx, py);
+          const vec3 cL8 = fetchCurr(cam, px - 8 * sx, py);
+          const vec3 cR8 = fetchCurr(cam, px + 8 * sx, py);
                     const float dLumL4 = lC - luma(cL4), dLumR4 = lC - luma(cR4);
                     const float dLumL8 = lC - luma(cL8), dLumR8 = lC - luma(cR8);
                     const float dBluL4 = c.b - cL4.b, dBluR4 = c.b - cR4.b;
@@ -172,9 +177,9 @@ void main() {
                     const float minBgL4 = min(luma(cL4), luma(cR4));
                     const float minBgL8 = min(luma(cL8), luma(cR8));
                     const bool groundLuma = (lC <= 0.35);
-                    const vec3 cU8 = fetchCurr(cam, px, py - 8);
-                    const vec3 cU16 = fetchCurr(cam, px, py - 16);
-                    const vec3 cU24 = fetchCurr(cam, px, py - 24);
+          const vec3 cU8 = fetchCurr(cam, px, py - 8 * sy);
+          const vec3 cU16 = fetchCurr(cam, px, py - 16 * sy);
+          const vec3 cU24 = fetchCurr(cam, px, py - 24 * sy);
                     const bool poleAbove = (cU8.b > cU8.g && cU8.b > cU8.r * 1.15 && satOf(cU8) >= 0.25 && length(cU8 - c) < 0.10) &&
                                            ((cU16.b > cU16.r * 1.12 && !(cU16.g > cU16.r * 1.6 && cU16.g > cU16.b)) ||
                                             (satOf(cU16) < 0.16 && luma(cU16) >= 0.52)) &&
@@ -193,10 +198,10 @@ void main() {
                 vFrac < camHorizV - 0.015 && lC >= 0.62) {
                 const int pyHorizA = clamp(int(camHorizV * float(pc.camHeight)), 0, int(pc.camHeight) - 1);
                 const int pyHorizB = clamp(int((camHorizV + 0.014) * float(pc.camHeight)), 0, int(pc.camHeight) - 1);
-                const vec3 cHLA = fetchCurr(cam, px - 3, pyHorizA);
-                const vec3 cHRA = fetchCurr(cam, px + 3, pyHorizA);
-                const vec3 cHLB = fetchCurr(cam, px - 3, pyHorizB);
-                const vec3 cHRB = fetchCurr(cam, px + 3, pyHorizB);
+        const vec3 cHLA = fetchCurr(cam, px - 3 * sx, pyHorizA);
+        const vec3 cHRA = fetchCurr(cam, px + 3 * sx, pyHorizA);
+        const vec3 cHLB = fetchCurr(cam, px - 3 * sx, pyHorizB);
+        const vec3 cHRB = fetchCurr(cam, px + 3 * sx, pyHorizB);
                 const bool hasBelowWhiteTruck = (luma(cHLA) >= 0.28 && satOf(cHLA) < 0.18) ||
                                                 (luma(cHRA) >= 0.28 && satOf(cHRA) < 0.18) ||
                                                 (luma(cHLB) >= 0.28 && satOf(cHLB) < 0.18) ||
@@ -205,8 +210,8 @@ void main() {
                                              (satOf(cHRA) > 0.58 && cHRA.b > cHRA.r * 2.30) ||
                                              (satOf(cHLB) > 0.58 && cHLB.b > cHLB.r * 2.30) ||
                                              (satOf(cHRB) > 0.58 && cHRB.b > cHRB.r * 2.30);
-                const vec3 cW15L = fetchCurr(cam, px - 15, py);
-                const vec3 cW15R = fetchCurr(cam, px + 15, py);
+        const vec3 cW15L = fetchCurr(cam, px - 15 * sx, py);
+        const vec3 cW15R = fetchCurr(cam, px + 15 * sx, py);
                 const bool extraWideWhite = (luma(cW15L) >= 0.42 && satOf(cW15L) < 0.16 &&
                                              luma(cW15R) >= 0.42 && satOf(cW15R) < 0.16);
                 isSpeedSignMatch = (!hasBelowWhiteTruck && !hasBelowBlueCab && !extraWideWhite);
@@ -244,11 +249,12 @@ void main() {
             bool isSilverStripeAA = false;
             if (!isEgoSelf && silverColorMatch && (1.0 - isSky) > 0.5 &&
                 vFrac > camHorizV - 0.01 && vFrac < 0.89) {
-                const bool horizFlanked = isDarkAsphaltSample(fetchCurr(cam, px - 5, py)) &&
-                                          isDarkAsphaltSample(fetchCurr(cam, px + 5, py));
-                const bool vertFlanked = (vFrac > camHorizV + 0.018) &&
-                                         isDarkAsphaltSample(fetchCurr(cam, px, py - 4)) &&
-                                         isDarkAsphaltSample(fetchCurr(cam, px, py + 4));
+        const bool horizFlanked =
+          isDarkAsphaltSample(fetchCurr(cam, px - 5 * sx, py)) &&
+          isDarkAsphaltSample(fetchCurr(cam, px + 5 * sx, py));
+        const bool vertFlanked = (vFrac > camHorizV + 0.018) &&
+          isDarkAsphaltSample(fetchCurr(cam, px, py - 4 * sy)) &&
+          isDarkAsphaltSample(fetchCurr(cam, px, py + 4 * sy));
                 isSilverStripeAA = horizFlanked || vertFlanked;
             }
             const bool isSilverMetallic = !isEgoSelf && silverColorMatch && !isSilverStripeAA && (1.0 - isSky) > 0.5 &&
@@ -256,12 +262,12 @@ void main() {
             // Dark foreground tires / underbody shadow directly beneath close vehicle chassis (grounds close Cam0 vBot)
             bool isVehDarkBase = false;
             if (!isEgoSelf && (1.0 - isSky) > 0.5 && vFrac > 0.80 && vFrac < 0.90 && lC < 0.095 && sat < 0.55) {
-                const vec3 vU4 = fetchCurr(cam, px, py - 4);
-                const vec3 vU8 = fetchCurr(cam, px, py - 8);
-                const vec3 vU12 = fetchCurr(cam, px, py - 12);
-                if (isVehBodySample(vU4) || isVehBodySample(vU8) || isVehBodySample(vU12)) {
-                    const vec3 vL3 = fetchCurr(cam, px - 3, py);
-                    const vec3 vR3 = fetchCurr(cam, px + 3, py);
+        const vec3 vU4 = fetchCurr(cam, px, py - 4 * sy);
+        const vec3 vU8 = fetchCurr(cam, px, py - 8 * sy);
+        const vec3 vU12 = fetchCurr(cam, px, py - 12 * sy);
+        if (isVehBodySample(vU4) || isVehBodySample(vU8) || isVehBodySample(vU12)) {
+          const vec3 vL3 = fetchCurr(cam, px - 3 * sx, py);
+          const vec3 vR3 = fetchCurr(cam, px + 3 * sx, py);
                     isVehDarkBase = (luma(vL3) < 0.12 || luma(vR3) < 0.12);
                 }
             }
@@ -284,10 +290,12 @@ void main() {
             bldgScoreAcc += isBldg;
             lumAcc += lC;
             if (max(isVeh, max(isPed, isSig)) > 0.23) {
-                const float u0 = (float(px) + 0.15) / float(pc.camWidth);
-                const float v0 = (float(py) + 0.15) / float(pc.camHeight);
-                const float u1 = (float(px) + 0.85) / float(pc.camWidth);
-                const float v1 = (float(py) + 0.85) / float(pc.camHeight);
+        const float padX = max(0.85, float(stepX) - 0.15);
+        const float padY = max(0.85, float(stepY) - 0.15);
+        const float u0 = (float(px) + 0.15) / float(pc.camWidth);
+        const float v0 = (float(py) + 0.15) / float(pc.camHeight);
+        const float u1 = (float(px) + padX) / float(pc.camWidth);
+        const float v1 = (float(py) + padY) / float(pc.camHeight);
                 minObjU = min(minObjU, u0);
                 maxObjU = max(maxObjU, u1);
                 minObjV = min(minObjV, v0);

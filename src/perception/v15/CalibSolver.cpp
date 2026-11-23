@@ -22,24 +22,37 @@ Vec3 tileEdgeNormalCam(const CameraIntrinsics& intr, const std::array<float, 4>&
 // Greedy bottom-up linking of near-vertical tiles into straight chains; one plane per chain.
 void appendChainPlanes(const std::vector<Node>& nodesIn, const CameraIntrinsics& intr, const Mat4& rVehCam,
                        const Vec3& uPrior, int camH, std::vector<Vec4>& out) {
-    std::vector<Node> nodes = nodesIn;
-    std::sort(nodes.begin(), nodes.end(), [](const Node& a, const Node& b) { return a.cy < b.cy; });
-    const float maxStepY = (camH >= 400) ? 26.0f : 14.0f, minSpanY = 0.11f * static_cast<float>(camH);
-    const float maxOrthPx = (camH >= 400) ? 1.25f : 0.75f;
-    std::vector<uint8_t> used(nodes.size(), 0);
-    for (size_t i = 0; i < nodes.size(); ++i) {
-        if (used[i]) continue;
-        std::vector<size_t> ch{i};
-        used[i] = 1;
-        for (;;) {
-            const Node& tail = nodes[ch.back()];
-            size_t bestJ = nodes.size();
-            float bestDx = 1e9f;
-            for (size_t j = ch.back() + 1; j < nodes.size(); ++j) {
-                const float dy = nodes[j].cy - tail.cy, dx = std::abs(nodes[j].cx - tail.cx);
-                if (used[j] || tail.gx * nodes[j].gx <= 0.0f || dy < 3.0f || dy > maxStepY) continue;
-                if (dx <= 0.14f * dy + 1.5f && dx < bestDx) { bestDx = dx; bestJ = j; }
-            }
+  constexpr float kRefCalibH = 240.0f;
+  constexpr float kBaseStepY = 14.0f;
+  constexpr float kBaseMinDy = 3.0f;
+  constexpr float kBaseMaxOrthPx = 0.75f;
+  constexpr float kBaseDxPad = 1.5f;
+  const float hScale = std::max(1.0f, static_cast<float>(camH) / kRefCalibH);
+  std::vector<Node> nodes = nodesIn;
+  std::sort(nodes.begin(), nodes.end(),
+    [](const Node& a, const Node& b) { return a.cy < b.cy; });
+  const float maxStepY = kBaseStepY * hScale;
+  const float minDy = kBaseMinDy * hScale;
+  const float minSpanY = 0.11f * static_cast<float>(camH);
+  const float maxOrthPx = kBaseMaxOrthPx * hScale;
+  std::vector<uint8_t> used(nodes.size(), 0);
+  for (size_t i = 0; i < nodes.size(); ++i) {
+    if (used[i]) continue;
+    std::vector<size_t> ch{i};
+    used[i] = 1;
+    for (;;) {
+      const Node& tail = nodes[ch.back()];
+      size_t bestJ = nodes.size();
+      float bestDx = 1e9f;
+      for (size_t j = ch.back() + 1; j < nodes.size(); ++j) {
+        const float dy = nodes[j].cy - tail.cy;
+        const float dx = std::abs(nodes[j].cx - tail.cx);
+        if (used[j] || tail.gx * nodes[j].gx <= 0.0f ||
+            dy < minDy || dy > maxStepY) continue;
+        if (dx <= 0.14f * dy + kBaseDxPad * hScale && dx < bestDx) {
+          bestDx = dx; bestJ = j;
+        }
+      }
             if (bestJ == nodes.size()) break;
             used[bestJ] = 1;
             ch.push_back(bestJ);

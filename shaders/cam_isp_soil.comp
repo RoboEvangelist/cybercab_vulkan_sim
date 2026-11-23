@@ -51,11 +51,13 @@ void main() {
     rgb *= 1.0 - 0.11 * dot(nrm, nrm);
 
     if (pc.soiled != 0u) {
-        const vec2 duv = vec2(2.5) / wh;
+        const float kSoilRefW = 320.0;
+        const float kSoilRefH = 240.0;
+        const vec2 duv = vec2(2.5 / kSoilRefW, 2.5 / kSoilRefH);
         const vec3 blurRgb = 0.25 * (sampleRaw(uvPin + vec2(-duv.x, -duv.y)) + sampleRaw(uvPin + vec2(duv.x, -duv.y)) +
                                      sampleRaw(uvPin + vec2(-duv.x,  duv.y)) + sampleRaw(uvPin + vec2(duv.x,  duv.y)));
-        const float fx = float(x);
-        const float fy = float(y);
+        const float fx = (float(x) / float(pc.width)) * kSoilRefW;
+        const float fy = (float(y) / float(pc.height)) * kSoilRefH;
         const float ci = float(pc.camIndex);
         const float blob = sin(fx * 0.045 + ci) * cos(fy * 0.055 - ci) + sin((fx + fy) * 0.025);
         if (blob > -0.22) {

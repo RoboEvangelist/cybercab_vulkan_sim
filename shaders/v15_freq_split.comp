@@ -47,9 +47,12 @@ void main() {
     if (x >= int(pc.width) || y >= int(pc.height) || cam >= pc.numCams) return;
     const uint idx = pixIndex(cam, x, y);
 
+    const int kMaxHalfTaps = 12;
+    const int tapStep = max(1, pc.radius / kMaxHalfTaps);
+    const int rLim = (pc.radius / tapStep) * tapStep;
     float acc = 0.0, wsum = 0.0;
     if (pc.pass == 0u) {
-        for (int k = -pc.radius; k <= pc.radius; ++k) {
+        for (int k = -rLim; k <= rLim; k += tapStep) {
             const float w = gaussW(k);
             acc += w * logLumAt(cam, x + k, y);
             wsum += w;
@@ -58,7 +61,7 @@ void main() {
         return;
     }
 
-    for (int k = -pc.radius; k <= pc.radius; ++k) {
+    for (int k = -rLim; k <= rLim; k += tapStep) {
         const float w = gaussW(k);
         acc += w * uTmp.v[pixIndex(cam, x, y + k)].y;
         wsum += w;

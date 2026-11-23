@@ -1,4 +1,6 @@
 #include "perception/v15/CameraSelfCalib.hpp"
+#include <algorithm>
+#include <cmath>
 
 namespace cybercab::v15 {
 namespace {
@@ -29,7 +31,11 @@ void CameraSelfCalib::rebind(const VulkanBuffer& bandsSSBO, int camW, int camH) 
     if (!ctx_) return;
     w_ = camW;
     h_ = camH;
-    tilePx_ = (camW >= 600) ? 16u : 8u;
+  constexpr uint32_t kBaseTilePx = 8u;
+  constexpr float kRefCalibW = 320.0f;
+  const float wScale = static_cast<float>(camW) / kRefCalibW;
+  tilePx_ = kBaseTilePx *
+    std::max(1u, static_cast<uint32_t>(std::lround(wScale)));
     tilesX_ = (static_cast<uint32_t>(camW) + tilePx_ - 1) / tilePx_;
     tilesY_ = (static_cast<uint32_t>(camH) + tilePx_ - 1) / tilePx_;
     const size_t nTiles = static_cast<size_t>(numCams_) * tilesX_ * tilesY_;
