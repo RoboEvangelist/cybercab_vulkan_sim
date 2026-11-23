@@ -30,9 +30,10 @@ float AutoregressivePolicy::computeTruckShyOffset(float baseLaneLat, const EgoSt
         if (tr.semantic != SemanticClass::Vehicle || tr.halfExtents.z < 3.2f) continue;
         const float dx = tr.worldPos.x - ego.pos.x, dz = tr.worldPos.z - ego.pos.z;
         const float sFwd = sE * dx + cE * dz, dLeft = cE * dx - sE * dz;
-        const float latDiff = std::abs(dLeft - ego.currentLateralOffset);
-        if (sFwd > -6.0f && sFwd < 26.0f && latDiff > 1.8f && latDiff < 5.5f) {
-            const float shySign = (dLeft > baseLaneLat) ? -1.0f : 1.0f;
+        const float truckRoadLat = ego.currentLateralOffset + dLeft;
+        const float absLat = std::abs(truckRoadLat - baseLaneLat);
+        if (sFwd > -6.0f && sFwd < 26.0f && absLat > 1.8f && absLat < 5.5f) {
+            const float shySign = (truckRoadLat > baseLaneLat) ? -1.0f : 1.0f;
             const float w = clampf(1.0f - std::max(0.0f, sFwd - 8.0f) / 18.0f, 0.25f, 1.0f);
             target = laneSign * AutoregConfig::kLaneCenterAbsM + shySign * (AutoregConfig::kMaxTruckShyM * w);
             break;

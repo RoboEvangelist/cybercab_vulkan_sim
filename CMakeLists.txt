@@ -158,6 +158,7 @@ add_executable(cybercab_tests
     tests/test_v15_static_memory.cpp
     tests/test_v15_gaussian_world.cpp
     tests/test_v15_latent_predictor.cpp
+    tests/test_v15_autoreg_planner.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
 target_link_libraries(cybercab_tests PRIVATE
