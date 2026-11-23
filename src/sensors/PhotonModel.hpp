@@ -47,8 +47,25 @@ inline NoiseParams noiseParamsFromPhysical(float fullWellElectrons, float readNo
     return {1.0f / gain, (readNoiseElectrons / gain) * (readNoiseElectrons / gain)};
 }
 
+inline constexpr float kRccbLumaR = 0.299f;
+inline constexpr float kRccbLumaG = 0.587f;
+inline constexpr float kRccbLumaB = 0.114f;
+inline constexpr float kRccbClearGain = 1.65f;
+inline constexpr float kRccbLumaEps = 1e-4f;
+
 inline float noiseVarianceDn(float meanDn, const NoiseParams& p) {
     return p.a * std::max(meanDn, 0.0f) + p.b;
+}
+
+inline float rccbClearRadiance(float r, float g, float b) {
+  return kRccbClearGain * (kRccbLumaR * r + kRccbLumaG * g + kRccbLumaB * b);
+}
+
+inline float rccbEffectiveNoiseVarianceDn(float meanLumaDn,
+                                          const NoiseParams& p) {
+  const float clearMeanDn = std::max(meanLumaDn, 0.0f) * kRccbClearGain;
+  const float rawVar = p.a * clearMeanDn + p.b;
+  return rawVar / (kRccbClearGain * kRccbClearGain);
 }
 
 } // namespace cybercab::photon

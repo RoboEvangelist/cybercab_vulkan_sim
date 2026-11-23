@@ -28,6 +28,10 @@ layout(push_constant) uniform IspPC {
     float noiseB;     // read-noise floor b [DN^2]
     uint noiseSeed;   // config seed XOR per-frame time bits
     uint noiseEnable; // 0 = noiseless ADC (identical to M1a)
+  uint rccbEnable;  // 1 = Clear-guided RCCB low-noise shadow reconstruction
+  uint pad0;
+  uint pad1;
+  uint pad2;
 } pc;
 
 vec3 sampleRaw(vec2 uv) { return texture(uRawCam, clamp(uv, vec2(0.001), vec2(0.999))).rgb; }
@@ -69,9 +73,14 @@ void main() {
     imageStore(uOutDistorted, ivec2(x, y), vec4(display, 1.0));
     uCamTensor.pixels[pixIdx] = vec4(display, 1.0);
     if (pc.linearOut != 0u) {
-        const vec3 code = (pc.noiseEnable != 0u)
-            ? photonNoisyNorm(rgb, pc.fullWell, pc.noiseA, pc.noiseB, uvec3(x, y, pc.camIndex) ^ uvec3(pc.noiseSeed))
-            : photonLinearNorm(rgb, pc.fullWell);
-        uCamLinear.pixels[pixIdx] = vec4(code, 1.0);
+      const uvec3 noiseKey = uvec3(x, y, pc.camIndex) ^ uvec3(pc.noiseSeed);
+      const vec3 code = (pc.rccbEnable != 0u)
+        ? photonRccbGuidedNorm(rgb, pc.fullWell, pc.noiseA, pc.noiseB,
+                               noiseKey, pc.noiseEnable != 0u)
+        : ((pc.noiseEnable != 0u)
+             ? photonNoisyNorm(rgb, pc.fullWell, pc.noiseA, pc.noiseB,
+                               noiseKey)
+             : photonLinearNorm(rgb, pc.fullWell));
+      uCamLinear.pixels[pixIdx] = vec4(code, 1.0);
     }
 }

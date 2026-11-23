@@ -21,7 +21,10 @@ void main() {
     const float ndotl = max(dot(N, L), 0.0);
     const float hemi = 0.5 + 0.5 * N.y;
     const float ambient = pc.sunDirAmbient.w * (0.6 + 0.4 * hemi);
-    vec3 lit = inColor.rgb * (ambient + ndotl * 0.85) + inColor.rgb * inEmissive;
+  const float diffGain = (pc.hdrParams.y > 0.0) ? pc.hdrParams.y : 0.85;
+  const float emisGain = (pc.hdrParams.z > 0.0) ? pc.hdrParams.z : 1.0;
+  vec3 lit = inColor.rgb * (ambient + ndotl * diffGain) +
+             inColor.rgb * (inEmissive * emisGain);
 
     // Soft metallic clearcoat & tinted canopy glass shading on Cybercab ego mesh (SemId == 1.25)
     if (abs(inSemId - 1.25) < 0.08 && inEmissive < 0.1) {

@@ -31,8 +31,28 @@ struct alignas(16) IspPushConstants {
     float noiseB;
     uint32_t noiseSeed;
     uint32_t noiseEnable;
+  uint32_t rccbEnable;
+  uint32_t pad0;
+  uint32_t pad1;
+  uint32_t pad2;
 };
-static_assert(sizeof(IspPushConstants) == 80, "IspPushConstants must match cam_isp_soil.comp layout");
+static_assert(sizeof(IspPushConstants) == 96,
+              "IspPushConstants must match cam_isp_soil.comp layout");
+
+constexpr float kDaySkyR = 0.545f;
+constexpr float kDaySkyG = 0.722f;
+constexpr float kDaySkyB = 0.910f;
+constexpr float kDayAmbient = 0.48f;
+constexpr float kDayFogDens = 0.003f;
+constexpr float kDayDefaultDiffGain = 0.0f;
+constexpr float kDayDefaultEmisGain = 0.0f;
+constexpr float kNightSkyR = 0.015f;
+constexpr float kNightSkyG = 0.022f;
+constexpr float kNightSkyB = 0.048f;
+constexpr float kNightAmbient = 0.055f;
+constexpr float kNightDiffGain = 0.14f;
+constexpr float kNightEmisGain = 5.50f;
+constexpr float kNightFogDens = 0.006f;
 
 } // namespace
 
@@ -422,8 +442,17 @@ void CameraRigRenderer::renderAllCameras(const WorldEngine& world, const SimConf
         camMats_[c] = {worldFromCam, camFromWorld, projNominal, projNominal * camFromWorld,
                        intr, spec.distortion, renderScale};
 
+        const bool night = cfg.isNightGlare();
+        const float skyR = night ? kNightSkyR : kDaySkyR;
+        const float skyG = night ? kNightSkyG : kDaySkyG;
+        const float skyB = night ? kNightSkyB : kDaySkyB;
+        const float amb = night ? kNightAmbient : kDayAmbient;
+        const float fogD = night ? kNightFogDens : kDayFogDens;
+        const float diffG = night ? kNightDiffGain : kDayDefaultDiffGain;
+        const float emisG = night ? kNightEmisGain : kDayDefaultEmisGain;
+
         VkClearValue clears[2]{};
-        clears[0].color = {{0.545f, 0.722f, 0.910f, 1.0f}}; // SKY_DAY_COLOR
+        clears[0].color = {{skyR, skyG, skyB, 1.0f}};
         clears[1].depthStencil = {1.0f, 0};
 
         VkRenderPassBeginInfo rpbi{};
@@ -441,9 +470,10 @@ void CameraRigRenderer::renderAllCameras(const WorldEngine& world, const SimConf
 
         ScenePushConstants pc{};
         pc.viewProj = projRender * camFromWorld;
-        pc.sunDirIntensity = Vec4{Vec3{65.0f, 95.0f, 45.0f}.normalized(), 0.48f};
-        pc.fogColorDensity = Vec4{0.545f, 0.722f, 0.910f, 0.003f};
-        pc.hdrParams = Vec4{hdr_ ? photon::kFullWellRadiance : 1.0f, 0.0f, 0.0f, 0.0f};
+        pc.sunDirIntensity = Vec4{Vec3{65.0f, 95.0f, 45.0f}.normalized(), amb};
+        pc.fogColorDensity = Vec4{skyR, skyG, skyB, fogD};
+        pc.hdrParams =
+          Vec4{hdr_ ? photon::kFullWellRadiance : 1.0f, diffG, emisG, 0.0f};
         vkCmdPushConstants(cmd, gfxLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 
         VkDeviceSize off = 0;
@@ -494,7 +524,11 @@ void CameraRigRenderer::renderAllCameras(const WorldEngine& world, const SimConf
             cfg.photonShotNoiseA,
             cfg.photonReadNoiseB,
             cfg.photonNoiseSeed ^ frameNoiseKey,
-            (hdr_ && cfg.photonNoiseEnabled) ? 1u : 0u
+            (hdr_ && cfg.photonNoiseEnabled) ? 1u : 0u,
+            (hdr_ && cfg.photonRccbMosaic) ? 1u : 0u,
+            0u,
+            0u,
+            0u
         };
         ispPipeline_.bindAndDispatch(cmd, ispSets_[c], gx, gy, 1, &ipc, sizeof(ipc));
     }
