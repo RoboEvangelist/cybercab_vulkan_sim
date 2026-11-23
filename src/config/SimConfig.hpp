@@ -105,6 +105,7 @@ struct SimConfig {
     bool isV15() const { return pipelineVersion == "v15"; }
   std::string lightingMode = "day";
   bool isNightGlare() const { return lightingMode == "night_glare"; }
+  Vec3 cameraKnockRpyDeg{0.0f, 0.0f, 0.0f};
     std::string v15PolicyPath = "config/v15_policy.yaml";
     V15PolicyConfig v15Policy{};
 

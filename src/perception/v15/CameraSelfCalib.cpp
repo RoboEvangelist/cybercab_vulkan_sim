@@ -5,6 +5,9 @@ namespace {
 constexpr float kMinGradPx = 0.06f;     // per-pixel |grad log Y| floor inside the shader
 constexpr float kMinTileMag = 0.35f;    // tile filter before readback-side processing
 constexpr float kMinTileCoher = 0.75f;
+constexpr size_t kMaxFrameEqReserve = 512u;
+constexpr size_t kRingFrameCap =
+  static_cast<size_t>(CameraSelfCalib::kWindowFrames) + 2u;
 } // namespace
 
 CameraSelfCalib::~CameraSelfCalib() { destroy(); }
@@ -35,6 +38,9 @@ void CameraSelfCalib::rebind(const VulkanBuffer& bandsSSBO, int camW, int camH) 
                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     tilesScratch_.resize(nTiles);
     obsScratch_.reserve(nTiles);
+  frameEqScratch_.reserve(kMaxFrameEqReserve);
+  eqRing_.reserve(kMaxFrameEqReserve * kRingFrameCap);
+  eqFrameCounts_.reserve(kRingFrameCap);
 
     const VkDescriptorBufferInfo inInfo = bandsSSBO.descriptorInfo();
     const VkDescriptorBufferInfo outInfo = tilesSSBO_.descriptorInfo();

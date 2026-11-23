@@ -78,6 +78,8 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
         cfg.useVulkanValidation = readOr(sim, "use_vulkan_validation", cfg.useVulkanValidation);
         cfg.pipelineVersion = readOr(sim, "pipeline_version", cfg.pipelineVersion);
     cfg.lightingMode = readOr(sim, "lighting_mode", cfg.lightingMode);
+    cfg.cameraKnockRpyDeg =
+      readVec3Or(sim, "camera_knock_rpy_deg", cfg.cameraKnockRpyDeg);
         cfg.v15PolicyPath = readOr(sim, "v15_policy_config", cfg.v15PolicyPath);
     }
 

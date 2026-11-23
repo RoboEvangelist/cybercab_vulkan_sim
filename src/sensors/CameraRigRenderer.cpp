@@ -430,7 +430,19 @@ void CameraRigRenderer::renderAllCameras(const WorldEngine& world, const SimConf
         // Overscan wide/barrel cameras so Brown-Conrady distortion pulls outer scene into edges cleanly
         float renderScale = spec.renderOverscan();
 
-        Mat4 worldFromCam = worldFromSprung * spec.extrinsicVehicleLocalFromCam();
+        constexpr float kKnockEpsDeg = 1e-6f;
+        const bool hasKnock =
+          std::abs(cfg.cameraKnockRpyDeg.x) > kKnockEpsDeg ||
+          std::abs(cfg.cameraKnockRpyDeg.y) > kKnockEpsDeg ||
+          std::abs(cfg.cameraKnockRpyDeg.z) > kKnockEpsDeg;
+        const Mat4 knockRot = hasKnock
+          ? (Mat4::rotY(degToRad(cfg.cameraKnockRpyDeg.z)) *
+             Mat4::rotX(degToRad(cfg.cameraKnockRpyDeg.y)) *
+             Mat4::rotZ(degToRad(cfg.cameraKnockRpyDeg.x)))
+          : Mat4{};
+        Mat4 worldFromCam = hasKnock
+          ? (worldFromSprung * knockRot * spec.extrinsicVehicleLocalFromCam())
+          : (worldFromSprung * spec.extrinsicVehicleLocalFromCam());
         Mat4 camFromWorld = worldFromCam.inverseRigid();
         Mat4 projRender = Mat4::vulkanPerspectiveCV(
             intr.fx / renderScale, intr.fy / renderScale, intr.cx, intr.cy,
