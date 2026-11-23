@@ -10,8 +10,10 @@
 #include "perception/PerceptionTypes.hpp"
 #include "perception/SoilDetector.hpp"
 #include "perception/WorldModel.hpp"
+#include "perception/v15/V15Pipeline.hpp"
 #include "sensors/CameraRigRenderer.hpp"
 #include "world/WorldEngine.hpp"
+#include <memory>
 #include <vector>
 
 namespace cybercab {
@@ -47,6 +49,7 @@ public:
     const BEVFormer& bevFormer() const { return bev_; }
     const OccupancyFlowNet& occupancyFlow() const { return occ_; }
     const WorldModel& worldModel() const { return wm_; }
+    const v15::V15Pipeline* v15() const { return v15_.get(); }
 
 private:
     const SimConfig& cfg_;
@@ -56,6 +59,7 @@ private:
     BEVFormer bev_;
     OccupancyFlowNet occ_;
     WorldModel wm_;
+    std::unique_ptr<v15::V15Pipeline> v15_;
 
     // Pre-allocated hot-path scratch buffers
     std::vector<TrackPriorGpu> trackPriorsScratch_;

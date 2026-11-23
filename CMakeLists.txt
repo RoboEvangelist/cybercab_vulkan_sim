@@ -96,6 +96,7 @@ add_library(cybercab_perception SHARED
     src/perception/WorldModel.cpp
     src/perception/PerceptionPipeline.cpp
     src/perception/v15/FrequencySplit.cpp
+    src/perception/v15/V15Pipeline.cpp
 )
 add_dependencies(cybercab_perception compile_shaders)
 target_link_libraries(cybercab_perception PUBLIC cybercab_world)

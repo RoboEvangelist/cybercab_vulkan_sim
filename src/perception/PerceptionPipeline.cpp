@@ -17,11 +17,16 @@ void PerceptionPipeline::init(const VulkanContext& ctx, const CameraRigRenderer&
     bev_.init(ctx, cfg_, detr_.encMemorySSBO(), soil_.patchSSBO());
     occ_.init(ctx, cfg_, bev_.currBevFeatSSBO(), bev_.currBevMetaSSBO(), bev_.pillarHeightSSBO());
     wm_.init(ctx, cfg_, occ_.trackPriorsSSBO());
+    if (cfg_.isV15() && rig.linearHdrEnabled()) {
+        v15_ = std::make_unique<v15::V15Pipeline>();
+        v15_->init(ctx, cfg_, rig);
+    }
 }
 
 void PerceptionPipeline::onCameraResized(const CameraRigRenderer& rig) {
     soil_.updateCameraTensorBinding(rig.cameraTensorSSBO());
     detr_.updateCameraTensorBinding(rig.cameraTensorSSBO(), rig.camWidth(), rig.camHeight());
+    if (v15_) v15_->onCameraResized(rig);
 }
 
 void PerceptionPipeline::reset() {
@@ -29,9 +34,14 @@ void PerceptionPipeline::reset() {
     detr_.resetHistory();
     bev_.resetHistory();
     occ_.resetVoxels();
+    if (v15_) v15_->reset();
 }
 
 void PerceptionPipeline::destroy() {
+    if (v15_) {
+        v15_->destroy();
+        v15_.reset();
+    }
     wm_.destroy();
     occ_.destroy();
     bev_.destroy();
@@ -49,9 +59,12 @@ void PerceptionPipeline::runFrame(const VulkanContext& ctx,
     const EgoState& ego = world.ego();
     detr_.updateHorizonFromRig(rig);
 
-    // GPU Batch 1: SoilDetector -> Backbone + FPN -> RT-DETR Encoder & Decoder
+    // GPU Batch 1: v15 M1 FrequencySplit (when enabled) -> SoilDetector -> Backbone + FPN -> RT-DETR
     {
         VkCommandBuffer cmd = ctx.beginSingleTimeCommands();
+        if (v15_) {
+            v15_->recordFrontEnd(cmd, profiler);
+        }
         if (profiler) profiler->beginStage(cmd, "2_soil_detect", VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
         soil_.recordDispatch(cmd, cfg_, rig.camWidth(), rig.camHeight());
         if (profiler) {
