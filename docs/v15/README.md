@@ -36,12 +36,14 @@ reasoning with a certificate the author cannot fill in by guessing. Here the cer
 | 12 | Configurable policy (`v15_policy.yaml`), OBB/blind-spot safety, `CybercabMesh` | [step12_v15_safety_config_and_cybercab_mesh.md](step12_v15_safety_config_and_cybercab_mesh.md) | `035441d`..`124a88a` |
 | 13 | Box-free 4D Gaussian occupancy & comfort multi-rollout planner | [step13_gaussian_occupancy_and_comfort_planner.md](step13_gaussian_occupancy_and_comfort_planner.md) | `47dea4f`..`6bea1fb` |
 | 14 | Live Reality View HUD, `VulkanViewer` PIP & `v15.*` `TraceLogger` telemetry | [step14_reality_view_hud_and_v15_trace.md](step14_reality_view_hud_and_v15_trace.md) | `6f4e845`..`0eb32bb` |
+| 15 | Dynamic-range `day` / `night_glare` lighting, RCCB mosaic & HDR closed-loop | [step15_hdr_lighting_rccb_and_glare_test.md](step15_hdr_lighting_rccb_and_glare_test.md) | `d96829b`..`c92759a` |
+| 16 | Post-v15 SOTA declaration-only headers (`GaussianSurfel2DWorld`, `TruncatedDiffusionPolicy`) | — (syntax-checked declarations, no tests per user request) | Step 16 |
 
 ## Open UNVERIFIED items
 - ~~step02 R2~~ **CLOSED in Step 11**: closed-loop `v15` perception validated (`recall=0.5811`, `precision=0.8077`, 0 collisions, `4.88 ms` half-res / `7.38 ms` full-res).
 - step06a R1: rendered-world self-calibration accuracy is 0.31° (half-res) / 0.11° (full-res), acceptable within `< 0.35°` margin.
 
 ## Regression gate (every step)
-- `ctest --test-dir build` must show **100%** pass (`148/148`).
-- The 96 pre-v15 tests are the v14 equivalence oracle (`pipeline_version: v14`); 52 v15 tests cover Modules 1–7, policy config bounds, CybercabMesh, 4D Gaussian planner, Reality HUD/telemetry, and end-to-end closed-loop driving.
+- `ctest --test-dir build` must show **100%** pass (`151/151`).
+- The 96 pre-v15 tests are the v14 equivalence oracle (`pipeline_version: v14`); 55 v15 tests cover Modules 1–7, policy config bounds, CybercabMesh, 4D Gaussian planner, Reality HUD/telemetry, HDR night-glare/RCCB, and end-to-end closed-loop driving.
 - New files are kept to **350 lines or fewer**.
