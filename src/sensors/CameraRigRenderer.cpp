@@ -560,25 +560,25 @@ void CameraRigRenderer::dumpEgoShowcaseBMP(const WorldEngine& world, const std::
     const Vec3 carCenter = ego.pos + fwd * 1.25f + Vec3{0.0f, 0.72f, 0.0f};
 
     // View 0: Pure side profile matching Cybercab studio side shot (car faces +X right)
-    // View 1: Elevated 3/4 rear chase perspective matching 3D Twin viewport
-    const Vec3 eyes[2] = {
-        carCenter + right * 4.9f + Vec3{0.0f, 0.08f, 0.0f},
+    // View 1: Elevated front 3/4 view showing windshield, DRL lightbar, splitter & amber markers
+    // View 2: Elevated 3/4 rear chase perspective matching 3D Twin viewport
+    const Vec3 eyes[3] = {
+        carCenter + right * 4.9f + Vec3{0.0f, 0.06f, 0.0f},
+        carCenter + fwd * 4.6f + right * 3.0f + Vec3{0.0f, 1.45f, 0.0f},
         carCenter - fwd * 4.8f - right * 3.1f + Vec3{0.0f, 1.85f, 0.0f}
     };
 
-    const float aspect = static_cast<float>(camWidth_) / static_cast<float>(camHeight_);
     const float fy = static_cast<float>(camHeight_) / (2.0f * std::tan(degToRad(46.0f) * 0.5f));
     const float fx = fy;
     const Mat4 proj = Mat4::vulkanPerspectiveCV(
         fx, fy, static_cast<float>(camWidth_) * 0.5f, static_cast<float>(camHeight_) * 0.5f,
         static_cast<float>(camWidth_), static_cast<float>(camHeight_), 0.25f, 200.0f);
-    (void)aspect;
 
     VkCommandBuffer cmd = ctx_->beginSingleTimeCommands();
     VkViewport vp{0.0f, 0.0f, static_cast<float>(camWidth_), static_cast<float>(camHeight_), 0.0f, 1.0f};
     VkRect2D sc{{0, 0}, {static_cast<uint32_t>(camWidth_), static_cast<uint32_t>(camHeight_)}};
 
-    for (int vIdx = 0; vIdx < 2; ++vIdx) {
+    for (int vIdx = 0; vIdx < 3; ++vIdx) {
         VkClearValue clears[2]{};
         clears[0].color = {{0.545f, 0.722f, 0.910f, 1.0f}};
         clears[1].depthStencil = {1.0f, 0};
@@ -619,9 +619,12 @@ void CameraRigRenderer::dumpEgoShowcaseBMP(const WorldEngine& world, const std::
     }
     ctx_->endSingleTimeCommands(cmd);
 
-    const auto img0 = rawColorImages_[0].downloadRGBA8();
-    const auto img1 = rawColorImages_[1].downloadRGBA8();
-    const int outW = camWidth_ * 2;
+    const std::array<std::vector<uint8_t>, 3> imgs = {
+        rawColorImages_[0].downloadRGBA8(),
+        rawColorImages_[1].downloadRGBA8(),
+        rawColorImages_[2].downloadRGBA8()
+    };
+    const int outW = camWidth_ * 3;
     const int outH = camHeight_;
     const int rowStride = ((outW * 3 + 3) / 4) * 4;
     std::vector<uint8_t> bmp(static_cast<size_t>(54 + rowStride * outH), 0);
@@ -643,8 +646,8 @@ void CameraRigRenderer::dumpEgoShowcaseBMP(const WorldEngine& world, const std::
 
     for (int y = 0; y < outH; ++y) {
         const int dstY = outH - 1 - y; // BMP bottom-up rows
-        for (int side = 0; side < 2; ++side) {
-            const auto& src = (side == 0) ? img0 : img1;
+        for (int side = 0; side < 3; ++side) {
+            const auto& src = imgs[static_cast<size_t>(side)];
             for (int x = 0; x < camWidth_; ++x) {
                 const size_t si = (static_cast<size_t>(y) * camWidth_ + x) * 4;
                 const size_t di = static_cast<size_t>(54 + dstY * rowStride + (side * camWidth_ + x) * 3);
