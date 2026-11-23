@@ -149,6 +149,12 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
                 }
             }
         }
+        if (const auto ps = perc["photon_sensor"]) {
+            cfg.photonNoiseEnabled = readOr(ps, "enable_noise", cfg.photonNoiseEnabled);
+            cfg.photonShotNoiseA = readOr(ps, "shot_noise_a_dn", cfg.photonShotNoiseA);
+            cfg.photonReadNoiseB = readOr(ps, "read_noise_b_dn2", cfg.photonReadNoiseB);
+            cfg.photonNoiseSeed = readOr(ps, "seed", cfg.photonNoiseSeed);
+        }
     }
 
     if (const auto pl = root["planning"]) {
@@ -210,6 +216,9 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
     if (cfg.pipelineVersion != "v14" && cfg.pipelineVersion != "v15") {
         throw std::runtime_error("simulation.pipeline_version must be \"v14\" or \"v15\", got \"" +
                                  cfg.pipelineVersion + "\"");
+    }
+    if (!(cfg.photonShotNoiseA >= 0.0f) || !(cfg.photonReadNoiseB >= 0.0f)) {
+        throw std::runtime_error("perception.photon_sensor noise parameters must be >= 0");
     }
 
     return cfg;

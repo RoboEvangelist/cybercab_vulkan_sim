@@ -71,6 +71,11 @@ perception:
   world_model:
     horizons_sec: [0.5, 1.0, 1.5, 2.0]
     uncertainty_growth_rate: 0.90
+  photon_sensor:                 # v15 only: Poisson-Gaussian sensor noise on the 14-bit linear tensor
+    enable_noise: true
+    shot_noise_a_dn: 0.4096      # 1 / gain; gain = 40000 e- full well / 16383 DN
+    read_noise_b_dn2: 1.51       # (3 e- read noise / gain)^2
+    seed: 1234
 
 planning:
   target_cruise_speed_ms: 10.5

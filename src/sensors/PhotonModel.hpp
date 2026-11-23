@@ -35,4 +35,20 @@ inline float gamma8CodeToRadiance(uint32_t code, float fullScale) {
     return std::pow(static_cast<float>(code) / 255.0f, 2.2f) * fullScale;
 }
 
+// Poisson-Gaussian sensor noise (Foi et al. 2008, "Practical Poissonian-Gaussian noise modeling"):
+//   var_DN(mu) = a * mu + b,  a = 1/gain [DN],  b = (read_noise_e / gain)^2 [DN^2]
+struct NoiseParams {
+    float a = 0.0f;
+    float b = 0.0f;
+};
+
+inline NoiseParams noiseParamsFromPhysical(float fullWellElectrons, float readNoiseElectrons) {
+    const float gain = fullWellElectrons / kAdcMaxCode; // e- per DN
+    return {1.0f / gain, (readNoiseElectrons / gain) * (readNoiseElectrons / gain)};
+}
+
+inline float noiseVarianceDn(float meanDn, const NoiseParams& p) {
+    return p.a * std::max(meanDn, 0.0f) + p.b;
+}
+
 } // namespace cybercab::photon

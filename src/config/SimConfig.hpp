@@ -165,6 +165,12 @@ struct SimConfig {
     std::vector<float> wmHorizonsSec{0.5f, 1.0f, 1.5f, 2.0f};
     float wmUncertaintyGrowthRate = 0.90f;
 
+    // v15 Module 1 photon sensor (Poisson-Gaussian noise: var_DN = a * mean_DN + b), used only when isV15()
+    bool photonNoiseEnabled = true;
+    float photonShotNoiseA = 0.4096f; // DN per DN (= 1 / gain[e-/DN]); 40000 e- full well over 14-bit ADC
+    float photonReadNoiseB = 1.51f;   // DN^2 (= (read_noise_e / gain)^2); 3 e- read noise
+    uint32_t photonNoiseSeed = 1234u;
+
     // Planning & RSS
     float targetCruiseSpeedMs = 10.5f;
     int numPlannerCandidates = 9;

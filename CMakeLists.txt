@@ -134,6 +134,7 @@ add_executable(cybercab_tests
     tests/test_world_model_and_latency.cpp
     tests/test_v15_config.cpp
     tests/test_v15_photon_frontend.cpp
+    tests/test_v15_photon_noise.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
 target_link_libraries(cybercab_tests PRIVATE

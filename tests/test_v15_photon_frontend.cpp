@@ -84,6 +84,7 @@ TEST(V15PhotonGpuTest, V14ModeLeavesPhotonTensorUnallocatedAndRawClipped) {
 TEST(V15PhotonGpuTest, LinearTensorTracksDisplayAndKeepsHighlightHeadroom) {
     SimConfig cfg = SimConfig::loadFromYaml(resolveAssetPath("config/cybercab_sim.yaml"));
     cfg.pipelineVersion = "v15";
+    cfg.photonNoiseEnabled = false; // M1a scope: noiseless 14-bit ADC (noise is validated in test_v15_photon_noise)
     VulkanContext ctx;
     ctx.init(false, nullptr);
     WorldEngine world(cfg);

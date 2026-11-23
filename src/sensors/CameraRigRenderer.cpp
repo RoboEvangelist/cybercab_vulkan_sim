@@ -27,8 +27,12 @@ struct alignas(16) IspPushConstants {
     float timeSec;
     uint32_t linearOut;
     float fullWell;
+    float noiseA;
+    float noiseB;
+    uint32_t noiseSeed;
+    uint32_t noiseEnable;
 };
-static_assert(sizeof(IspPushConstants) == 64, "IspPushConstants must match cam_isp_soil.comp layout");
+static_assert(sizeof(IspPushConstants) == 80, "IspPushConstants must match cam_isp_soil.comp layout");
 
 } // namespace
 
@@ -465,6 +469,10 @@ void CameraRigRenderer::renderAllCameras(const WorldEngine& world, const SimConf
 
     uint32_t gx = (camWidth_ + 15) / 16;
     uint32_t gy = (camHeight_ + 15) / 16;
+    // Per-frame noise key: deterministic in (seed, timeSec) so runs are reproducible.
+    uint32_t frameNoiseKey = 0;
+    std::memcpy(&frameNoiseKey, &timeSec, sizeof(frameNoiseKey));
+    frameNoiseKey *= 2654435761u;
     for (int c = 0; c < kNumCams; ++c) {
         VulkanImage::cmdTransitionLayout(cmd, distortedImages_[c].handle(), VK_IMAGE_ASPECT_COLOR_BIT,
                                          distortedImages_[c].layout(), VK_IMAGE_LAYOUT_GENERAL);
@@ -482,7 +490,11 @@ void CameraRigRenderer::renderAllCameras(const WorldEngine& world, const SimConf
             camMats_[c].renderScale,
             timeSec,
             hdr_ ? 1u : 0u,
-            photon::kFullWellRadiance
+            photon::kFullWellRadiance,
+            cfg.photonShotNoiseA,
+            cfg.photonReadNoiseB,
+            cfg.photonNoiseSeed ^ frameNoiseKey,
+            (hdr_ && cfg.photonNoiseEnabled) ? 1u : 0u
         };
         ispPipeline_.bindAndDispatch(cmd, ispSets_[c], gx, gy, 1, &ipc, sizeof(ipc));
     }
