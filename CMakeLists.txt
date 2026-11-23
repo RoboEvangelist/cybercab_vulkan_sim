@@ -140,6 +140,7 @@ add_executable(cybercab_tests
     tests/test_v15_photon_noise.cpp
     tests/test_v15_freq_split.cpp
     tests/test_v15_pipeline.cpp
+    tests/test_v15_calib_solver.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
 target_link_libraries(cybercab_tests PRIVATE
