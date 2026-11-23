@@ -6,60 +6,101 @@ namespace cybercab {
 using namespace mesh_detail;
 namespace {
 
-void emitAeroWheel(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx, const Mat4& wm, float outerR, float sideSign) {
-    struct RingPt { float rf, xOff, nxSign, nRad; Vec3 col; };
-    const RingPt prof[] = {
-        {1.000f, -0.114f, 0.00f, 1.00f, kTireDark},  {1.000f, 0.114f, 0.00f, 1.00f, kTireDark},
-        {0.925f,  0.125f, 0.65f, 0.76f, kTireDark},  {0.835f, 0.126f, 1.00f, 0.00f, kTireDark},
-        {0.825f,  0.132f, 0.85f, 0.53f, kTrimDark},  {0.810f, 0.134f, 1.00f, 0.00f, kGoldBase},
-        {0.685f,  0.126f, 0.93f,-0.36f, kGoldBright},{0.115f, 0.121f, 0.99f,-0.12f, kGoldBright},
-        {0.055f,  0.115f, 0.92f,-0.38f, kGoldBase},  {0.000f, 0.115f, 1.00f, 0.00f, kGoldDark}
-    };
-    constexpr int kNR = static_cast<int>(sizeof(prof) / sizeof(prof[0]));
-    const float semF = kCybercabSemTag;
-    const float dTheta = (2.0f * kPi) / static_cast<float>(kWheelSegs);
-    for (int p = 0; p + 1 < kNR; ++p) {
-        const auto& a = prof[p]; const auto& b = prof[p + 1];
-        const uint32_t base = static_cast<uint32_t>(verts.size());
-        for (int s = 0; s <= kWheelSegs; ++s) {
-            const float th = static_cast<float>(s) * dTheta, cs = std::cos(th), sn = std::sin(th);
-            const Vec3 p0 = wm.transformPoint({sideSign * a.xOff, cs * (a.rf * outerR), sn * (a.rf * outerR)});
-            const Vec3 p1 = wm.transformPoint({sideSign * b.xOff, cs * (b.rf * outerR), sn * (b.rf * outerR)});
-            const Vec3 n0 = wm.transformVector({sideSign * a.nxSign, cs * a.nRad, sn * a.nRad}).normalized();
-            const Vec3 n1 = wm.transformVector({sideSign * b.nxSign, cs * b.nRad, sn * b.nRad}).normalized();
-            verts.push_back({p0.x, p0.y, p0.z, n0.x, n0.y, n0.z, b.col.x, b.col.y, b.col.z, 1.0f, 0.0f, semF, 0, 0});
-            verts.push_back({p1.x, p1.y, p1.z, n1.x, n1.y, n1.z, b.col.x, b.col.y, b.col.z, 1.0f, 0.0f, semF, 0, 0});
-        }
-        for (int s = 0; s < kWheelSegs; ++s) {
-            const uint32_t i0 = base + static_cast<uint32_t>(s * 2);
-            if (sideSign > 0.0f) { idx.push_back(i0); idx.push_back(i0 + 3); idx.push_back(i0 + 1); idx.push_back(i0); idx.push_back(i0 + 2); idx.push_back(i0 + 3); }
-            else                 { idx.push_back(i0); idx.push_back(i0 + 1); idx.push_back(i0 + 3); idx.push_back(i0); idx.push_back(i0 + 3); idx.push_back(i0 + 2); }
-        }
-    }
-}
-
-void emitWheelWellLiner(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx,
-                        const Mat4& sprungMat, float xCenter, float zCenter, float axleY, float linerR) {
-    constexpr int kArchSegs = 16;
-    const float semF = kCybercabSemTag;
+void emitAeroWheel(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx,
+                   const Mat4& wm, float outerR, float sideSign) {
+  struct RingPt {
+    float rf, xOff, nxSign, nRad;
+    Vec3 col;
+  };
+  const RingPt prof[] = {{1.000f, -0.114f, 0.00f, 1.00f, kTireDark},
+                         {1.000f, 0.114f, 0.00f, 1.00f, kTireDark},
+                         {0.925f, 0.125f, 0.65f, 0.76f, kTireDark},
+                         {0.835f, 0.126f, 1.00f, 0.00f, kTireDark},
+                         {0.825f, 0.132f, 0.85f, 0.53f, kTrimDark},
+                         {0.810f, 0.134f, 1.00f, 0.00f, kGoldBase},
+                         {0.685f, 0.126f, 0.93f, -0.36f, kGoldBright},
+                         {0.115f, 0.121f, 0.99f, -0.12f, kGoldBright},
+                         {0.055f, 0.115f, 0.92f, -0.38f, kGoldBase},
+                         {0.000f, 0.115f, 1.00f, 0.00f, kGoldDark}};
+  constexpr int kNR = static_cast<int>(sizeof(prof) / sizeof(prof[0]));
+  const float semF = kCybercabSemTag;
+  const float dTheta = (2.0f * kPi) / static_cast<float>(kWheelSegs);
+  for (int p = 0; p + 1 < kNR; ++p) {
+    const auto& a = prof[p];
+    const auto& b = prof[p + 1];
     const uint32_t base = static_cast<uint32_t>(verts.size());
-    for (int i = 0; i <= kArchSegs; ++i) {
-        const float a = lerpf(0.0f, kPi, static_cast<float>(i) / static_cast<float>(kArchSegs));
-        const float ly = axleY + std::sin(a) * linerR, lz = zCenter - std::cos(a) * linerR;
-        const Vec3 n = sprungMat.transformVector({0.0f, -std::sin(a), std::cos(a)}).normalized();
-        const Vec3 pIn = sprungMat.transformPoint({xCenter - 0.19f, ly, lz});
-        const Vec3 pOut = sprungMat.transformPoint({xCenter + 0.19f, ly, lz});
-        verts.push_back({pIn.x, pIn.y, pIn.z, n.x, n.y, n.z, kTrimDark.x, kTrimDark.y, kTrimDark.z, 1, 0, semF, 0, 0});
-        verts.push_back({pOut.x, pOut.y, pOut.z, n.x, n.y, n.z, kTrimDark.x, kTrimDark.y, kTrimDark.z, 1, 0, semF, 0, 0});
+    for (int s = 0; s <= kWheelSegs; ++s) {
+      const float th = static_cast<float>(s) * dTheta, cs = std::cos(th),
+                  sn = std::sin(th);
+      const Vec3 p0 = wm.transformPoint(
+        {sideSign * a.xOff, cs * (a.rf * outerR), sn * (a.rf * outerR)});
+      const Vec3 p1 = wm.transformPoint(
+        {sideSign * b.xOff, cs * (b.rf * outerR), sn * (b.rf * outerR)});
+      const Vec3 n0 =
+        wm.transformVector({sideSign * a.nxSign, cs * a.nRad, sn * a.nRad})
+          .normalized();
+      const Vec3 n1 =
+        wm.transformVector({sideSign * b.nxSign, cs * b.nRad, sn * b.nRad})
+          .normalized();
+      verts.push_back({p0.x, p0.y, p0.z, n0.x, n0.y, n0.z, b.col.x, b.col.y,
+                       b.col.z, 1.0f, 0.0f, semF, 0, 0});
+      verts.push_back({p1.x, p1.y, p1.z, n1.x, n1.y, n1.z, b.col.x, b.col.y,
+                       b.col.z, 1.0f, 0.0f, semF, 0, 0});
     }
-    for (int i = 0; i < kArchSegs; ++i) {
-        const uint32_t b = base + static_cast<uint32_t>(i * 2);
-        idx.push_back(b); idx.push_back(b + 3); idx.push_back(b + 2);
-        idx.push_back(b); idx.push_back(b + 1); idx.push_back(b + 3);
+    for (int s = 0; s < kWheelSegs; ++s) {
+      const uint32_t i0 = base + static_cast<uint32_t>(s * 2);
+      if (sideSign > 0.0f) {
+        idx.push_back(i0);
+        idx.push_back(i0 + 3);
+        idx.push_back(i0 + 1);
+        idx.push_back(i0);
+        idx.push_back(i0 + 2);
+        idx.push_back(i0 + 3);
+      } else {
+        idx.push_back(i0);
+        idx.push_back(i0 + 1);
+        idx.push_back(i0 + 3);
+        idx.push_back(i0);
+        idx.push_back(i0 + 3);
+        idx.push_back(i0 + 2);
+      }
     }
+  }
 }
 
-} // namespace
+void emitWheelWellLiner(std::vector<SceneVertex>& verts,
+                        std::vector<uint32_t>& idx, const Mat4& sprungMat,
+                        float xCenter, float zCenter, float axleY,
+                        float linerR) {
+  constexpr int kArchSegs = 16;
+  const float semF = kCybercabSemTag;
+  const uint32_t base = static_cast<uint32_t>(verts.size());
+  for (int i = 0; i <= kArchSegs; ++i) {
+    const float a =
+      lerpf(0.0f, kPi, static_cast<float>(i) / static_cast<float>(kArchSegs));
+    const float ly = axleY + std::sin(a) * linerR,
+                lz = zCenter - std::cos(a) * linerR;
+    const Vec3 n =
+      sprungMat.transformVector({0.0f, -std::sin(a), std::cos(a)}).normalized();
+    const Vec3 pIn = sprungMat.transformPoint({xCenter - 0.19f, ly, lz});
+    const Vec3 pOut = sprungMat.transformPoint({xCenter + 0.19f, ly, lz});
+    verts.push_back({pIn.x, pIn.y, pIn.z, n.x, n.y, n.z, kTrimDark.x,
+                     kTrimDark.y, kTrimDark.z, 1, 0, semF, 0, 0});
+    verts.push_back({pOut.x, pOut.y, pOut.z, n.x, n.y, n.z, kTrimDark.x,
+                     kTrimDark.y, kTrimDark.z, 1, 0, semF, 0, 0});
+  }
+  for (int i = 0; i < kArchSegs; ++i) {
+    const uint32_t b = base + static_cast<uint32_t>(i * 2);
+    idx.push_back(b);
+    idx.push_back(b + 3);
+    idx.push_back(b + 2);
+    idx.push_back(b);
+    idx.push_back(b + 1);
+    idx.push_back(b + 3);
+  }
+}
+
+}  // namespace
 
 void appendCybercabVehicleMesh(std::vector<SceneVertex>& verts, std::vector<uint32_t>& indices,
                                const EgoState& ego, const Mat4& egoMat, const Mat4& sprungMat,
