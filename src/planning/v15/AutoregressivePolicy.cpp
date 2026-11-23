@@ -1,6 +1,7 @@
 #include "planning/v15/AutoregressivePolicy.hpp"
 #include "planning/RssCorridor.hpp"
 #include "planning/v15/AutoregSafety.hpp"
+#include "planning/v15/GaussianRolloutScorer.hpp"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -16,6 +17,15 @@ constexpr float kStaticMaxVelMs = 0.35f, kStaticMinFwdM = 0.5f, kStaticMaxFwdM =
 constexpr float kCandBlockedThresh = 40.0f, kSignalSouthZ = 36.0f, kSignalBackWinM = 36.0f, kSignalMarginM = 1.5f;
 constexpr float kStopSignNorthZ = -36.0f, kStopSignMinX = 13.0f, kStopSignMaxX = 40.0f, kStopSignLineX = 14.5f;
 constexpr float kMinKappaFloor = 0.015f, kSigmaCruiseGain = 0.32f, kSigmaBase = 0.22f, kCorridorMinM = 32.0f;
+constexpr size_t kScratchReserveCap = 64u;
+constexpr int kNumLaneCands = 2;
+constexpr float kInvalidRoadLatM = 1e3f;
+constexpr float kLane0NearMaxLatM = -0.4f;
+constexpr float kLane0NearMinFwdM = -10.0f;
+constexpr float kLane0NearMaxFwdM = 26.0f;
+constexpr float kCorridorExtraLenM = 4.0f;
+constexpr float kCorridorGroundYM = 0.08f;
+constexpr float kMinSigmaSpeedScale = 0.65f;
 } // namespace
 
 float AutoregressivePolicy::clampToMiddleOfLane(float lat, const V15PolicyConfig& p) {
@@ -112,36 +122,64 @@ void AutoregressivePolicy::plan(const SimConfig& cfg, WorldEngine& world,
     if (redOrYellow) stopHorizonM = std::min(stopHorizonM, std::max(4.5f, (WorldEngine::kStopLineX - frontBumperX) + 1.0f));
     if (atStopSign) stopHorizonM = std::min(stopHorizonM, std::max(4.5f, (frontBumperX - kStopSignLineX) + 1.0f));
 
-    std::vector<float> trRoadLat(perc.tracks.size(), 1e3f);
-    bool lane0VehicleNearby = false;
-    for (size_t i = 0; i < perc.tracks.size(); ++i) {
-        const auto& tr = perc.tracks[i];
-        if (tr.semantic != SemanticClass::Vehicle) continue;
-        const float tu = world.findClosestLoopU(tr.worldPos);
-        const Vec3 tt = centerline.getTangentAt(tu);
-        trRoadLat[i] = (tr.worldPos - centerline.getPointAt(tu)).dot({tt.z, 0.0f, -tt.x});
-        const float sFwd = sE * (tr.worldPos.x - ego.pos.x) + cE * (tr.worldPos.z - ego.pos.z);
-        if (trRoadLat[i] < -0.4f && trRoadLat[i] > -kOnRoadMaxLatM && sFwd > -10.0f && sFwd < 26.0f) lane0VehicleNearby = true;
+  thread_local std::vector<float> trRoadLat;
+  trRoadLat.reserve(kScratchReserveCap);
+  trRoadLat.assign(perc.tracks.size(), kInvalidRoadLatM);
+  bool lane0VehicleNearby = false;
+  for (size_t i = 0; i < perc.tracks.size(); ++i) {
+    const auto& tr = perc.tracks[i];
+    if (tr.semantic != SemanticClass::Vehicle) continue;
+    const float tu = world.findClosestLoopU(tr.worldPos);
+    const Vec3 tt = centerline.getTangentAt(tu);
+    trRoadLat[i] =
+      (tr.worldPos - centerline.getPointAt(tu)).dot({tt.z, 0.0f, -tt.x});
+    const float sFwd =
+      sE * (tr.worldPos.x - ego.pos.x) + cE * (tr.worldPos.z - ego.pos.z);
+    if (trRoadLat[i] < kLane0NearMaxLatM && trRoadLat[i] > -kOnRoadMaxLatM &&
+        sFwd > kLane0NearMinFwdM && sFwd < kLane0NearMaxFwdM) {
+      lane0VehicleNearby = true;
     }
+  }
 
-    cmd.candidateTrajectories.resize(2);
-    cmd.candidateBlocked.assign(2, false);
-    float candOffsets[2]{}, candKappa[2]{}, candLeadGap[2]{1e4f, 1e4f};
-    bool staticBlocked[2]{false, false};
-    int bestIdx = curLane;
-    float bestScore = std::numeric_limits<float>::infinity();
+  cmd.candidateTrajectories.resize(kNumLaneCands);
+  cmd.candidateBlocked.assign(kNumLaneCands, false);
+  float candOffsets[kNumLaneCands]{};
+  float candKappa[kNumLaneCands]{};
+  float candLeadGap[kNumLaneCands]{kUnboundedGapM, kUnboundedGapM};
+  float candSpeedScale[kNumLaneCands]{kUnitSpeedScale, kUnitSpeedScale};
+  bool staticBlocked[kNumLaneCands]{false, false};
+  int bestIdx = curLane;
+  float bestScore = std::numeric_limits<float>::infinity();
 
-    for (int c = 0; c < 2; ++c) {
-        candOffsets[c] = sirenYield ? p.sirenRightPullM : computeTruckShyOffset(baseLats[c], ego, perc.tracks, p);
-        rolloutMiddleOfLane(ego, centerline, loopU, currentLat, candOffsets[c], trajSteps, lookaheadDist,
-                            cmd.candidateTrajectories[c], candKappa[c], p);
-        float cost = 0.0f, voxCost = 0.0f, obsCost = 0.0f;
+  for (int c = 0; c < kNumLaneCands; ++c) {
+    const float baseC =
+      sirenYield ? p.sirenRightPullM
+                 : computeTruckShyOffset(baseLats[c], ego, perc.tracks, p);
+    const ComfortRolloutChoice choice =
+      sirenYield
+        ? ComfortRolloutChoice{p.sirenRightPullM, kUnitSpeedScale, 0.0f, 0.0f,
+                               kUnboundedGapM}
+        : selectComfortSubRollout(
+            baseC, currentLat, (c == curLane) ? currentLat : baseLats[c], ego,
+            centerline, loopU, lookaheadDist, stopHorizonM, perc.v15Gaussians,
+            p);
+    candOffsets[c] = choice.targetLatM;
+    candSpeedScale[c] = choice.speedScale;
+    candLeadGap[c] = std::min(candLeadGap[c], choice.minGaussianGapM);
+    rolloutMiddleOfLane(ego, centerline, loopU, currentLat, candOffsets[c],
+                        trajSteps, lookaheadDist, cmd.candidateTrajectories[c],
+                        candKappa[c], p);
+    float cost = choice.comfortJerkCost;
+    float voxCost = 0.0f, obsCost = choice.gaussianCost;
         if (sirenYield) {
             cost = (c == 1) ? 1e4f : 0.0f;
         } else if (curLane == 0 && c == 1) {
-            cost = p.rightLaneSwitchCost;
+            cost += p.rightLaneSwitchCost;
         } else if (curLane == 1) {
-            cost = (c == 0) ? (lane0VehicleNearby ? p.leftLaneReturnHoldCost : 0.0f) : (lane0VehicleNearby ? 0.0f : p.leftLaneStayCost);
+          const float returnCost =
+            lane0VehicleNearby ? p.leftLaneReturnHoldCost : 0.0f;
+          const float stayCost = lane0VehicleNearby ? 0.0f : p.leftLaneStayCost;
+          cost += (c == 0) ? returnCost : stayCost;
         }
         if (!sirenYield && (redOrYellow || atStopSign) && c != curLane) cost += p.intersectionLaneLockCost;
         if (!sirenYield && std::abs(currentLat) < p.dividerBandM) {
@@ -234,28 +272,42 @@ void AutoregressivePolicy::plan(const SimConfig& cfg, WorldEngine& world,
                           std::max(0.0f, ego.speed) * cfg.rssTReactSec + (ego.speed * ego.speed) / (2.0f * cfg.rssABrakeMs2);
     cmd.rssSafeDist = rssDist;
 
-    std::vector<Vec3> corrPts;
-    std::vector<float> corrArc;
-    const float corrLen = std::max(kCorridorMinM, rssDist + 4.0f);
-    if (cfg.driveMode == "manual") {
-        rss::buildRssCorridorPoints(ego, centerline, totalLoopLen, loopU, lookaheadDist, currentLat,
-                                    candOffsets[bestIdx], cfg.wheelbaseM, true, corrLen, corrPts, corrArc);
-    } else {
-        float bumpU = std::fmod(loopU + bumperFwd / totalLoopLen, 1.0f);
-        if (bumpU < 0.0f) bumpU += 1.0f;
-        const Vec3 bTan = centerline.getTangentAt(bumpU);
-        const float bLat = (Vec3{frontBumperX, 0.0f, frontBumperZ} - centerline.getPointAt(bumpU)).dot({bTan.z, 0.0f, -bTan.x});
-        float dummyK = 0.0f;
-        rolloutMiddleOfLane(ego, centerline, bumpU, bLat, candOffsets[bestIdx], kCorridorSteps, corrLen, corrPts, dummyK, p);
-        corrPts[0] = {frontBumperX, 0.08f, frontBumperZ};
-        corrArc.resize(corrPts.size(), 0.0f);
-        for (size_t i = 1; i < corrPts.size(); ++i) {
-            corrPts[i].y = 0.08f;
-            corrArc[i] = corrArc[i - 1] + std::hypot(corrPts[i].x - corrPts[i - 1].x, corrPts[i].z - corrPts[i - 1].z);
-        }
+  thread_local std::vector<Vec3> corrPts;
+  thread_local std::vector<float> corrArc;
+  corrPts.reserve(kScratchReserveCap);
+  corrArc.reserve(kScratchReserveCap);
+  const float corrLen = std::max(kCorridorMinM, rssDist + kCorridorExtraLenM);
+  if (cfg.driveMode == "manual") {
+    rss::buildRssCorridorPoints(ego, centerline, totalLoopLen, loopU,
+                                lookaheadDist, currentLat, candOffsets[bestIdx],
+                                cfg.wheelbaseM, true, corrLen, corrPts,
+                                corrArc);
+  } else {
+    float bumpU = std::fmod(loopU + bumperFwd / totalLoopLen, 1.0f);
+    if (bumpU < 0.0f) bumpU += 1.0f;
+    const Vec3 bTan = centerline.getTangentAt(bumpU);
+    const float bLat = (Vec3{frontBumperX, 0.0f, frontBumperZ} -
+                        centerline.getPointAt(bumpU))
+                         .dot({bTan.z, 0.0f, -bTan.x});
+    float dummyK = 0.0f;
+    rolloutMiddleOfLane(ego, centerline, bumpU, bLat, candOffsets[bestIdx],
+                        kCorridorSteps, corrLen, corrPts, dummyK, p);
+    corrPts[0] = {frontBumperX, kCorridorGroundYM, frontBumperZ};
+    corrArc.resize(corrPts.size(), 0.0f);
+    for (size_t i = 1; i < corrPts.size(); ++i) {
+      corrPts[i].y = kCorridorGroundYM;
+      corrArc[i] = corrArc[i - 1] + std::hypot(corrPts[i].x - corrPts[i - 1].x,
+                                               corrPts[i].z - corrPts[i - 1].z);
     }
-    const float curveCap = std::max(p.minCurveSpeedMs, std::sqrt(p.maxLatAccelMs2 / std::max(candKappa[bestIdx], kMinKappaFloor)));
-    const float cruiseSpd = std::min(cfg.targetCruiseSpeedMs * clampf(1.0f - kSigmaCruiseGain * excessSigma, 0.65f, 1.0f), curveCap);
+  }
+  const float safeKappa = std::max(candKappa[bestIdx], kMinKappaFloor);
+  const float curveCap =
+    std::max(p.minCurveSpeedMs, std::sqrt(p.maxLatAccelMs2 / safeKappa));
+  const float sigmaScale =
+    clampf(1.0f - kSigmaCruiseGain * excessSigma, kMinSigmaSpeedScale, 1.0f);
+  const float cruiseSpd =
+    std::min(cfg.targetCruiseSpeedMs * sigmaScale, curveCap) *
+    candSpeedScale[bestIdx];
     const bool activelyCrossing = (bestIdx != curLane) || (std::abs(std::abs(currentLat) - p.laneCenterAbsM) > p.crossingDevThreshM);
     const SafetyEvalOutput safe = evaluateAutoregSafety(world,
         {cfg, ego, perc, corrPts, corrArc, rssDist, candLeadGap[bestIdx], sirenYield, staticBlocked[0] && staticBlocked[1],

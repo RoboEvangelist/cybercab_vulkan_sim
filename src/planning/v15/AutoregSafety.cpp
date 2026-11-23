@@ -1,5 +1,6 @@
 #include "planning/v15/AutoregSafety.hpp"
 #include "planning/RssCorridor.hpp"
+#include "planning/v15/GaussianRolloutScorer.hpp"
 #include <algorithm>
 #include <cmath>
 
@@ -155,6 +156,9 @@ SafetyEvalOutput evaluateAutoregSafety(WorldEngine& world, const SafetyEvalInput
         out.aebTriggered = true; out.desiredSpeed = 0.0f;
         out.behavior = closePedVox ? "YIELDING_PEDESTRIAN" : "FOLLOWING_LEAD";
     }
+    evaluateCorridorGaussians(in.perc.v15Gaussians, in.corrPts, in.corrArc,
+                              in.rssDist, in.ego, p, out.minForwardObsDist,
+                              out.desiredSpeed, out.aebTriggered, out.behavior);
 
     if (in.ego.pos.z > kSignalSouthMinZ && in.ego.pos.x < WorldEngine::kStopLineX + kSignalPassMarginM &&
         in.ego.pos.x > WorldEngine::kStopLineX - kSignalWindowBackM &&

@@ -117,6 +117,7 @@ target_compile_options(cybercab_perception PRIVATE ${CYBERCAB_WARN_FLAGS})
 add_library(cybercab_planning SHARED
     src/planning/TrajectoryPlanner.cpp
     src/planning/v15/AutoregSafety.cpp
+    src/planning/v15/GaussianRolloutScorer.cpp
     src/planning/v15/AutoregressivePolicy.cpp
 )
 target_link_libraries(cybercab_planning PUBLIC cybercab_perception)
@@ -162,6 +163,7 @@ add_executable(cybercab_tests
     tests/test_v15_gaussian_world.cpp
     tests/test_v15_latent_predictor.cpp
     tests/test_v15_autoreg_planner.cpp
+    tests/test_v15_gaussian_planner.cpp
     tests/test_v15_e2e_closed_loop.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
