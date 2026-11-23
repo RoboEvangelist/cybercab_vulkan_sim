@@ -35,6 +35,8 @@ TEST_F(V15PipelineTest, V14NeverAllocatesOrRunsV15FrontEnd) {
     }
 
     EXPECT_EQ(out.gpuStageMs.count("1c_v15_freq_split"), 0u);
+    EXPECT_EQ(out.gpuStageMs.count("2a_v15_self_calib"), 0u);
+    EXPECT_EQ(out.gpuStageMs.count("2b_v15_virt_rectify"), 0u);
     EXPECT_FALSE(out.activeVoxels.empty());
 
     rig.resize(cfg.fullCamWidth, cfg.fullCamHeight);
@@ -78,6 +80,8 @@ TEST_F(V15PipelineTest, V15RunsFreqSplitInBatch1RespectsResizeAndBudget) {
         world.stepAgents(dt);
         const auto t1 = std::chrono::steady_clock::now();
         ASSERT_EQ(out.gpuStageMs.count("1c_v15_freq_split"), 1u);
+        ASSERT_EQ(out.gpuStageMs.count("2a_v15_self_calib"), 1u);
+        ASSERT_EQ(out.gpuStageMs.count("2b_v15_virt_rectify"), 1u);
         if (s >= kWarm) {
             freqMsSum += out.gpuStageMs.at("1c_v15_freq_split");
             for (const auto& kv : out.gpuStageMs) gpuSum += kv.second;
@@ -87,6 +91,8 @@ TEST_F(V15PipelineTest, V15RunsFreqSplitInBatch1RespectsResizeAndBudget) {
     const double freqMs = freqMsSum / kMeasure;
     const double wallMs = wallSum / kMeasure;
     RecordProperty("v15_freq_split_ms", testutil::fmtProp(freqMs));
+    RecordProperty("v15_calib_ms", testutil::fmtProp(out.gpuStageMs.at("2a_v15_self_calib")));
+    RecordProperty("v15_rectify_ms", testutil::fmtProp(out.gpuStageMs.at("2b_v15_virt_rectify")));
     RecordProperty("v15_gpu_sum_ms", testutil::fmtProp(gpuSum / kMeasure));
     RecordProperty("v15_wall_ms", testutil::fmtProp(wallMs));
     EXPECT_LT(freqMs, 2.0);

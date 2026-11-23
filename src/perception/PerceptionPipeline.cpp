@@ -85,6 +85,9 @@ void PerceptionPipeline::runFrame(const VulkanContext& ctx,
         }
         ctx.endSingleTimeCommands(cmd);
     }
+    if (v15_) {
+        v15_->finishBatch1Cpu();
+    }
 
     soil_.readbackResults(out.soilCameras, out.soilPatches, out.forwardEpistemicSigma);
     detr_.decodeAndLift3D(cfg_, rig, ego, out.detections2D, out.detections3D);
