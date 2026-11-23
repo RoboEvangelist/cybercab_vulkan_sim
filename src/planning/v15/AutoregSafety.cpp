@@ -1,6 +1,7 @@
 #include "planning/v15/AutoregSafety.hpp"
 #include "planning/RssCorridor.hpp"
 #include "planning/v15/GaussianRolloutScorer.hpp"
+#include "planning/v15/StaticVoxelGuard.hpp"
 #include <algorithm>
 #include <cmath>
 
@@ -122,14 +123,21 @@ SafetyEvalOutput evaluateAutoregSafety(WorldEngine& world, const SafetyEvalInput
     float minVoxFwd = 45.0f;
     bool closePedVox = false;
     for (const auto& v : in.perc.activeVoxels) {
-        if (v.wy > kVoxelMaxHeightM || v.confidence <= p.voxelMinConf || v.sem == SemanticClass::Overhang ||
-            v.sem == SemanticClass::Static || v.sem == SemanticClass::SignalSign || v.sem == SemanticClass::Curb) continue;
+      if (v.wy > kVoxelMaxHeightM || v.confidence <= p.voxelMinConf ||
+          v.sem == SemanticClass::Overhang ||
+          v.sem == SemanticClass::SignalSign ||
+          v.sem == SemanticClass::Curb) continue;
+      if (v.sem == SemanticClass::Static &&
+          !isOnRoadBlockingStaticVoxel(world, v)) {
+        continue;
+      }
         float fwd = 0.0f, lat = 0.0f, vtX = sinEgo, vtZ = cosEgo;
         rss::projectOntoPolyline(in.corrPts, in.corrArc, v.wx, v.wz, fwd, lat, vtX, vtZ);
         const float voxLatLim = (v.sem == SemanticClass::Pedestrian) ? p.voxelCorridorPedM : p.voxelCorridorVehM;
         if (fwd > 0.25f && fwd < in.rssDist + 3.0f && lat < voxLatLim) {
             bool adjTrackedVeh = false;
-            if (v.sem == SemanticClass::Vehicle) {
+            if (v.sem == SemanticClass::Vehicle ||
+                v.sem == SemanticClass::Static) {
                 for (const auto& tr : in.perc.tracks) {
                     if (tr.semantic != SemanticClass::Vehicle) continue;
                     if (std::hypot(v.wx - tr.worldPos.x, v.wz - tr.worldPos.z) < p.adjVehVoxelSuppressM) {
@@ -160,9 +168,12 @@ SafetyEvalOutput evaluateAutoregSafety(WorldEngine& world, const SafetyEvalInput
                               in.rssDist, in.ego, p, out.minForwardObsDist,
                               out.desiredSpeed, out.aebTriggered, out.behavior);
 
-    if (in.ego.pos.z > kSignalSouthMinZ && in.ego.pos.x < WorldEngine::kStopLineX + kSignalPassMarginM &&
-        in.ego.pos.x > WorldEngine::kStopLineX - kSignalWindowBackM &&
-        (world.signalPhase() == SignalPhase::Red || world.signalPhase() == SignalPhase::Yellow)) {
+  const int egoLane = (in.ego.currentLateralOffset >= 0.0f) ? 1 : 0;
+  const SignalPhase laneSig = world.signalPhaseForLane(egoLane);
+  if (in.ego.pos.z > kSignalSouthMinZ &&
+      in.ego.pos.x < WorldEngine::kStopLineX + kSignalPassMarginM &&
+      in.ego.pos.x > WorldEngine::kStopLineX - kSignalWindowBackM &&
+      (laneSig == SignalPhase::Red || laneSig == SignalPhase::Yellow)) {
         const float distBar = WorldEngine::kStopLineX - frontBumperX;
         out.minForwardObsDist = std::min(out.minForwardObsDist, std::max(0.0f, distBar));
         if (!out.aebTriggered && distBar <= out.minForwardObsDist + 0.5f) out.behavior = "RED_LIGHT_HOLD";

@@ -2,6 +2,7 @@
 #include "planning/RssCorridor.hpp"
 #include "planning/v15/AutoregSafety.hpp"
 #include "planning/v15/GaussianRolloutScorer.hpp"
+#include "planning/v15/StaticVoxelGuard.hpp"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -113,9 +114,13 @@ void AutoregressivePolicy::plan(const SimConfig& cfg, WorldEngine& world,
     const float egoObbCx = ego.pos.x + sE * ego.centerOffsetForward, egoObbCz = ego.pos.z + cE * ego.centerOffsetForward;
     const float frontBumperX = ego.pos.x + sE * bumperFwd, frontBumperZ = ego.pos.z + cE * bumperFwd;
 
-    const bool redOrYellow = (ego.pos.z > kSignalSouthZ && ego.pos.x > WorldEngine::kStopLineX - kSignalBackWinM &&
-                              ego.pos.x < WorldEngine::kStopLineX + kSignalMarginM &&
-                              (world.signalPhase() == SignalPhase::Red || world.signalPhase() == SignalPhase::Yellow));
+    const SignalPhase laneSig = world.signalPhaseForLane(curLane);
+    const bool sigRedOrYel =
+      (laneSig == SignalPhase::Red || laneSig == SignalPhase::Yellow);
+    const bool redOrYellow =
+      (ego.pos.z > kSignalSouthZ &&
+       ego.pos.x > WorldEngine::kStopLineX - kSignalBackWinM &&
+       ego.pos.x < WorldEngine::kStopLineX + kSignalMarginM && sigRedOrYel);
     const bool atStopSign = (ego.pos.z < kStopSignNorthZ && ego.pos.x > kStopSignMinX &&
                              ego.pos.x < kStopSignMaxX && ego.passedStopSignCooldown <= 0.0f);
     float stopHorizonM = kEvalMaxDistM;
@@ -223,8 +228,17 @@ void AutoregressivePolicy::plan(const SimConfig& cfg, WorldEngine& world,
             if (distAlong <= kVoxelMaxDistM) {
                 for (size_t k = 0; k < perc.activeVoxels.size(); k += 2) {
                     const auto& v = perc.activeVoxels[k];
-                    if (v.wy > kVoxelMaxHeightM || v.confidence <= p.voxelMinConf || v.sem == SemanticClass::Overhang ||
-                        v.sem == SemanticClass::SignalSign || v.sem == SemanticClass::Curb || v.sem == SemanticClass::Static) continue;
+                    if (v.wy > kVoxelMaxHeightM ||
+                        v.confidence <= p.voxelMinConf ||
+                        v.sem == SemanticClass::Overhang ||
+                        v.sem == SemanticClass::SignalSign ||
+                        v.sem == SemanticClass::Curb) {
+                      continue;
+                    }
+                    if (v.sem == SemanticClass::Static &&
+                        !isOnRoadBlockingStaticVoxel(world, v)) {
+                      continue;
+                    }
                     const float r = (v.sem == SemanticClass::Pedestrian) ? kVoxelPedRadM : kVoxelVehRadM;
                     const float vxP = v.wx + v.vx * std::min(1.5f, tPred), vzP = v.wz + v.vz * std::min(1.5f, tPred);
                     const float d = std::min(std::hypot(wpObb.x - vxP, wpObb.z - vzP), std::hypot(wpFront.x - vxP, wpFront.z - vzP));
