@@ -114,6 +114,7 @@ target_compile_options(cybercab_perception PRIVATE ${CYBERCAB_WARN_FLAGS})
 add_library(cybercab_planning SHARED
     src/planning/TrajectoryPlanner.cpp
     src/planning/v15/AutoregSafety.cpp
+    src/planning/v15/AutoregressivePolicy.cpp
 )
 target_link_libraries(cybercab_planning PUBLIC cybercab_perception)
 target_compile_options(cybercab_planning PRIVATE ${CYBERCAB_WARN_FLAGS})

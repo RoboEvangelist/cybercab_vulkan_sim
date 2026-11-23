@@ -1,5 +1,6 @@
 #include "planning/TrajectoryPlanner.hpp"
 #include "planning/RssCorridor.hpp"
+#include "planning/v15/AutoregressivePolicy.hpp"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -27,6 +28,10 @@ float TrajectoryPlanner::quinticLateralOffset(float d0, float d1, float tNorm) {
 }
 
 void TrajectoryPlanner::plan(WorldEngine& world, const PerceptionFrameOutput& perc, PlannerCommand& cmd) const {
+    if (cfg_.isV15()) {
+        v15::AutoregressivePolicy::plan(cfg_, world, perc, cmd);
+        return;
+    }
     const EgoState& ego = world.ego();
     const auto& centerline = world.centerline();
     const float totalLoopLen = centerline.getLength();
