@@ -104,6 +104,7 @@ add_library(cybercab_perception SHARED
     src/perception/v15/KinematicNavEncoder.cpp
     src/perception/v15/PatchTokenizer.cpp
     src/perception/v15/StaticSpatialMemory.cpp
+    src/perception/v15/GaussianWorldModel.cpp
 )
 add_dependencies(cybercab_perception compile_shaders)
 target_link_libraries(cybercab_perception PUBLIC cybercab_world)

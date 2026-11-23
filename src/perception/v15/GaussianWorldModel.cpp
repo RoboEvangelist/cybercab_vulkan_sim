@@ -1,0 +1,142 @@
+#include "perception/v15/GaussianWorldModel.hpp"
+#include "perception/BEVFormer.hpp"
+
+#include <algorithm>
+#include <cmath>
+
+namespace cybercab::v15 {
+
+void GaussianWorldModel::reset() { gaussians_.clear(); }
+
+void GaussianWorldModel::projectEwa2D(const Gaussian3DGpu& g, const Mat4& camFromWorld,
+                                      const CameraIntrinsics& intr, Vec2& uvOut,
+                                      float cov2dOut[3], float& depthOut) {
+    const Vec3 pw{g.meanOpacity.x, g.meanOpacity.y, g.meanOpacity.z};
+    const Vec3 pc = camFromWorld.transformPoint(pw);
+    depthOut = pc.z;
+    const float z = std::max(0.25f, pc.z);
+    const float invZ = 1.0f / z;
+    const float invZ2 = invZ * invZ;
+    uvOut = {intr.cx + intr.fx * pc.x * invZ, intr.cy + intr.fy * pc.y * invZ};
+
+    const float syaw = std::sin(g.velYaw.z), cyaw = std::cos(g.velYaw.z);
+    const Vec3 axes[3] = {
+        {cyaw * g.scaleSem.x, 0.0f, -syaw * g.scaleSem.x},
+        {0.0f, g.scaleSem.y, 0.0f},
+        {syaw * g.scaleSem.z, 0.0f, cyaw * g.scaleSem.z},
+    };
+    float cxx = 0.3f, cxy = 0.0f, cyy = 0.3f;
+    for (int k = 0; k < 3; ++k) {
+        const Vec3 ac = camFromWorld.transformVector(axes[k]);
+        const float jx = intr.fx * (ac.x * invZ - pc.x * ac.z * invZ2);
+        const float jy = intr.fy * (ac.y * invZ - pc.y * ac.z * invZ2);
+        cxx += jx * jx;
+        cxy += jx * jy;
+        cyy += jy * jy;
+    }
+    cov2dOut[0] = cxx;
+    cov2dOut[1] = cxy;
+    cov2dOut[2] = cyy;
+}
+
+float GaussianWorldModel::queryOccupancyProb(const Vec3& worldPt, float horizonSec) const {
+    const float t = std::max(0.0f, horizonSec);
+    const float grow = 1.0f + 0.15f * t;
+    double emptyProb = 1.0;
+    for (const auto& g : gaussians_) {
+        const float dyn = (g.velYaw.w > 0.5f) ? t : 0.0f;
+        const float dx = worldPt.x - (g.meanOpacity.x + g.velYaw.x * dyn);
+        const float dy = worldPt.y - g.meanOpacity.y;
+        const float dz = worldPt.z - (g.meanOpacity.z + g.velYaw.y * dyn);
+        const float syaw = std::sin(g.velYaw.z), cyaw = std::cos(g.velYaw.z);
+        const float lx = dx * cyaw - dz * syaw;
+        const float lz = dx * syaw + dz * cyaw;
+        const float sx = std::max(0.15f, g.scaleSem.x * ((g.velYaw.w > 0.5f) ? grow : 1.0f));
+        const float sy = std::max(0.15f, g.scaleSem.y);
+        const float sz = std::max(0.15f, g.scaleSem.z * ((g.velYaw.w > 0.5f) ? grow : 1.0f));
+        const float mSq = (lx * lx) / (sx * sx) + (dy * dy) / (sy * sy) + (lz * lz) / (sz * sz);
+        if (mSq > 18.0f) continue;
+        const double occ = clampf(g.meanOpacity.w * std::exp(-0.5f * mSq), 0.0f, 0.999f);
+        emptyProb *= (1.0 - occ);
+    }
+    return clampf(static_cast<float>(1.0 - emptyProb), 0.0f, 1.0f);
+}
+
+void GaussianWorldModel::rollout4D(float horizonSec, std::vector<Gaussian3DGpu>& outPred) const {
+    const float t = std::max(0.0f, horizonSec);
+    const float grow = 1.0f + 0.15f * t;
+    outPred = gaussians_;
+    for (auto& g : outPred) {
+        if (g.velYaw.w > 0.5f) {
+            g.meanOpacity.x += g.velYaw.x * t;
+            g.meanOpacity.z += g.velYaw.y * t;
+            g.scaleSem.x *= grow;
+            g.scaleSem.z *= grow;
+        }
+    }
+}
+
+void GaussianWorldModel::updateFromPerception(const SimConfig& cfg, const EgoState& ego,
+                                                const StaticSpatialMemory& staticMem,
+                                                const PatchTokenizer& patches,
+                                                PerceptionFrameOutput& out) {
+    gaussians_.clear();
+    float vruBoost = 0.0f;
+    if (patches.validSlots() > 0u && patches.ringSSBO().handle() != VK_NULL_HANDLE) {
+        constexpr size_t kViewN = static_cast<size_t>(PatchTokenizer::kGridW) * PatchTokenizer::kGridH;
+        const size_t offsetIdx = (static_cast<size_t>(patches.latestWrittenSlot()) * PatchTokenizer::kNumViews + 8u) * kViewN;
+        vruScratch_.resize(kViewN);
+        patches.ringSSBO().download(vruScratch_.data(), kViewN * sizeof(PatchTokenGpu),
+                                    static_cast<VkDeviceSize>(offsetIdx) * sizeof(PatchTokenGpu));
+        float edgeSum = 0.0f;
+        int cnt = 0;
+        for (int gy = PatchTokenizer::kGridH / 2; gy < PatchTokenizer::kGridH - 2; ++gy) {
+            for (int gx = 8; gx < PatchTokenizer::kGridW - 8; ++gx) {
+                const auto& pt = vruScratch_[static_cast<size_t>(gy) * PatchTokenizer::kGridW + gx];
+                if (pt.app0.w > 0.5f) { edgeSum += std::hypot(pt.app1.z, pt.app1.w) + pt.app1.y; ++cnt; }
+            }
+        }
+        if (cnt > 0) vruBoost = clampf((edgeSum / static_cast<float>(cnt)) * 0.25f, 0.0f, 0.15f);
+    }
+
+    for (const auto& tr : out.tracks) {
+        if (static_cast<int>(gaussians_.size()) >= kMaxGaussians) break;
+        const bool isPed = (tr.semantic == SemanticClass::Pedestrian);
+        const float nearB = (isPed && std::hypot(tr.worldPos.x - ego.pos.x, tr.worldPos.z - ego.pos.z) < 16.0f) ? vruBoost : 0.0f;
+        gaussians_.push_back({
+            {tr.worldPos.x, std::max(0.55f, tr.halfExtents.y), tr.worldPos.z, clampf(tr.score * 0.92f + nearB, 0.35f, 0.98f)},
+            {std::max(0.35f, tr.halfExtents.x), std::max(0.50f, tr.halfExtents.y),
+             std::max(0.35f, tr.halfExtents.z), static_cast<float>(static_cast<int>(tr.semantic))},
+            {tr.worldVel.x, tr.worldVel.z, tr.yaw, 1.0f},
+            isPed ? Vec4{0.18f, 0.92f, 0.42f, tr.score} : Vec4{0.95f, 0.28f, 0.16f, tr.score}});
+    }
+
+    staticMem.readbackCells(cellScratch_);
+    const int nx = staticMem.nx(), ny = staticMem.ny();
+    if (static_cast<int>(cellScratch_.size()) != nx * ny || nx <= 0 || ny <= 0) return;
+    const Mat4 wFromIso = BEVFormer::worldFromIsoEgo(ego);
+    const float dx = (cfg.bevMaxX - cfg.bevMinX) / static_cast<float>(nx);
+    const float dy = (cfg.bevMaxY - cfg.bevMinY) / static_cast<float>(ny);
+    int fusedVoxels = 0;
+    for (int iy = 0; iy < ny && static_cast<int>(gaussians_.size()) < kMaxGaussians; ++iy) {
+        for (int ix = 0; ix < nx && static_cast<int>(gaussians_.size()) < kMaxGaussians; ++ix) {
+            const auto& c = cellScratch_[static_cast<size_t>(iy) * nx + ix];
+            if (c.featConf.x < 0.35f || c.featConf.w < 0.55f) continue;
+            const float xIso = cfg.bevMinX + (ix + 0.5f) * dx, yIso = cfg.bevMinY + (iy + 0.5f) * dy;
+            const Vec3 wp = wFromIso.transformPoint({xIso, yIso, 0.0f});
+            const float h = std::max(0.7f, c.featConf.y);
+            const bool isSign = (static_cast<int>(std::lround(c.featConf.z)) == static_cast<int>(SemanticClass::SignalSign));
+            gaussians_.push_back({
+                {wp.x, 0.5f * h, wp.z, clampf(0.45f + 0.5f * c.featConf.w, 0.0f, 0.96f)},
+                {0.52f, 0.5f * h, 0.52f, c.featConf.z}, {0.0f, 0.0f, ego.yaw, 0.0f},
+                isSign ? Vec4{0.96f, 0.78f, 0.18f, c.featConf.w} : Vec4{0.42f, 0.48f, 0.56f, c.featConf.w}});
+            if (c.meta.z > 0.5f && fusedVoxels < 32 && xIso > 0.0f && std::abs(yIso) > 2.2f) {
+                out.activeVoxels.push_back({xIso, yIso, 0.5f * h, wp.x, wp.z,
+                    isSign ? SemanticClass::SignalSign : SemanticClass::Static, c.featConf.w, 0.0f, 0.0f, 0.05f});
+                ++fusedVoxels;
+            }
+        }
+    }
+}
+
+} // namespace cybercab::v15
