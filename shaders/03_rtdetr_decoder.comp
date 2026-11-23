@@ -25,6 +25,7 @@ layout(push_constant) uniform DetrDecPC {
     uint featH;
     uint numQueries;
     uint numLayers;
+  float aspectScale;
 } pc;
 
 shared vec4 s_qPos[16];     // cx, cy, w, h
@@ -75,6 +76,10 @@ void main() {
     float objSeed = initA.z;
     const float patchW = initA.w;
     const bool activeQ = (objSeed > 0.05);
+  const float kMinAspectScale = 0.5;
+  const bool isRefAspect = (abs(pc.aspectScale - 1.0) < 1e-4);
+  const float invAspect =
+    isRefAspect ? 1.0 : (1.0 / max(pc.aspectScale, kMinAspectScale));
 
     s_qPos[q] = activeQ ? vec4(cx, cy, w, h) : vec4(-10.0);
     s_qFeat[q] = vec4(0.0);
@@ -99,7 +104,9 @@ void main() {
                 : (!sigQuery && max(prevQF.x, prevQF.y) > 0.04 && max(prevQF.x, prevQF.y) > prevQF.z * 1.15);
             const int step = (layer == 0u) ? (sigQuery ? 1 : 2) : 1;
             const bool vehQuery = (prevQF.x > prevQF.y * 1.15) && (prevQF.x >= prevQF.z * 0.90) && (prevQF.x > 0.04);
-            const bool expandVeh = (layer > 0u) && vehQuery && (w > 0.20 || h > 0.22);
+      const float hEqLoop = h * invAspect;
+      const bool expandVeh =
+        (layer > 0u) && vehQuery && (w > 0.20 || hEqLoop > 0.22);
 
             const int r0 = (layer == 0u && sigQuery) ? 2 : 4;
             int scanMinDx = -r0, scanMaxDx = r0;
@@ -185,14 +192,14 @@ void main() {
                     }
                     scanMaxDy = max(2, lastAct);
                 } else {
-                    const int rad = (w > 0.21 || h > 0.24) ? 6 : 2;
+                  const int rad = (w > 0.21 || h * invAspect > 0.24) ? 6 : 2;
                     scanMinDx = -rad; scanMaxDx = rad;
                     scanMinDy = -rad; scanMaxDy = rad;
                 }
             }
             const bool wideConn = (layer > 0u) && expandVeh && ((scanMaxDx - scanMinDx) > 7 || (scanMaxDy - scanMinDy) > 7);
             if (layer > 0u && expandVeh && !wideConn) {
-                const int rad = (w > 0.21 || h > 0.24) ? 6 : 2;
+              const int rad = (w > 0.21 || h * invAspect > 0.24) ? 6 : 2;
                 scanMinDx = -rad; scanMaxDx = rad;
                 scanMinDy = -rad; scanMaxDy = rad;
             }
@@ -294,9 +301,13 @@ void main() {
 
             const float subW = subMax.x - subMin.x;
             const float subH = subMax.y - subMin.y;
-            const bool midHorizTruckSub = hasSub && (cy > 0.428 && cy < 0.458) && (subH > 0.075 && subH < 0.130) &&
-                                          (sumPed < sumVeh * 0.05) && (sumVeh > 0.20) &&
-                                          ((maxDx - minDx) <= 4 && (maxDy - minDy) == 4);
+      const float cyEq = isRefAspect ? cy : (0.5 + (cy - 0.5) * invAspect);
+      const float subHEq = subH * invAspect;
+      const bool midHorizTruckSub =
+        hasSub && (cyEq > 0.428 && cyEq < 0.458) &&
+        (subHEq > 0.075 && subHEq < 0.130) &&
+        (sumPed < sumVeh * 0.05) && (sumVeh > 0.20) &&
+        ((maxDx - minDx) <= 4 && (maxDy - minDy) == 4);
             if (layer > 0u && hasSub && (wideConn || midHorizTruckSub || ((maxDx - minDx) < 4 && (maxDy - minDy) < 4)) &&
                 subW > 0.0 && subH > 0.0) {
                 cx = 0.5 * (subMin.x + subMax.x);
@@ -375,22 +386,28 @@ void main() {
     float sScore = qf.z * 1.40;
 
     const float wPx = w * float(pc.featW);
-    const float hPx = h * float(pc.featH);
+  const float hPx = h * float(pc.featH) * invAspect;
+  const float hEq = h * invAspect;
+  const float cyHead = isRefAspect ? cy : (0.5 + (cy - 0.5) * invAspect);
 
     // Aspect-ratio & vertical-position geometric inductive bias in FFN head
-    if (cy < 0.45 && sScore > 0.05) sScore *= 1.55;
-    if ((wPx >= hPx * 1.18 || (wPx >= hPx * 1.06 && (h > 0.125 || vScore >= pScore * 1.03))) &&
-        w > 0.065 && vScore >= pScore * 0.88 && vScore > 0.04) {
+  if (cyHead < 0.45 && sScore > 0.05) sScore *= 1.55;
+  if ((wPx >= hPx * 1.18 ||
+       (wPx >= hPx * 1.06 && (hEq > 0.125 || vScore >= pScore * 1.03))) &&
+      w > 0.065 && vScore >= pScore * 0.88 && vScore > 0.04) {
         vScore *= 1.45;
         pScore *= 0.75;
-    } else if (((hPx > wPx * 1.01 && w <= 0.095 && h < 0.135 && pScore >= vScore * 0.88) ||
-                (hPx > wPx * 1.05 && pScore >= vScore * 0.88) ||
-                (w <= 0.062 && hPx >= wPx * 0.90 && pScore >= vScore * 0.92) ||
-                (w <= 0.115 && h <= 0.122 && hPx >= wPx * 0.72 && pScore >= vScore * 0.96)) &&
-               h > 0.024 && pScore > 0.08) {
+  } else if (((hPx > wPx * 1.01 && w <= 0.095 && hEq < 0.135 &&
+               pScore >= vScore * 0.88) ||
+              (hPx > wPx * 1.05 && pScore >= vScore * 0.88) ||
+              (w <= 0.062 && hPx >= wPx * 0.90 && pScore >= vScore * 0.92) ||
+              (w <= 0.115 && hEq <= 0.122 && hPx >= wPx * 0.72 &&
+               pScore >= vScore * 0.96)) &&
+             hEq > 0.024 && pScore > 0.08) {
         pScore *= 1.45;
         vScore *= 0.75;
-    } else if (cy < 0.505 && h <= 0.024 && wPx >= hPx * 0.85 && vScore > 0.04) {
+  } else if (cyHead < 0.505 && hEq <= 0.024 && wPx >= hPx * 0.85 &&
+             vScore > 0.04) {
         vScore *= 1.15;
     }
 

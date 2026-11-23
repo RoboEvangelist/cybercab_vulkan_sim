@@ -44,6 +44,8 @@ private:
     const VulkanContext* ctx_ = nullptr;
     int featW_ = 40;
     int featH_ = 30;
+  int camW_ = kLegacyHalfCamW;
+  int camH_ = kLegacyHalfCamH;
     int s5W_ = 20;
     int s5H_ = 15;
     int patchCols_ = 10;

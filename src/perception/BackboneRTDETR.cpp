@@ -1,4 +1,5 @@
 #include "perception/BackboneRTDETR.hpp"
+#include "perception/MultiCamCorroboration.hpp"
 #include "core/VulkanUtils.hpp"
 
 #include <algorithm>
@@ -37,6 +38,7 @@ struct DetrDecPC {
     uint32_t featH;
     uint32_t numQueries;
     uint32_t numLayers;
+  float aspectScale;
 };
 
 float ioa2D(const Detection2D& a, const Detection2D& b) {
@@ -146,6 +148,8 @@ void BackboneRTDETR::init(const VulkanContext& ctx, const SimConfig& cfg,
 
 void BackboneRTDETR::updateCameraTensorBinding(const VulkanBuffer& camTensorSSBO, int camW, int camH) {
     if (!ctx_) return;
+  camW_ = std::max(1, camW);
+  camH_ = std::max(1, camH);
     hasPrevTensor_ = false;
     currCamTensorRef_ = &camTensorSSBO;
     tensorBytes_ = static_cast<VkDeviceSize>(8 * camW * camH * 4) * sizeof(float);
@@ -280,12 +284,19 @@ void BackboneRTDETR::recordRTDETR(VkCommandBuffer cmd) const {
     detrEncPipe_.bindAndDispatch(cmd, encSet_, 1, 1, 8, &encPc, sizeof(encPc));
     cmdComputeBarrier(cmd);
 
-    DetrDecPC decPc{
-        static_cast<uint32_t>(featW_),
-        static_cast<uint32_t>(featH_),
-        static_cast<uint32_t>(numQueries_),
-        static_cast<uint32_t>(numLayers_)
-    };
+  constexpr float kRefCamAspect =
+    static_cast<float>(kLegacyHalfCamW) /
+    static_cast<float>(kLegacyHalfCamH);
+  const float aspectScale =
+    (static_cast<float>(camW_) / static_cast<float>(camH_)) /
+    kRefCamAspect;
+  DetrDecPC decPc{
+    static_cast<uint32_t>(featW_),
+    static_cast<uint32_t>(featH_),
+    static_cast<uint32_t>(numQueries_),
+    static_cast<uint32_t>(numLayers_),
+    aspectScale
+  };
     detrDecPipe_.bindAndDispatch(cmd, decSet_, 1, 1, 8, &decPc, sizeof(decPc));
     cmdComputeBarrier(cmd);
 }
@@ -553,7 +564,9 @@ void BackboneRTDETR::decodeAndLift3D(const SimConfig& cfg,
     suppressed3dScratch_.assign(raw3dScratch_.size(), 0);
     for (size_t i = 0; i < raw3dScratch_.size(); ++i) {
         if (suppressed3dScratch_[i]) continue;
-        const auto& keep = raw3dScratch_[i];
+    Detection3D& keep = raw3dScratch_[i];
+    keep.corroboratingCamMask = multicam::camBit(keep.camIndex);
+    keep.corroboratingCamCount = multicam::kMinCorrobCams;
         const float relX = keep.worldPos.x - ego.pos.x;
         const float relZ = keep.worldPos.z - ego.pos.z;
         const float rayLen = std::hypot(relX, relZ);
@@ -582,9 +595,19 @@ void BackboneRTDETR::decodeAndLift3D(const SimConfig& cfg,
             const bool candClipX = isBorderClippedX(cand.det2d);
             const bool candWidePeripheral = (candFov > 65.0f) && (candClipX || cand.det2d.cxNorm < 0.16f || cand.det2d.cxNorm > 0.84f);
             const bool candUltrawideRay = (candFov > 95.0f) && (cand.det2d.cxNorm < 0.22f || cand.det2d.cxNorm > 0.78f);
+      constexpr float kTeleMaxFovDeg = 40.0f;
+      constexpr float kTeleSatSpan = 0.65f;
+      constexpr float kTeleCloseCy = 0.60f;
+      constexpr float kTeleCloseH = 0.12f;
+      const bool candTeleCloseSliver =
+        (candFov < kTeleMaxFovDeg) && (cand.det2d.cyNorm > kTeleCloseCy) &&
+        (cand.det2d.hNorm > kTeleCloseH) && (cand.rangeM > keep.rangeM) &&
+        (cand.score < keep.score);
             // Distance from unclipped keep center to cand's viewing ray is invariant to cand's clipped/peripheral depth inflation.
             float dLatEff = dLat;
-            if ((candClipX || candWidePeripheral || candUltrawideRay) && cLen > 1e-3f) {
+      if ((candClipX || candWidePeripheral || candUltrawideRay ||
+           candTeleCloseSliver) &&
+          cLen > 1e-3f) {
                 const float crx = cRelX / cLen;
                 const float crz = cRelZ / cLen;
                 if ((relX * crx + relZ * crz) > 0.0f) {
@@ -611,7 +634,11 @@ void BackboneRTDETR::decodeAndLift3D(const SimConfig& cfg,
                     radGate = std::max(radGate, 6.2f + 0.25f * rayLen);
                 }
             }
-            const bool candClippedOrSat = candClipX || ((candFov < 40.0f) && (cand.det2d.wNorm > 0.65f || cand.det2d.hNorm > 0.65f));
+      const bool candClippedOrSat =
+        candClipX || candTeleCloseSliver ||
+        ((candFov < kTeleMaxFovDeg) &&
+         (cand.det2d.wNorm > kTeleSatSpan ||
+          cand.det2d.hNorm > kTeleSatSpan));
             if (cand.semantic == SemanticClass::Vehicle && keep.semantic == SemanticClass::Vehicle &&
                 ((keepIsSharp && (candFov > 95.0f || candWidePeripheral || (keepFov < 40.0f && candFov >= 45.0f && cand.rangeM < keep.rangeM))) ||
                  candClippedOrSat)) {
@@ -619,7 +646,8 @@ void BackboneRTDETR::decodeAndLift3D(const SimConfig& cfg,
                 radGate = std::max(radGate, ((candFov > 95.0f || candWidePeripheral || candClippedOrSat) ? 0.72f : 0.48f) * refR);
             }
             if (dLatEff <= latGate && dRad <= radGate) {
-                suppressed3dScratch_[j] = 1;
+              multicam::applyDetectionCorroboration(keep, cand);
+              suppressed3dScratch_[j] = 1;
             }
         }
         out3D.push_back(keep);
