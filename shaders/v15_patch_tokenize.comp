@@ -1,0 +1,85 @@
+#version 450
+// FSD v15 Module 3b: Partition 10 160x120 virtual pinhole views into 32x24 5x5 patches
+// with upright-vehicle Plucker coordinates (d, m = o x d) in a 4-frame deltaT ring buffer.
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+struct PatchTokenGpu {
+    vec4 app0;     // meanR, meanG, meanB, validFrac
+    vec4 app1;     // meanLow, rmsHigh, meanGx, meanGy
+    vec4 pluckerD; // d_veh.xyz, float(viewIdx)
+    vec4 pluckerM; // cross(o_veh, d_veh).xyz, deltaT_sec
+};
+
+struct VirtPluckerSpecGpu {
+    mat4 uprightVehFromVirtCam;
+    vec4 virtIntr; // fx, fy, cx, cy
+};
+
+layout(std430, binding = 0) readonly buffer VirtLinearIn { vec4 px[]; } uVirtLin;
+layout(std430, binding = 1) readonly buffer VirtBandsIn { vec4 px[]; } uVirtBands;
+layout(std430, binding = 2) readonly buffer PluckerSpecs { VirtPluckerSpecGpu views[]; } uSpecs;
+layout(std430, binding = 3) buffer PatchRingOut { PatchTokenGpu tok[]; } uRing;
+
+layout(push_constant) uniform PatchPC {
+    uint gridW;
+    uint gridH;
+    uint virtW;
+    uint virtH;
+    uint numViews;
+    uint patchPx;
+    uint headSlot;
+    uint validSlots;
+    float dt;
+} pc;
+
+void main() {
+    const uint px = gl_GlobalInvocationID.x;
+    const uint py = gl_GlobalInvocationID.y;
+    const uint v = gl_GlobalInvocationID.z;
+    if (px >= pc.gridW || py >= pc.gridH || v >= pc.numViews) return;
+
+    vec3 rgbSum = vec3(0.0);
+    float lowSum = 0.0, highSq = 0.0, gxSum = 0.0, gySum = 0.0, validCnt = 0.0;
+    const uint viewBase = v * pc.virtW * pc.virtH;
+    for (uint dy = 0u; dy < pc.patchPx; ++dy) {
+        const uint iy = py * pc.patchPx + dy;
+        for (uint dx = 0u; dx < pc.patchPx; ++dx) {
+            const uint ix = px * pc.patchPx + dx;
+            const uint pixIdx = viewBase + iy * pc.virtW + ix;
+            const vec4 lin = uVirtLin.px[pixIdx];
+            if (lin.w > 0.5) {
+                const vec4 bnd = uVirtBands.px[pixIdx];
+                rgbSum += lin.rgb;
+                lowSum += bnd.x;
+                highSq += bnd.y * bnd.y;
+                gxSum += bnd.z;
+                gySum += bnd.w;
+                validCnt += 1.0;
+            }
+        }
+    }
+
+    const float denom = max(validCnt, 1.0);
+    const float validFrac = validCnt / float(pc.patchPx * pc.patchPx);
+    const VirtPluckerSpecGpu sp = uSpecs.views[v];
+    const vec2 pCtr = (vec2(px, py) + 0.5) * float(pc.patchPx);
+    const vec3 rayCam = normalize(vec3((pCtr - sp.virtIntr.zw) / sp.virtIntr.xy, 1.0));
+    const vec3 oVeh = sp.uprightVehFromVirtCam[3].xyz;
+    const vec3 dVeh = normalize(mat3(sp.uprightVehFromVirtCam) * rayCam);
+    const vec3 mVeh = cross(oVeh, dVeh);
+
+    const uint frameStride = pc.numViews * pc.gridW * pc.gridH;
+    const uint localIdx = (v * pc.gridH + py) * pc.gridW + px;
+    uRing.tok[pc.headSlot * frameStride + localIdx] = PatchTokenGpu(
+        vec4(rgbSum / denom, validFrac),
+        vec4(lowSum / denom, sqrt(highSq / denom), gxSum / denom, gySum / denom),
+        vec4(dVeh, float(v)),
+        vec4(mVeh, 0.0));
+
+    // Increment age cleanly across active history slots (disjoint localIdx per invocation).
+    for (uint s = 0u; s < pc.validSlots; ++s) {
+        if (s != pc.headSlot) {
+            uRing.tok[s * frameStride + localIdx].pluckerM.w += pc.dt;
+        }
+    }
+}
