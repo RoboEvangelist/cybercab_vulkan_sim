@@ -43,6 +43,7 @@ private:
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
+    mutable std::vector<VkDescriptorSet> allocatedSets_;
 };
 
 std::vector<uint32_t> readSpirvFile(const std::string& path);

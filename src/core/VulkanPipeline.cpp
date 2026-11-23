@@ -119,6 +119,14 @@ void VulkanComputePipeline::create(const VulkanContext& ctx,
 
 void VulkanComputePipeline::destroy() {
     if (ctx_ && ctx_->device() != VK_NULL_HANDLE) {
+        if (!allocatedSets_.empty() &&
+            ctx_->descriptorPool() != VK_NULL_HANDLE) {
+            vkFreeDescriptorSets(
+                ctx_->device(), ctx_->descriptorPool(),
+                static_cast<uint32_t>(allocatedSets_.size()),
+                allocatedSets_.data());
+        }
+        allocatedSets_.clear();
         if (pipeline_ != VK_NULL_HANDLE) {
             vkDestroyPipeline(ctx_->device(), pipeline_, nullptr);
             pipeline_ = VK_NULL_HANDLE;
@@ -143,6 +151,7 @@ VkDescriptorSet VulkanComputePipeline::allocateDescriptorSet() const {
     dsai.pSetLayouts = &setLayout_;
     VkDescriptorSet set = VK_NULL_HANDLE;
     VK_CHECK(vkAllocateDescriptorSets(ctx_->device(), &dsai, &set));
+    allocatedSets_.push_back(set);
     return set;
 }
 
