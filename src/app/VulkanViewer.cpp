@@ -148,6 +148,22 @@ Vec3 semanticColor(SemanticClass sem) {
     }
 }
 
+constexpr int kViewModeBtnCount = 4;
+constexpr float kViewModeBtnGap = 4.0f;
+constexpr uint8_t kRealityBgAlpha = 255u;
+constexpr uint8_t kRealityZeroByte = 0u;
+constexpr float kPipCardPad = 8.0f;
+constexpr float kPipHeaderH = 18.0f;
+constexpr float kPipStripH = 74.0f;
+constexpr float kPipFullScale = 2.0f;
+constexpr float kPipTextScale = 1.05f;
+constexpr float kPipLineStepY = 15.0f;
+const Vec4 kRealityCardBg{0.035f, 0.051f, 0.086f, 0.90f};
+const Vec4 kRealityCardBorder{0.13f, 0.83f, 0.93f, 0.90f};
+const Vec4 kRealityHeaderCol{0.13f, 0.83f, 0.93f, 1.0f};
+const Vec4 kRealitySubCol{0.84f, 0.89f, 0.96f, 1.0f};
+const Vec4 kRealityWarnCol{0.98f, 0.65f, 0.14f, 1.0f};
+
 } // namespace
 
 VulkanViewer::~VulkanViewer() {
@@ -185,12 +201,26 @@ void VulkanViewer::init(SimConfig& cfg, WorldEngine& world, CameraRigRenderer& r
                       VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT, true, VK_FILTER_NEAREST);
     fontAtlas_.uploadRGBA8(fontPixels.data(), BitmapFontAtlas::kAtlasW, BitmapFontAtlas::kAtlasH);
 
-    for (int c = 0; c < 8; ++c) {
-        VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, nullptr,
-                                       ctx_->descriptorPool(), 1, &uiSetLayout_};
-        VK_CHECK(vkAllocateDescriptorSets(ctx_->device(), &ai, &uiSets_[c]));
-    }
-    refreshCameraDescriptors(rig);
+  realityImg_.create(
+    *ctx_, v15_hud::kRealityTexW, v15_hud::kRealityTexH,
+    VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT,
+    VK_IMAGE_ASPECT_COLOR_BIT, true, VK_FILTER_LINEAR);
+  std::vector<uint8_t> initReality(
+    v15_hud::kRealityExpectedBytes, kRealityZeroByte);
+  for (size_t i = v15_hud::kRealityRgbaChannels - 1u;
+       i < initReality.size(); i += v15_hud::kRealityRgbaChannels) {
+    initReality[i] = kRealityBgAlpha;
+  }
+  realityImg_.uploadRGBA8(
+    initReality.data(), v15_hud::kRealityTexW, v15_hud::kRealityTexH);
+
+  for (int c = 0; c < v15_hud::kTotalUiSetCount; ++c) {
+    VkDescriptorSetAllocateInfo ai{
+      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, nullptr,
+      ctx_->descriptorPool(), 1, &uiSetLayout_};
+    VK_CHECK(vkAllocateDescriptorSets(ctx_->device(), &ai, &uiSets_[c]));
+  }
+  refreshCameraDescriptors(rig);
 
     // Pre-allocate dynamic GPU vertex/index buffers
     dynWorldVB_.create(*ctx_, 65536 * sizeof(SceneVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
@@ -222,7 +252,7 @@ void VulkanViewer::init(SimConfig& cfg, WorldEngine& world, CameraRigRenderer& r
 
 void VulkanViewer::refreshCameraDescriptors(const CameraRigRenderer& rig) {
     if (!ctx_) return;
-    for (int c = 0; c < 8; ++c) {
+  for (int c = 0; c < v15_hud::kUiCameraSetCount; ++c) {
         VkDescriptorImageInfo camInfo{rig.distortedImage(c).sampler(), rig.distortedImage(c).view(),
                                       VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorImageInfo fontInfo{fontAtlas_.sampler(), fontAtlas_.view(),
@@ -234,6 +264,22 @@ void VulkanViewer::refreshCameraDescriptors(const CameraRigRenderer& rig) {
                      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &fontInfo, nullptr, nullptr};
         vkUpdateDescriptorSets(ctx_->device(), 2, writes, 0, nullptr);
     }
+  VkDescriptorImageInfo realityInfo{
+    realityImg_.sampler(), realityImg_.view(),
+    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+  VkDescriptorImageInfo fontInfo{
+    fontAtlas_.sampler(), fontAtlas_.view(),
+    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+  VkWriteDescriptorSet rw[2]{};
+  rw[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+           uiSets_[v15_hud::kRealityUiSetIdx], 0, 0, 1,
+           VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &realityInfo, nullptr,
+           nullptr};
+  rw[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+           uiSets_[v15_hud::kRealityUiSetIdx], 1, 0, 1,
+           VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &fontInfo, nullptr,
+           nullptr};
+  vkUpdateDescriptorSets(ctx_->device(), 2, rw, 0, nullptr);
 }
 
 void VulkanViewer::destroy() {
@@ -247,6 +293,7 @@ void VulkanViewer::destroy() {
     voxelVB_.destroy(); voxelIB_.destroy();
     lineVB_.destroy();
     uiVB_.destroy(); uiIB_.destroy();
+    realityImg_.destroy();
     fontAtlas_.destroy();
 
     if (uiPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(ctx_->device(), uiPipeline_, nullptr);
@@ -574,10 +621,23 @@ void VulkanViewer::applyUiAction(UiAction action, int param, SimConfig& cfg, Wor
             break;
         }
         case UiAction::SetViewMode: {
-            toggles.viewMode = static_cast<ViewMode>(std::clamp(param, 0, 2));
-            toastMsg = (toggles.viewMode == ViewMode::Chase3D) ? "Viewport: 3D Twin"
-                     : (toggles.viewMode == ViewMode::FsdVoxel) ? "Viewport: FSD Voxel" : "Viewport: BEV Tactical";
-            break;
+          toggles.viewMode = static_cast<ViewMode>(
+            std::clamp(param, 0, v15_hud::kMaxViewModeIdx));
+          switch (toggles.viewMode) {
+            case ViewMode::Chase3D:
+              toastMsg = "Viewport: 3D Twin";
+              break;
+            case ViewMode::FsdVoxel:
+              toastMsg = "Viewport: FSD Voxel";
+              break;
+            case ViewMode::BevTactical:
+              toastMsg = "Viewport: BEV Tactical";
+              break;
+            case ViewMode::RealityView:
+              toastMsg = "Viewport: v15 Reality View";
+              break;
+          }
+          break;
         }
         case UiAction::ToggleRes: {
             const bool toFull = (rig.camWidth() == cfg.camWidth);
@@ -722,7 +782,13 @@ bool VulkanViewer::pollEvents(SimConfig& cfg, WorldEngine& world, CameraRigRende
             else if (k == SDLK_3) applyUiAction(UiAction::SetCamOverlay, 2, cfg, world, rig, pipeline, toggles, toastMsg);
             else if (k == SDLK_4) applyUiAction(UiAction::SetCamOverlay, 3, cfg, world, rig, pipeline, toggles, toastMsg);
             else if (k == SDLK_5) applyUiAction(UiAction::SetCamOverlay, 4, cfg, world, rig, pipeline, toggles, toastMsg);
-            else if (k == SDLK_v) applyUiAction(UiAction::SetViewMode, (static_cast<int>(toggles.viewMode) + 1) % 3, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_v) {
+              const int nextVm =
+                (static_cast<int>(toggles.viewMode) + 1) %
+                v15_hud::kTotalViewModes;
+              applyUiAction(UiAction::SetViewMode, nextVm, cfg, world, rig,
+                            pipeline, toggles, toastMsg);
+            }
             else if (k == SDLK_SPACE) applyUiAction(UiAction::ToggleDriveMode, 0, cfg, world, rig, pipeline, toggles, toastMsg);
             else if (k == SDLK_b) applyUiAction(UiAction::ToggleAeb, 0, cfg, world, rig, pipeline, toggles, toastMsg);
             else if (k == SDLK_r) applyUiAction(UiAction::ToggleRes, 0, cfg, world, rig, pipeline, toggles, toastMsg);
@@ -1211,16 +1277,24 @@ void VulkanViewer::buildUiOverlay(const SimConfig& cfg, const WorldEngine& world
     ly += 16.0f;
 
     const float thirdW = (innerW - 8.0f) / 3.0f;
-    addChipButton(pad + 10.0f, ly, thirdW, 22.0f, "3D Twin",
-                  toggles.viewMode == ViewMode::Chase3D, {0.52f, 0.34f, 0.08f, 0.95f}, {0.96f, 0.65f, 0.14f, 1.0f},
-                  UiAction::SetViewMode, 0);
-    addChipButton(pad + 10.0f + thirdW + 4.0f, ly, thirdW, 22.0f, "FSD Voxel",
-                  toggles.viewMode == ViewMode::FsdVoxel, {0.52f, 0.34f, 0.08f, 0.95f}, {0.96f, 0.65f, 0.14f, 1.0f},
-                  UiAction::SetViewMode, 1);
-    addChipButton(pad + 10.0f + 2.0f * (thirdW + 4.0f), ly, thirdW, 22.0f, "BEV Tact",
-                  toggles.viewMode == ViewMode::BevTactical, {0.52f, 0.34f, 0.08f, 0.95f}, {0.96f, 0.65f, 0.14f, 1.0f},
-                  UiAction::SetViewMode, 2);
-    ly += 27.0f;
+  constexpr float kPanelPad = 10.0f;
+  constexpr float kModeBtnH = 22.0f;
+  constexpr float kModeRowAdvY = 27.0f;
+  const Vec4 kModeBg{0.52f, 0.34f, 0.08f, 0.95f};
+  const Vec4 kModeBd{0.96f, 0.65f, 0.14f, 1.0f};
+  const float modeW =
+    (innerW - kViewModeBtnGap * static_cast<float>(kViewModeBtnCount - 1)) /
+    static_cast<float>(kViewModeBtnCount);
+  const std::array<const char*, kViewModeBtnCount> vmLabels = {
+    "3D Twin", "FSD Vox", "BEV", "v15 Real"};
+  for (int m = 0; m < kViewModeBtnCount; ++m) {
+    const float bx =
+      pad + kPanelPad + static_cast<float>(m) * (modeW + kViewModeBtnGap);
+    addChipButton(bx, ly, modeW, kModeBtnH, vmLabels[m],
+                  static_cast<int>(toggles.viewMode) == m, kModeBg, kModeBd,
+                  UiAction::SetViewMode, m);
+  }
+  ly += kModeRowAdvY;
 
     const std::string resLbl = (rig.camWidth() == cfg.camWidth) ? "Res:320x240" : "Res:640x480";
     const bool isAuto = (cfg.driveMode == "auto");
@@ -1342,6 +1416,42 @@ void VulkanViewer::buildUiOverlay(const SimConfig& cfg, const WorldEngine& world
         uiText((W - tw) * 0.5f + 12.0f, topBarH + 20.0f, 1.3f, {0.88f, 0.97f, 1.0f, 1.0f}, toastMsg);
     }
 
+  if (perc.v15.active) {
+    constexpr float kCenterHalf = 0.5f;
+    constexpr float kBorderPx = 1.0f;
+    constexpr float kFullTopMargin = 24.0f;
+    constexpr float kStripPadY = 6.0f;
+    constexpr float kHeaderTxtY = 4.0f;
+    const Vec4 kWhiteTint{1.0f, 1.0f, 1.0f, 1.0f};
+    const auto hud = v15_hud::formatV15HudTelemetry(ego, perc, cmd);
+    const bool fullReal = (toggles.viewMode == ViewMode::RealityView);
+    const float sc = fullReal ? kPipFullScale : kBorderPx;
+    const float imgW = static_cast<float>(v15_hud::kRealityTexW) * sc;
+    const float imgH = static_cast<float>(v15_hud::kRealityTexH) * sc;
+    const float cardW = imgW + kPipFullScale * kPipCardPad;
+    const float cardH =
+      kPipHeaderH + imgH + kPipStripH + kPipFullScale * kPipCardPad;
+    const float cx = (W - cardW) * kCenterHalf;
+    const float cy = fullReal ? (topBarH + kFullTopMargin) : (H - pad - cardH);
+    uiPanelsScratch_.push_back({cx, cy, cardW, cardH});
+    uiRect(cx, cy, cardW, cardH, kRealityCardBg);
+    uiRectOutline(cx, cy, cardW, cardH, kBorderPx, kRealityCardBorder);
+    uiText(cx + kPipCardPad, cy + kHeaderTxtY, kPipTextScale,
+           kRealityHeaderCol, hud.header.data());
+    flushBatch(0);
+    uiTexQuad(cx + kPipCardPad, cy + kPipHeaderH, imgW, imgH, kWhiteTint);
+    flushBatch(v15_hud::kRealityUiSetIdx);
+    const float sy = cy + kPipHeaderH + imgH + kStripPadY;
+    uiText(cx + kPipCardPad, sy, kPipTextScale, kRealitySubCol,
+           hud.calib.data());
+    const Vec4 audioCol =
+      perc.v15.sirenDetected ? kRealityWarnCol : kRealitySubCol;
+    uiText(cx + kPipCardPad, sy + kPipLineStepY, kPipTextScale, audioCol,
+           hud.audio.data());
+    uiText(cx + kPipCardPad, sy + kPipFullScale * kPipLineStepY,
+           kPipTextScale, kRealityHeaderCol, hud.compute.data());
+  }
+
     flushBatch(0);
 
     if (!uiVertsScratch_.empty() && uiVertsScratch_.size() <= 65536 && uiIdxScratch_.size() <= 131072) {
@@ -1366,6 +1476,12 @@ void VulkanViewer::renderFrame(const SimConfig& cfg, const WorldEngine& world, c
         return;
     }
     VK_CHECK(vkResetFences(ctx_->device(), 1, &inFlightFence_));
+
+  if (perc.v15.active &&
+      perc.v15RealityRgba.size() == v15_hud::kRealityExpectedBytes) {
+    realityImg_.uploadRGBA8(perc.v15RealityRgba.data(), v15_hud::kRealityTexW,
+                            v15_hud::kRealityTexH);
+  }
 
     dynVertsScratch_.clear();
     dynIdxScratch_.clear();

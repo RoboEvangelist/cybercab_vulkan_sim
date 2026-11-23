@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/V15HudOverlay.hpp"
 #include "config/SimConfig.hpp"
 #include "core/VulkanBuffer.hpp"
 #include "core/VulkanContext.hpp"
@@ -17,9 +18,10 @@
 namespace cybercab {
 
 enum class ViewMode : uint8_t {
-    Chase3D = 0,
-    FsdVoxel = 1,
-    BevTactical = 2
+  Chase3D = 0,
+  FsdVoxel = 1,
+  BevTactical = 2,
+  RealityView = 3
 };
 
 enum class CamOverlayMode : uint8_t {
@@ -136,9 +138,10 @@ private:
     VkDescriptorSetLayout uiSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout uiLayout_ = VK_NULL_HANDLE;
     VkPipeline uiPipeline_ = VK_NULL_HANDLE;
-    std::array<VkDescriptorSet, 8> uiSets_{};
+    std::array<VkDescriptorSet, v15_hud::kTotalUiSetCount> uiSets_{};
 
     VulkanImage fontAtlas_;
+    VulkanImage realityImg_;
 
     // Pre-allocated dynamic geometry & UI vertex/index buffers (zero hot-path allocations)
     VulkanBuffer dynWorldVB_, dynWorldIB_;
