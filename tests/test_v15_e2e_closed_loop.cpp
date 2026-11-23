@@ -16,8 +16,11 @@ struct LoopStats {
     bool collision = false;
     bool seenSirenYield = false;
     bool seenSoiledMrm = false;
+    bool seenRedHold = false;
+    bool seenGreenAfterRed = false;
     float maxAbsLat = 0.0f;
     float maxCruiseDevM = 0.0f;
+    float greenReleaseAdvanceM = 0.0f;
     int dividerFrames = 0;
     double meanRecall = 0.0;
     double meanPrec = 0.0;
@@ -35,6 +38,8 @@ LoopStats runClosedLoop(VulkanContext& ctx, SimConfig cfg, const std::string& mo
         cfg.cameras[0].soiled = cfg.cameras[2].soiled = cfg.cameras[3].soiled = true;
     } else if (mode == "soil_all_front") {
         cfg.cameras[0].soiled = cfg.cameras[1].soiled = cfg.cameras[2].soiled = true;
+    } else if (mode == "red_queue") {
+        world.setForcedRedSignal(true);
     }
 
     CameraRigRenderer rig;
@@ -51,8 +56,10 @@ LoopStats runClosedLoop(VulkanContext& ctx, SimConfig cfg, const std::string& mo
     const float dt = 1.0f / cfg.controlHz;
     double rSum = 0.0, pSum = 0.0, gSum = 0.0, wSum = 0.0;
     int mCnt = 0;
+    Vec3 greenStartPos = world.ego().pos;
 
     for (int s = 0; s < steps; ++s) {
+        if (mode == "red_queue" && s == 40) world.setForcedRedSignal(false);
         const auto t0 = std::chrono::steady_clock::now();
         rig.renderAllCameras(world, cfg, static_cast<float>(s) * dt, &profiler);
         perc.runFrame(ctx, rig, world, dt, cfg.occEnableShadows, out, &profiler);
@@ -64,6 +71,11 @@ LoopStats runClosedLoop(VulkanContext& ctx, SimConfig cfg, const std::string& mo
         if (world.lastContact().occurred) st.collision = true;
         if (cmd.behaviorState == "YIELDING_SIREN") st.seenSirenYield = true;
         if (cmd.behaviorState == "SENSOR_SOILED_MRM") st.seenSoiledMrm = true;
+        if (cmd.behaviorState == "RED_LIGHT_HOLD") st.seenRedHold = true;
+        if (mode == "red_queue" && !st.seenGreenAfterRed && s > 40 && world.signalPhase() == SignalPhase::Green) {
+            st.seenGreenAfterRed = true;
+            greenStartPos = world.ego().pos;
+        }
         st.maxAbsLat = std::max(st.maxAbsLat, std::abs(world.ego().currentLateralOffset));
         if (std::abs(world.ego().currentLateralOffset) < 1.40f) ++st.dividerFrames;
         if (cmd.behaviorState == "CRUISING" && cmd.gear == 1) {
@@ -76,6 +88,9 @@ LoopStats runClosedLoop(VulkanContext& ctx, SimConfig cfg, const std::string& mo
             wSum += std::chrono::duration<double, std::milli>(t1 - t0).count();
             ++mCnt;
         }
+    }
+    if (st.seenGreenAfterRed) {
+        st.greenReleaseAdvanceM = std::hypot(world.ego().pos.x - greenStartPos.x, world.ego().pos.z - greenStartPos.z);
     }
     if (mCnt > 0) {
         st.meanRecall = rSum / mCnt;
@@ -139,11 +154,23 @@ TEST_F(V15EndToEndClosedLoopTest, HazardAndMultimodalScenariosHaveZeroCollisions
     SimConfig cfg = SimConfig::loadFromYaml(resolveAssetPath("config/cybercab_sim.yaml"));
     cfg.pipelineVersion = "v15";
     for (const char* mode : {"jaywalk", "occluded", "hardbrake", "siren", "soil_partial", "soil_all_front"}) {
-        const LoopStats st = runClosedLoop(s_ctx, cfg, mode, 45);
+        const LoopStats st = runClosedLoop(s_ctx, cfg, mode, 60);
         EXPECT_FALSE(st.collision) << "Collision in v15 scenario: " << mode;
         if (std::string(mode) == "siren") { EXPECT_TRUE(st.seenSirenYield); }
         if (std::string(mode) == "soil_all_front") { EXPECT_TRUE(st.seenSoiledMrm); }
     }
+}
+
+TEST_F(V15EndToEndClosedLoopTest, ExtendedTrafficAndRedLightQueueHaveZeroCollisions) {
+    SimConfig cfg = SimConfig::loadFromYaml(resolveAssetPath("config/cybercab_sim.yaml"));
+    cfg.pipelineVersion = "v15";
+    const LoopStats st = runClosedLoop(s_ctx, cfg, "red_queue", 360);
+    EXPECT_FALSE(st.collision);
+    EXPECT_TRUE(st.seenRedHold);
+    EXPECT_TRUE(st.seenGreenAfterRed);
+    EXPECT_LE(st.maxAbsLat, 2.45f);
+    EXPECT_GT(st.greenReleaseAdvanceM, 2.0f);
+    RecordProperty("v15_red_queue_advance_m", testutil::fmtProp(st.greenReleaseAdvanceM));
 }
 
 } // namespace
