@@ -19,7 +19,7 @@ layout(push_constant) uniform BackbonePC {
     uint patchCols;
     uint patchRows;
     uint hasPrevTensor;
-    uint pad0;
+  uint v15Mode;
     vec4 horizon03;
     vec4 horizon47;
     vec4 horizonSlope03;
@@ -54,6 +54,33 @@ bool isVehBodySample(vec3 s) {
 
 bool isDarkAsphaltSample(vec3 s) {
     return (s.b >= s.g * 0.96) && (satOf(s) < 0.36) && (luma(s) < 0.225);
+}
+
+const float kCargoMinGbRatio = 2.15;
+const float kCargoMaxGbRatio = 4.45;
+const float kCargoMinLuma = 0.14;
+const float kCargoWarmRgRatio = 1.05;
+const float kCargoStripeMinLuma = 0.45;
+const float kCargoVehBoost = 0.90;
+const int kCargoVertOffPx = 2;
+
+bool isWarmCargoSample(vec3 col) {
+  const bool warmFace = (col.r > col.g * kCargoWarmRgRatio) &&
+                        (luma(col) > kCargoMinLuma);
+  return warmFace || (luma(col) > kCargoStripeMinLuma);
+}
+
+bool detectRaisedCargoBox(uint cam, int spx, int spy, int sy, vec3 c,
+                          float rawAmber, float lC) {
+  if (pc.v15Mode == 0u || rawAmber <= 0.5 || lC <= kCargoMinLuma) {
+    return false;
+  }
+  if (c.g <= c.b * kCargoMinGbRatio || c.g >= c.b * kCargoMaxGbRatio) {
+    return false;
+  }
+  const vec3 cU = fetchCurr(cam, spx, spy - kCargoVertOffPx * sy);
+  const vec3 cD = fetchCurr(cam, spx, spy + kCargoVertOffPx * sy);
+  return isWarmCargoSample(cU) && isWarmCargoSample(cD);
 }
 
 shared vec4 s_block[8][8][4];
@@ -137,7 +164,14 @@ void main() {
                     isWhiteStripe = clamp(1.0 - sat * 5.0, 0.0, 1.0) * clamp((lC - 0.42) * 4.5, 0.0, 1.0);
                 }
             }
-            const float isAmberCurb = (vFrac > min(0.45, camHorizV + 0.004) && c.r > c.g * 1.05 && c.r < c.g * 1.82 && c.g > c.b * 1.15 && (c.r - c.b) > 0.10) ? 1.0 : 0.0;
+            const bool amberVert = (vFrac > min(0.45, camHorizV + 0.004));
+            const bool amberHue =
+              (c.r > c.g * 1.05) && (c.r < c.g * 1.82) &&
+              (c.g > c.b * 1.15) && ((c.r - c.b) > 0.10);
+            const float rawAmber = (amberVert && amberHue) ? 1.0 : 0.0;
+            const bool isRaisedCargo =
+              detectRaisedCargoBox(cam, spx, spy, sy, c, rawAmber, lC);
+            const float isAmberCurb = isRaisedCargo ? 0.0 : rawAmber;
             const float isRoad = clamp(isAsphalt + isSlateGround + isWhiteStripe + isAmberCurb, 0.0, 1.0);
 
             // Emissive red/green signal lenses or deep crimson / bloomed-pink taillights (exclude amber road curbs!)
@@ -228,7 +262,12 @@ void main() {
             const bool isOrangePed = (c.r > 0.24) && (c.g >= c.r * 0.32) && (c.g > c.b * 1.80) && (sat > 0.50);
             // Crimson-magenta pedestrian outfits (c.b/c.g ~ 1.49 on PED_08; synthetic magenta test cars have c.b/c.g > 2.0)
             const bool isCrimsonPed = (c.r > c.b * 1.40) && (c.b > c.g * 1.24) && (c.b < c.g * 1.85) && (sat > 0.44);
-            const float isPedColor = isEgoSelf ? 0.0 : (clamp((sat - 0.44) * 2.8, 0.0, 1.0) * clamp((lC - 0.06) * 5.0, 0.0, 1.0) * (1.0 - isSky) * (1.0 - isRoad));
+            const float pedColorRaw =
+              clamp((sat - 0.44) * 2.8, 0.0, 1.0) *
+              clamp((lC - 0.06) * 5.0, 0.0, 1.0) *
+              (1.0 - isSky) * (1.0 - isRoad);
+            const float isPedColor =
+              (isEgoSelf || isRaisedCargo) ? 0.0 : pedColorRaw;
             const float isPed = isPedColor * roadBand;
 
             // Vehicle chassis: mid-frame painted car body / red-orange or bloomed taillight / shaded or sunlit truck cargo box
@@ -274,7 +313,13 @@ void main() {
                     isVehDarkBase = (luma(vL3) < 0.12 || luma(vR3) < 0.12);
                 }
             }
-            const float isVeh = clamp(isVehPaint + isTail * 1.4 + isTruckBox + isVehGlass + (isSilverMetallic ? 0.78 : 0.0) + (isVehDarkBase ? 0.68 : 0.0), 0.0, 1.0);
+            const float tailTerm = isTail * 1.4;
+            const float silverTerm = isSilverMetallic ? 0.78 : 0.0;
+            const float darkBaseTerm = isVehDarkBase ? 0.68 : 0.0;
+            const float cargoTerm = isRaisedCargo ? kCargoVehBoost : 0.0;
+            const float baseVehScore = isVehPaint + tailTerm + isTruckBox +
+                                       isVehGlass + silverTerm + darkBaseTerm;
+            const float isVeh = clamp(baseVehScore + cargoTerm, 0.0, 1.0);
 
             // Buildings & ground-floor window strips above camera horizon (do not mask truck cargo box!)
             const float isBldg = (1.0 - isSky) * (1.0 - isRoad) * (1.0 - isTruckBox) * (1.0 - isVehGlass) * (isSilverMetallic ? 0.0 : 1.0) * smoothstep(camHorizV, camHorizV - 0.038, vFrac) * 0.95;

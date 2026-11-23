@@ -55,6 +55,7 @@ private:
     float nmsIouThresh_ = 0.45f;
     float maxRangeM_ = 65.0f;
     float lowConfThresh_ = 0.24f;
+  bool isV15_ = false;
     VkDeviceSize tensorBytes_ = 0;
 
     VulkanComputePipeline backbonePipe_;

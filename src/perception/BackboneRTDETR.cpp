@@ -18,7 +18,7 @@ struct BackbonePC {
     uint32_t patchCols;
     uint32_t patchRows;
     uint32_t hasPrevTensor;
-    uint32_t pad0;
+  uint32_t v15Mode;
     Vec4 horizon03;
     Vec4 horizon47;
     Vec4 horizonSlope03;
@@ -76,6 +76,7 @@ void BackboneRTDETR::init(const VulkanContext& ctx, const SimConfig& cfg,
     nmsIouThresh_ = cfg.rtdetrNmsIouThresh;
     maxRangeM_ = cfg.rtdetrMaxRangeM;
     lowConfThresh_ = cfg.rtdetrLowConfThresh;
+  isV15_ = cfg.isV15();
     for (int c = 0; c < 8; ++c) {
         const auto& spec = cfg.cameras.at(c);
         const Mat4 egoFromCam = spec.extrinsicEgoFromCamISO();
@@ -261,7 +262,7 @@ void BackboneRTDETR::recordBackbone(VkCommandBuffer cmd, int camW, int camH) con
         static_cast<uint32_t>(patchCols_),
         static_cast<uint32_t>(patchRows_),
         hasPrevTensor_ ? 1u : 0u,
-        0u,
+      isV15_ ? 1u : 0u,
         {camHorizonV_[0], camHorizonV_[1], camHorizonV_[2], camHorizonV_[3]},
         {camHorizonV_[4], camHorizonV_[5], camHorizonV_[6], camHorizonV_[7]},
         {camHorizonSlope_[0], camHorizonSlope_[1], camHorizonSlope_[2], camHorizonSlope_[3]},
