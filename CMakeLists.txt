@@ -166,6 +166,7 @@ add_executable(cybercab_tests
     tests/test_v15_autoreg_planner.cpp
     tests/test_v15_gaussian_planner.cpp
     tests/test_v15_telemetry_and_reality_hud.cpp
+    tests/test_v15_hdr_rccb_closed_loop.cpp
     tests/test_v15_e2e_closed_loop.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
