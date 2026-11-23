@@ -1,0 +1,70 @@
+#version 450
+// FSD v15 Module 2a: Tile gradient reduction on M1c FrequencySplit bands (vec4(low, high, gx, gy))
+// preserving discrete Green's theorem integral of edge normals for sub-pixel online pitch/roll solve.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+struct CalibTileGpu {
+    vec4 gradMag;       // sumGx, sumGy, sumMag, coherence
+    vec4 centroidCam;   // cxPx, cyPx, float(camIdx), 0
+};
+
+layout(std430, binding = 0) readonly buffer BandsIn { vec4 px[]; } uBands;
+layout(std430, binding = 1) writeonly buffer TilesOut { CalibTileGpu tiles[]; } uTiles;
+
+layout(push_constant) uniform SelfCalibPC {
+    uint width;
+    uint height;
+    uint numCams;
+    uint tilePx;
+    uint tilesX;
+    uint tilesY;
+    float minGrad;
+} pc;
+
+shared vec3 sGradMag[64];
+shared vec2 sWeightedPos[64];
+
+void main() {
+    const uint tx = gl_WorkGroupID.x;
+    const uint ty = gl_WorkGroupID.y;
+    const uint cam = gl_WorkGroupID.z;
+    if (tx >= pc.tilesX || ty >= pc.tilesY || cam >= pc.numCams) return;
+
+    const uint lid = gl_LocalInvocationID.y * 8u + gl_LocalInvocationID.x;
+    const uint step = max(1u, pc.tilePx / 8u);
+    vec3 gm = vec3(0.0);
+    vec2 wp = vec2(0.0);
+    for (uint dy = 0u; dy < step; ++dy) {
+        const uint py = ty * pc.tilePx + gl_LocalInvocationID.y * step + dy;
+        if (py < 2u || py + 2u >= pc.height) continue;
+        for (uint dx = 0u; dx < step; ++dx) {
+            const uint px = tx * pc.tilePx + gl_LocalInvocationID.x * step + dx;
+            if (px < 2u || px + 2u >= pc.width) continue;
+            const vec2 g = uBands.px[((cam * pc.height + py) * pc.width) + px].zw;
+            const float m = length(g);
+            // Keep vertical-edge & stair-step pixels while excluding pure horizontal window ledges.
+            if (m >= pc.minGrad && abs(g.x) >= 0.85 * abs(g.y)) {
+                gm += vec3(g, m);
+                wp += vec2(float(px) + 0.5, float(py) + 0.5) * m;
+            }
+        }
+    }
+    sGradMag[lid] = gm;
+    sWeightedPos[lid] = wp;
+    barrier();
+
+    for (uint s = 32u; s > 0u; s >>= 1u) {
+        if (lid < s) {
+            sGradMag[lid] += sGradMag[lid + s];
+            sWeightedPos[lid] += sWeightedPos[lid + s];
+        }
+        barrier();
+    }
+    if (lid == 0u) {
+        const vec3 tot = sGradMag[0];
+        const float coh = (tot.z > 1e-5) ? (length(tot.xy) / tot.z) : 0.0;
+        const vec2 cen = (tot.z > 1e-5) ? (sWeightedPos[0] / tot.z) : vec2(0.0);
+        uTiles.tiles[((cam * pc.tilesY + ty) * pc.tilesX) + tx] =
+            CalibTileGpu(vec4(tot, coh), vec4(cen, float(cam), 0.0));
+    }
+}
