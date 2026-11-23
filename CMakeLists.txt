@@ -177,6 +177,10 @@ add_executable(cybercab_tests
     tests/test_all_res_v14_v15_validation.cpp
     tests/test_all_res_fmea_safety.cpp
     tests/test_all_res_fmea_env_and_sync.cpp
+    tests/test_av_mot_idsw_and_lane_assoc.cpp
+    tests/test_av_ece_confusion_and_slicing.cpp
+    tests/test_av_velocity_stopping_margin.cpp
+    tests/test_av_road_structure_and_poles.cpp
     tests/test_v15_e2e_closed_loop.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
