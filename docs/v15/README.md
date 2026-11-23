@@ -30,6 +30,7 @@ reasoning with a certificate the author cannot fill in by guessing. Here the cer
 | 7b | M3b 100 Hz kinematics, lane-center nav & Plucker `PatchTokenizer` | [step07b_m3_multimodal_tokens.md](step07b_m3_multimodal_tokens.md) | `bbe0083`..`d5ebb2b` + tests |
 | 8 | M5 persistent SE(3) static spatial memory & selective refresh | [step08_m5_static_memory.md](step08_m5_static_memory.md) | `4eda6b7`..`58b84ff` + tests |
 | 9 | M6 3D/4D Gaussian World Model & Zwicker/Kerbl EWA Reality View | [step09_m6_gaussian_world_model.md](step09_m6_gaussian_world_model.md) | `8c07554`..`b6c0a47` + tests |
+| 10a | M4 self-supervised latent predictor & sparse/KV/FP16 telemetry | [step10a_m4_latent_predictor.md](step10a_m4_latent_predictor.md) | `1e845e4` + tests |
 
 ## Open UNVERIFIED items
 - step02 R2: v14 perception quality under `pipeline_version: v15` not yet re-validated.
