@@ -48,6 +48,8 @@ struct Detection3D {
     float camWeight = 1.0f;
     float epistemicSigma = 0.2f; // Combined geometry + soil uncertainty (m)
     Detection2D det2d{};
+  uint8_t corroboratingCamMask = 0u;
+  int corroboratingCamCount = 1;
 };
 
 enum class TrackState : uint8_t {
@@ -71,6 +73,8 @@ struct Track3D {
     int hits = 0;
     float timeSinceUpdateSec = 0.0f;
     bool matchedLowConf = false; // True when kept alive by ByteTrack Stage-2!
+  uint8_t corroboratingCamMask = 0u;
+  int corroboratingCamCount = 1;
 };
 
 struct alignas(16) TrackPriorGpu {

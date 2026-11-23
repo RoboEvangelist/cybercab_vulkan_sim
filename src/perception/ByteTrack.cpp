@@ -1,4 +1,5 @@
 #include "perception/ByteTrack.hpp"
+#include "perception/MultiCamCorroboration.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -195,7 +196,10 @@ void ByteTracker::predictTrack(InternalTrack& tr, float dt) const {
 
 void ByteTracker::updateTrack(InternalTrack& tr, const EgoState& ego, const Detection3D& det, bool lowConfMatch) {
     const float soilScale = 1.0f / std::max(det.camWeight, cfg_.soilMinTokenWeight);
-    const float measStd = cfg_.btBaseMeasNoiseM * soilScale + det.epistemicSigma;
+  const float corrobScale =
+    multicam::corroborationNoiseScale(det.corroboratingCamCount);
+  const float measStd =
+    cfg_.btBaseMeasNoiseM * soilScale * corrobScale + det.epistemicSigma;
     const RayDelta ray = computeRayDelta(ego, tr.x[0], tr.x[1], det.worldPos.x, det.worldPos.z);
     const bool isVehTrack = (tr.pub.semantic == SemanticClass::Vehicle && det.semantic == SemanticClass::Vehicle);
     float sigmaRad = measStd;
@@ -277,6 +281,11 @@ void ByteTracker::updateTrack(InternalTrack& tr, const EgoState& ego, const Dete
     tr.pub.timeSinceUpdateSec = 0.0f;
     tr.pub.score = det.score;
     tr.pub.matchedLowConf = lowConfMatch;
+  tr.pub.corroboratingCamMask =
+    multicam::resolveCamMask(det.corroboratingCamMask, det.camIndex);
+  tr.pub.corroboratingCamCount = std::max(
+    multicam::kMinCorrobCams,
+    multicam::popcountMask(tr.pub.corroboratingCamMask));
     // Exponentially decayed multi-frame class evidence suppresses single-frame class flicker
     for (float& v : tr.classVotes) v *= 0.72f;
     const int detCls = std::clamp(static_cast<int>(det.semantic), 0, 3);
@@ -313,6 +322,11 @@ void ByteTracker::spawnTrack(const Detection3D& det) {
     tr.pub.state = TrackState::Tentative;
     tr.pub.halfExtents = det.halfExtents;
     tr.pub.score = det.score;
+  tr.pub.corroboratingCamMask =
+    multicam::resolveCamMask(det.corroboratingCamMask, det.camIndex);
+  tr.pub.corroboratingCamCount = std::max(
+    multicam::kMinCorrobCams,
+    multicam::popcountMask(tr.pub.corroboratingCamMask));
     tr.pub.hits = 1;
     tr.pub.timeSinceUpdateSec = 0.0f;
     tr.pub.yaw = det.yaw;
@@ -461,41 +475,43 @@ void ByteTracker::update(float dt, const EgoState& ego, const std::vector<Detect
         if (!highDetMatchedScratch_[d]) {
             const auto& det = detections[highIdxScratch_[d]];
             const float sameClassDupRadius = (det.semantic == SemanticClass::Pedestrian) ? 1.2f : 2.2f;
-            bool duplicateOfExisting = false;
-            for (const auto& tr : tracks_) {
+      InternalTrack* dupTrack = nullptr;
+      for (auto& tr : tracks_) {
                 const float dist = std::hypot(tr.x[0] - det.worldPos.x, tr.x[1] - det.worldPos.z);
                 if ((tr.pub.semantic == det.semantic && dist <= sameClassDupRadius) || dist <= 1.5f) {
-                    duplicateOfExisting = true;
-                    break;
+          dupTrack = &tr;
+          break;
                 }
                 const RayDelta ray = computeRayDelta(ego, tr.x[0], tr.x[1], det.worldPos.x, det.worldPos.z);
                 if (ray.valid) {
                     if (tr.pub.semantic != det.semantic) {
                         const float maxJumpRad = std::min(8.5f, std::max(6.0f, 0.92f * ray.minRange));
                         if (ray.dLat <= 1.25f && ray.dRad <= maxJumpRad) {
-                            duplicateOfExisting = true;
-                            break;
+              dupTrack = &tr;
+              break;
                         }
                     } else if (det.semantic == SemanticClass::Pedestrian &&
                                tr.pub.state != TrackState::Tentative &&
                                ray.minRange > 12.0f && ray.minRange < 55.0f) {
                         const float pedSpreadRad = std::min(9.0f, 0.32f * ray.maxRange);
                         if (ray.dLat <= 1.25f && ray.dRad <= pedSpreadRad) {
-                            duplicateOfExisting = true;
-                            break;
+              dupTrack = &tr;
+              break;
                         }
                     } else if (det.semantic == SemanticClass::Vehicle &&
                                tr.pub.state != TrackState::Tentative &&
                                ray.minRange > 4.5f && ray.minRange < 55.0f) {
                         const float vehSpreadRad = std::min(11.5f, std::max(8.8f, 0.38f * ray.maxRange));
                         if (ray.dLat <= 1.60f && ray.dRad <= vehSpreadRad) {
-                            duplicateOfExisting = true;
-                            break;
+              dupTrack = &tr;
+              break;
                         }
                     }
                 }
             }
-            if (!duplicateOfExisting) {
+      if (dupTrack) {
+        multicam::applyTrackCorroboration(dupTrack->pub, det);
+      } else {
                 const size_t before = tracks_.size();
                 spawnTrack(det);
                 if (tracks_.size() > before) {

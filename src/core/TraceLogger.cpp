@@ -71,6 +71,10 @@ void TraceLogger::logFrame(int stepIdx, float simTimeSec,
         jt["score"] = t.score;
         jt["pos_sigma_m"] = t.posSigmaM;
         jt["low_conf_stage2"] = t.matchedLowConf;
+      jt["hits"] = t.hits;
+      jt["age_sec"] = t.timeSinceUpdateSec;
+      jt["corrob_cams"] = t.corroboratingCamCount;
+      jt["corrob_mask"] = static_cast<int>(t.corroboratingCamMask);
         jTracks.append(jt);
     }
     root["tracks"] = jTracks;
