@@ -180,4 +180,109 @@ inline void appendBox(std::vector<SceneVertex>& v, std::vector<uint32_t>& idx,
   }
 }
 
+inline void emitSculptedEndCap(std::vector<SceneVertex>& verts,
+                               std::vector<uint32_t>& idx, const Mat4& xf,
+                               const Station& st, bool isFront) {
+  constexpr int kCols = 7, kRows = 4;
+  Vec3 g[kRows][kCols]{};
+  const float ys[kRows] = {st.yBot, st.yShld, st.yCan, st.yRoof};
+  const float ws[kRows] = {st.wBot, st.wShld, st.wCan, 0.0f};
+  const float zCurve = isFront ? -0.075f : 0.055f;
+  for (int r = 0; r < kRows; ++r) {
+    for (int c = 0; c < kCols; ++c) {
+      const float u = lerpf(
+        -1.0f, 1.0f, static_cast<float>(c) / static_cast<float>(kCols - 1));
+      const float yMid = (r == kRows - 1)
+                           ? st.yRoof
+                           : lerpf(ys[r], st.yRoof, 0.08f * (1.0f - u * u));
+      g[r][c] = {u * ws[r], yMid, st.z + zCurve * u * u};
+    }
+  }
+  emitGrid<kRows, kCols>(verts, idx, xf, g, kRows, kCols, kGoldDark, 1.0f, 0.0f,
+                         !isFront);
+}
+
+inline void emitSideWindows(std::vector<SceneVertex>& verts,
+                            std::vector<uint32_t>& idx, const Mat4& xf,
+                            const Station (&st)[kNumSt]) {
+  constexpr float wz[kSideWinSt] = {0.10f, 0.24f, 0.40f, 0.58f, 0.78f, 0.98f,
+                                    1.18f, 1.38f, 1.56f, 1.74f, 1.90f, 2.02f};
+  constexpr float wyL[kSideWinSt] = {1.110f, 1.045f, 0.995f, 0.962f,
+                                     0.942f, 0.922f, 0.905f, 0.892f,
+                                     0.880f, 0.870f, 0.862f, 0.858f};
+  constexpr float wyH[kSideWinSt] = {1.132f, 1.200f, 1.255f, 1.295f,
+                                     1.318f, 1.318f, 1.280f, 1.205f,
+                                     1.115f, 1.015f, 0.925f, 0.868f};
+  auto evalUpperX = [&](float zq, float yq) -> float {
+    int seg = kNumSt - 2;
+    for (int s = 0; s < kNumSt - 1; ++s) {
+      if (zq >= st[s].z && zq <= st[s + 1].z) {
+        seg = s;
+        break;
+      }
+    }
+    const float dz = std::max(1e-4f, st[seg + 1].z - st[seg].z);
+    const float tz = clampf((zq - st[seg].z) / dz, 0.0f, 1.0f);
+    const float yS = lerpf(st[seg].yShld, st[seg + 1].yShld, tz);
+    const float yM = lerpf(st[seg].yUpMid, st[seg + 1].yUpMid, tz);
+    const float yC = lerpf(st[seg].yCan, st[seg + 1].yCan, tz);
+    const float wS = lerpf(st[seg].wShld, st[seg + 1].wShld, tz);
+    const float wM = lerpf(st[seg].wUpMid, st[seg + 1].wUpMid, tz);
+    const float wC = lerpf(st[seg].wCan, st[seg + 1].wCan, tz);
+    const float wVal =
+      (yq <= yM)
+        ? lerpf(wS, wM,
+                clampf((yq - yS) / std::max(1e-4f, yM - yS), 0.0f, 1.0f))
+        : lerpf(wM, wC,
+                clampf((yq - yM) / std::max(1e-4f, yC - yM), 0.0f, 1.0f));
+    return wVal + 0.013f;
+  };
+  Vec3 wR[kSideWinSt][3]{}, wL[kSideWinSt][3]{};
+  for (int i = 0; i < kSideWinSt; ++i) {
+    const float yMidW = lerpf(wyL[i], wyH[i], 0.50f);
+    const float x0 = evalUpperX(wz[i], wyL[i]);
+    const float xm = evalUpperX(wz[i], yMidW) + 0.005f;
+    const float x1 = evalUpperX(wz[i], wyH[i]);
+    wR[i][0] = {x0, wyL[i], wz[i]};
+    wR[i][1] = {xm, yMidW, wz[i]};
+    wR[i][2] = {x1, wyH[i], wz[i]};
+    wL[i][0] = {-x1, wyH[i], wz[i]};
+    wL[i][1] = {-xm, yMidW, wz[i]};
+    wL[i][2] = {-x0, wyL[i], wz[i]};
+  }
+  emitGrid<kSideWinSt, 3>(verts, idx, xf, wR, kSideWinSt, 3, kCanopyGlass, 1.0f,
+                          0.0f, false);
+  emitGrid<kSideWinSt, 3>(verts, idx, xf, wL, kSideWinSt, 3, kCanopyGlass, 1.0f,
+                          0.0f, false);
+}
+
+inline void emitWindshieldAndPillars(std::vector<SceneVertex>& verts,
+                                     std::vector<uint32_t>& idx,
+                                     const Mat4& xf) {
+  constexpr int kWsS = 6, kWsC = 5;
+  Vec3 wsG[kWsS][kWsC]{}, railR[kWsS][2]{}, railL[kWsS][2]{};
+  for (int i = 0; i < kWsS; ++i) {
+    const float z = lerpf(kWindshieldRearZ, kWindshieldFrontZ,
+                          static_cast<float>(i) / static_cast<float>(kWsS - 1));
+    const Station s = evalStation(z);
+    const float wGlass = std::max(0.24f, s.wCan - 0.058f);
+    for (int c = 0; c < kWsC; ++c) {
+      const float u = lerpf(
+        -1.0f, 1.0f, static_cast<float>(c) / static_cast<float>(kWsC - 1));
+      wsG[i][c] = {u * wGlass, lerpf(s.yRoof + 0.008f, s.yCan + 0.005f, u * u),
+                   z};
+    }
+    railR[i][0] = {wGlass, s.yCan + 0.004f, z};
+    railR[i][1] = {s.wCan, s.yCan, z};
+    railL[i][0] = {-s.wCan, s.yCan, z};
+    railL[i][1] = {-wGlass, s.yCan + 0.004f, z};
+  }
+  emitGrid<kWsS, kWsC>(verts, idx, xf, wsG, kWsS, kWsC, kCanopyGlass, 1.0f,
+                       0.0f, true);
+  emitGrid<kWsS, 2>(verts, idx, xf, railR, kWsS, 2, kGoldBright, 1.0f, 0.0f,
+                    true);
+  emitGrid<kWsS, 2>(verts, idx, xf, railL, kWsS, 2, kGoldBright, 1.0f, 0.0f,
+                    true);
+}
+
 }  // namespace cybercab::mesh_detail
