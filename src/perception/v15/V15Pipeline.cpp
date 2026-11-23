@@ -33,6 +33,7 @@ void V15Pipeline::init(const VulkanContext& ctx, const SimConfig& cfg, const Cam
     selfCalib_.init(ctx, cfg, freqSplit_.bandsSSBO(), w, h);
     rectifier_.init(ctx, cfg, rig.cameraLinearSSBO(), freqSplit_.bandsSSBO(), w, h);
     patchTokenizer_.init(ctx, rectifier_);
+    staticMem_.init(ctx, cfg, rectifier_, patchTokenizer_);
     initialized_ = true;
 }
 
@@ -49,6 +50,7 @@ void V15Pipeline::onCameraResized(const CameraRigRenderer& rig) {
 void V15Pipeline::reset() {
     selfCalib_.reset();
     patchTokenizer_.reset();
+    staticMem_.reset();
     kinNav_.reset();
     audioToken_ = {};
     frameIdx_ = 0;
@@ -60,6 +62,7 @@ void V15Pipeline::reset() {
 }
 
 void V15Pipeline::destroy() {
+    staticMem_.destroy();
     patchTokenizer_.destroy();
     rectifier_.destroy();
     selfCalib_.destroy();
@@ -96,6 +99,13 @@ void V15Pipeline::finishBatch1Cpu() {
     if (!initialized_ || !cfg_) return;
     selfCalib_.solveAndUpdate(*cfg_);
     if (hasPrevEgo_) patchTokenizer_.recordSlotEgo(prevEgo_);
+}
+
+void V15Pipeline::recordBackEnd(VkCommandBuffer cmd, const EgoState& ego, float dt,
+                                const std::vector<TrackPriorGpu>& tracks, GpuProfiler* profiler) {
+    if (!initialized_ || !cfg_) return;
+    runStage(cmd, profiler, "5_v15_static_mem",
+             [&] { staticMem_.recordDispatch(cmd, *cfg_, ego, dt, rectifier_, patchTokenizer_, tracks); });
 }
 
 } // namespace cybercab::v15

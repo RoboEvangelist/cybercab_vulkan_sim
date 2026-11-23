@@ -105,6 +105,11 @@ void PerceptionPipeline::runFrame(const VulkanContext& ctx,
         bev_.recordDispatch(cmd, cfg_, rig, ego, dt, out.soilCameras);
         if (profiler) {
             profiler->endStage(cmd, "5_bevformer", VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        }
+        if (v15_) {
+            v15_->recordBackEnd(cmd, ego, dt, trackPriorsScratch_, profiler);
+        }
+        if (profiler) {
             profiler->beginStage(cmd, "6_occ_flow", VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
         }
 
