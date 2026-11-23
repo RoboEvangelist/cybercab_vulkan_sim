@@ -1,6 +1,7 @@
 #include "config/SimConfig.hpp"
 
 #include <yaml-cpp/yaml.h>
+#include <filesystem>
 #include <stdexcept>
 
 namespace cybercab {
@@ -76,6 +77,7 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
         cfg.aebEnabled = readOr(sim, "aeb_enabled", cfg.aebEnabled);
         cfg.useVulkanValidation = readOr(sim, "use_vulkan_validation", cfg.useVulkanValidation);
         cfg.pipelineVersion = readOr(sim, "pipeline_version", cfg.pipelineVersion);
+        cfg.v15PolicyPath = readOr(sim, "v15_policy_config", cfg.v15PolicyPath);
     }
 
     if (const auto perc = root["perception"]) {
@@ -219,6 +221,15 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
     }
     if (!(cfg.photonShotNoiseA >= 0.0f) || !(cfg.photonReadNoiseB >= 0.0f)) {
         throw std::runtime_error("perception.photon_sensor noise parameters must be >= 0");
+    }
+
+    std::filesystem::path polP(cfg.v15PolicyPath);
+    if (!std::filesystem::exists(polP)) {
+        const auto relToCfg = std::filesystem::path(path).parent_path() / polP.filename();
+        polP = std::filesystem::exists(relToCfg) ? relToCfg : (std::filesystem::path(CYBERCAB_SOURCE_DIR) / cfg.v15PolicyPath);
+    }
+    if (std::filesystem::exists(polP)) {
+        cfg.v15Policy = V15PolicyConfig::loadFromYaml(polP.string());
     }
 
     return cfg;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/V15PolicyConfig.hpp"
 #include "core/Math.hpp"
 #include <array>
 #include <string>
@@ -102,6 +103,8 @@ struct SimConfig {
     // Perception architecture selector: "v14" (RT-DETR/BEVFormer/voxel) | "v15" (photon-count/Plücker/Gaussian)
     std::string pipelineVersion = "v14";
     bool isV15() const { return pipelineVersion == "v15"; }
+    std::string v15PolicyPath = "config/v15_policy.yaml";
+    V15PolicyConfig v15Policy{};
 
     // Backbone
     int featWidth = 40;

@@ -1,0 +1,52 @@
+# FSD v15 Autoregressive Policy, Safety Shield & Latent Predictor Parameters
+
+lane_centering:
+  lane_center_abs_m: 1.95
+  min_lane_abs_m: 1.65
+  max_lane_abs_m: 2.25
+  max_truck_shy_m: 0.22
+  truck_half_length_min_m: 3.20
+  truck_shy_fwd_min_m: -6.0
+  truck_shy_fwd_max_m: 26.0
+  adj_lane_min_sep_m: 1.80
+  adj_lane_max_sep_m: 5.50
+
+autoregressive_rollout:
+  min_lookahead_m: 18.0
+  lookahead_time_sec: 2.10
+  lookahead_base_m: 7.50
+  lat_gain_per_s: 2.40
+  max_lat_speed_ms: 2.15
+  rollout_min_speed_ms: 6.0
+  max_lat_accel_ms2: 4.60
+  min_curve_speed_ms: 7.40
+  curve_chord_half_m: 4.0
+
+lane_hysteresis:
+  right_lane_switch_cost: 180.0
+  left_lane_return_hold_cost: 320.0
+  left_lane_stay_cost: 18.0
+  divider_band_m: 1.50
+  heading_commit_thresh: 0.03
+  heading_commit_cost: 260.0
+  crossing_dev_thresh_m: 0.45
+
+safety_shield:
+  track_corridor_veh_m: 1.22
+  track_corridor_ped_m: 1.65
+  voxel_corridor_veh_m: 0.92
+  voxel_corridor_ped_m: 1.45
+  voxel_min_conf: 0.56
+  adj_veh_voxel_suppress_m: 2.60
+  adj_veh_track_min_lat_m: 1.30
+  siren_conf_thresh: 0.35
+  siren_stop_conf_thresh: 0.55
+  siren_yield_speed_ms: 1.20
+  siren_right_pull_m: -2.05
+  autoshift_min_rear_clear_m: 6.0
+  autoshift_reverse_speed_ms: -1.60
+
+latent_predictor:
+  surprise_baseline: 0.22
+  surprise_scale: 0.45
+  sigma_gain: 0.34

@@ -43,8 +43,9 @@ endforeach()
 
 add_custom_target(compile_shaders ALL DEPENDS ${SPIRV_OUTPUTS})
 
-# Copy config YAML into build/config/ so build-dir invocations resolve cleanly
+# Copy config YAML files into build/config/ so build-dir invocations resolve cleanly
 file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/config/cybercab_sim.yaml"
+          "${CMAKE_CURRENT_SOURCE_DIR}/config/v15_policy.yaml"
      DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/config")
 
 set(CYBERCAB_COMMON_DEFS
@@ -57,6 +58,7 @@ set(CYBERCAB_WARN_FLAGS -Wall -Wextra -Wpedantic)
 # Shared modular libraries
 add_library(cybercab_core SHARED
     src/config/SimConfig.cpp
+    src/config/V15PolicyConfig.cpp
     src/core/VulkanContext.cpp
     src/core/VulkanBuffer.cpp
     src/core/VulkanImage.cpp
