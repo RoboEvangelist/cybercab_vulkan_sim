@@ -77,11 +77,24 @@ V15PolicyConfig V15PolicyConfig::loadFromYaml(const std::string& path) {
     rdF(n, "surprise_scale", c.latentSurpriseScale);
     rdF(n, "sigma_gain", c.latentSigmaGain);
   }
+  if (const auto n = r["gaussian_comfort"]) {
+    rdF(n, "gaussian_occ_thresh", c.gaussianOccThresh);
+    rdF(n, "gaussian_occ_cost_gain", c.gaussianOccCostGain);
+    rdF(n, "gaussian_safety_stop_prob", c.gaussianSafetyStopProb);
+    rdF(n, "nudge_offset_m", c.nudgeOffsetM);
+    rdF(n, "nudge_cost_weight", c.nudgeCostWeight);
+    rdF(n, "jerk_cost_weight", c.jerkCostWeight);
+    rdF(n, "speed_backoff_ratio", c.speedBackoffRatio);
+    rdF(n, "speed_backoff_cost", c.speedBackoffCost);
+  }
   if (c.minLaneAbsM <= 0.0f || c.minLaneAbsM >= c.maxLaneAbsM ||
       c.laneCenterAbsM < c.minLaneAbsM || c.laneCenterAbsM > c.maxLaneAbsM ||
       c.latentSurpriseScale <= 0.0f || c.maxLatAccelMs2 <= 0.0f ||
       c.obbHullSampleScale <= 0.0f || c.minHardAebDistM <= 0.0f ||
-      c.aebRssFrac <= 0.0f || c.aebRssFrac > 1.0f) {
+      c.aebRssFrac <= 0.0f || c.aebRssFrac > 1.0f ||
+      c.gaussianOccThresh <= 0.0f || c.gaussianOccThresh >= 1.0f ||
+      c.gaussianSafetyStopProb <= 0.0f || c.gaussianSafetyStopProb >= 1.0f ||
+      c.speedBackoffRatio <= 0.0f || c.speedBackoffRatio > 1.0f) {
     throw std::runtime_error("Invalid numeric bounds in V15PolicyConfig YAML");
   }
   return c;

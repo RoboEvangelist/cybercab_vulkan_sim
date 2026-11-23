@@ -71,6 +71,16 @@ struct V15PolicyConfig {
   float latentSurpriseScale = 0.45f;
   float latentSigmaGain = 0.34f;
 
+  // 4D Gaussian occupancy & comfort multi-rollout scoring
+  float gaussianOccThresh = 0.35f;
+  float gaussianOccCostGain = 540.0f;
+  float gaussianSafetyStopProb = 0.62f;
+  float nudgeOffsetM = 0.16f;
+  float nudgeCostWeight = 28.0f;
+  float jerkCostWeight = 16.0f;
+  float speedBackoffRatio = 0.84f;
+  float speedBackoffCost = 22.0f;
+
   static V15PolicyConfig loadFromYaml(const std::string& path);
 };
 

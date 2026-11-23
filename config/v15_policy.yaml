@@ -64,3 +64,13 @@ latent_predictor:
   surprise_baseline: 0.22
   surprise_scale: 0.45
   sigma_gain: 0.34
+
+gaussian_comfort:
+  gaussian_occ_thresh: 0.35
+  gaussian_occ_cost_gain: 540.0
+  gaussian_safety_stop_prob: 0.62
+  nudge_offset_m: 0.16
+  nudge_cost_weight: 28.0
+  jerk_cost_weight: 16.0
+  speed_backoff_ratio: 0.84
+  speed_backoff_cost: 22.0
