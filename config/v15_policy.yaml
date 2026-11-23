@@ -30,7 +30,7 @@ lane_hysteresis:
   heading_commit_thresh: 0.03
   heading_commit_cost: 260.0
   crossing_dev_thresh_m: 0.28
-  intersection_lane_lock_cost: 1400.0
+  intersection_lane_lock_cost: 8500.0
   blind_spot_rear_gap_m: 3.60
   blind_spot_fwd_gap_m: 4.80
   blind_spot_closing_time_s: 2.00

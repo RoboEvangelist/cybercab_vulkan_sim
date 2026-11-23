@@ -50,5 +50,34 @@ TEST(V15ConfigTest, UnknownVersionIsRejected) {
     std::filesystem::remove(path);
 }
 
+TEST(V15ConfigTest, PolicyYamlLoadsOverridesAndRejectsInvalidBounds) {
+    const SimConfig simCfg = SimConfig::loadFromYaml(resolveAssetPath("config/cybercab_sim.yaml"));
+    EXPECT_FLOAT_EQ(simCfg.v15Policy.laneCenterAbsM, 1.95f);
+    EXPECT_FLOAT_EQ(simCfg.v15Policy.crossingDevThreshM, 0.28f);
+    EXPECT_FLOAT_EQ(simCfg.v15Policy.blindSpotBlockCost, 2600.0f);
+    EXPECT_FLOAT_EQ(simCfg.v15Policy.intersectionLaneLockCost, 8500.0f);
+
+    auto writePol = [&](const std::string& yaml, const std::string& tag) {
+        const auto p = std::filesystem::temp_directory_path() / ("v15_pol_" + tag + ".yaml");
+        std::ofstream(p) << yaml;
+        return p.string();
+    };
+    const std::string customP = writePol(
+        "lane_centering:\n  lane_center_abs_m: 2.05\nsafety_shield:\n  min_hard_aeb_dist_m: 2.25\n", "ok");
+    const V15PolicyConfig ov = V15PolicyConfig::loadFromYaml(customP);
+    EXPECT_FLOAT_EQ(ov.laneCenterAbsM, 2.05f);
+    EXPECT_FLOAT_EQ(ov.minHardAebDistM, 2.25f);
+    std::filesystem::remove(customP);
+
+    for (const auto& [badYaml, tag] : std::vector<std::pair<std::string, std::string>>{
+             {"lane_centering:\n  min_lane_abs_m: 2.50\n  max_lane_abs_m: 2.25\n", "lane"},
+             {"latent_predictor:\n  surprise_scale: 0.0\n", "scale"},
+             {"safety_shield:\n  aeb_rss_frac: 1.50\n", "aeb"}}) {
+        const std::string badP = writePol(badYaml, tag);
+        EXPECT_THROW(V15PolicyConfig::loadFromYaml(badP), std::runtime_error);
+        std::filesystem::remove(badP);
+    }
+}
+
 } // namespace
 } // namespace cybercab

@@ -35,7 +35,7 @@ struct V15PolicyConfig {
     float headingCommitThresh = 0.03f;
     float headingCommitCost = 260.0f;
     float crossingDevThreshM = 0.28f;
-    float intersectionLaneLockCost = 1400.0f;
+    float intersectionLaneLockCost = 8500.0f;
     float blindSpotRearGapM = 3.60f;
     float blindSpotFwdGapM = 4.80f;
     float blindSpotClosingTimeS = 2.00f;
