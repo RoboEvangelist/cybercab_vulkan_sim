@@ -8,6 +8,11 @@
 
 namespace cybercab::v15 {
 
+struct RotObbExtents {
+    float longProj = 0.0f;
+    float latProj = 0.0f;
+};
+
 struct SafetyEvalInput {
     const SimConfig& cfg;
     const EgoState& ego;
@@ -18,6 +23,7 @@ struct SafetyEvalInput {
     float bestLeadGap;
     bool sirenYield;
     bool bothLanesStaticBlocked;
+    const std::vector<Vec3>* plannedTraj = nullptr;
 };
 
 struct SafetyEvalOutput {
@@ -29,6 +35,7 @@ struct SafetyEvalOutput {
     std::string behavior = "CRUISING";
 };
 
+RotObbExtents projectVehicleExtents(const Track3D& tr, float dirX, float dirZ);
 SafetyEvalOutput evaluateAutoregSafety(WorldEngine& world, const SafetyEvalInput& in,
                                        std::string initialBehavior, float initialSpeed);
 
