@@ -32,6 +32,7 @@ void V15Pipeline::init(const VulkanContext& ctx, const SimConfig& cfg, const Cam
     freqSplit_.init(ctx, rig.cameraLinearSSBO(), w, h, numCams, FreqSplitParams::forConfig(w, cfg));
     selfCalib_.init(ctx, cfg, freqSplit_.bandsSSBO(), w, h);
     rectifier_.init(ctx, cfg, rig.cameraLinearSSBO(), freqSplit_.bandsSSBO(), w, h);
+    patchTokenizer_.init(ctx, rectifier_);
     initialized_ = true;
 }
 
@@ -42,34 +43,59 @@ void V15Pipeline::onCameraResized(const CameraRigRenderer& rig) {
     selfCalib_.rebind(freqSplit_.bandsSSBO(), w, h);
     rectifier_.rebind(*cfg_, rig.cameraLinearSSBO(), freqSplit_.bandsSSBO(), w, h);
     rectifier_.updateViews(*cfg_, w, h, selfCalib_.vehicleCalibMatrix());
+    patchTokenizer_.updateSpecs(rectifier_);
 }
 
 void V15Pipeline::reset() {
     selfCalib_.reset();
+    patchTokenizer_.reset();
+    kinNav_.reset();
+    audioToken_ = {};
+    frameIdx_ = 0;
+    hasPrevEgo_ = false;
     if (initialized_ && cfg_) {
         rectifier_.updateViews(*cfg_, freqSplit_.width(), freqSplit_.height(), selfCalib_.vehicleCalibMatrix());
+        patchTokenizer_.updateSpecs(rectifier_);
     }
 }
 
 void V15Pipeline::destroy() {
+    patchTokenizer_.destroy();
     rectifier_.destroy();
     selfCalib_.destroy();
     freqSplit_.destroy();
+    kinNav_.reset();
+    audioToken_ = {};
+    frameIdx_ = 0;
+    hasPrevEgo_ = false;
     initialized_ = false;
     cfg_ = nullptr;
 }
 
-void V15Pipeline::recordFrontEnd(VkCommandBuffer cmd, GpuProfiler* profiler) {
+void V15Pipeline::beginFrameCpu(const WorldEngine& world, float dt) {
+    if (!initialized_) return;
+    audioToken_ = AudioTokenizer::stepFromWorld(world, frameIdx_++);
+    const EgoState& curr = world.ego();
+    kinNav_.pushControlStep(hasPrevEgo_ ? prevEgo_ : curr, curr, dt);
+    kinNav_.encodeNavigation(world, (curr.currentLateralOffset >= 0.0f) ? 1.0f : -1.0f);
+    prevEgo_ = curr;
+    hasPrevEgo_ = true;
+}
+
+void V15Pipeline::recordFrontEnd(VkCommandBuffer cmd, GpuProfiler* profiler, float dt) {
     if (!initialized_ || !cfg_) return;
     rectifier_.updateViews(*cfg_, freqSplit_.width(), freqSplit_.height(), selfCalib_.vehicleCalibMatrix());
+    patchTokenizer_.updateSpecs(rectifier_);
     runStage(cmd, profiler, "1c_v15_freq_split", [&] { freqSplit_.recordDispatch(cmd); });
     runStage(cmd, profiler, "2a_v15_self_calib", [&] { selfCalib_.recordDispatch(cmd); });
     runStage(cmd, profiler, "2b_v15_virt_rectify", [&] { rectifier_.recordDispatch(cmd); });
+    runStage(cmd, profiler, "3_v15_patch_tokens", [&] { patchTokenizer_.recordDispatch(cmd, dt); });
 }
 
 void V15Pipeline::finishBatch1Cpu() {
     if (!initialized_ || !cfg_) return;
     selfCalib_.solveAndUpdate(*cfg_);
+    if (hasPrevEgo_) patchTokenizer_.recordSlotEgo(prevEgo_);
 }
 
 } // namespace cybercab::v15

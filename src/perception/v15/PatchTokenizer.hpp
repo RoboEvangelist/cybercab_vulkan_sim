@@ -5,6 +5,7 @@
 #include "core/VulkanContext.hpp"
 #include "core/VulkanPipeline.hpp"
 #include "perception/v15/VirtualCameraRectifier.hpp"
+#include "world/WorldTypes.hpp"
 
 #include <array>
 #include <cstdint>

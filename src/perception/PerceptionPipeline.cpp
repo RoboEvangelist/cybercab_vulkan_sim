@@ -59,11 +59,14 @@ void PerceptionPipeline::runFrame(const VulkanContext& ctx,
     const EgoState& ego = world.ego();
     detr_.updateHorizonFromRig(rig);
 
-    // GPU Batch 1: v15 M1 FrequencySplit (when enabled) -> SoilDetector -> Backbone + FPN -> RT-DETR
+    // GPU Batch 1: v15 front-end (when enabled) -> SoilDetector -> Backbone + FPN -> RT-DETR
+    if (v15_) {
+        v15_->beginFrameCpu(world, dt);
+    }
     {
         VkCommandBuffer cmd = ctx.beginSingleTimeCommands();
         if (v15_) {
-            v15_->recordFrontEnd(cmd, profiler);
+            v15_->recordFrontEnd(cmd, profiler, dt);
         }
         if (profiler) profiler->beginStage(cmd, "2_soil_detect", VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
         soil_.recordDispatch(cmd, cfg_, rig.camWidth(), rig.camHeight());

@@ -4,8 +4,11 @@
 #include "config/SimConfig.hpp"
 #include "core/GpuProfiler.hpp"
 #include "core/VulkanContext.hpp"
+#include "perception/v15/AudioTokenizer.hpp"
 #include "perception/v15/CameraSelfCalib.hpp"
 #include "perception/v15/FrequencySplit.hpp"
+#include "perception/v15/KinematicNavEncoder.hpp"
+#include "perception/v15/PatchTokenizer.hpp"
 #include "perception/v15/VirtualCameraRectifier.hpp"
 #include "sensors/CameraRigRenderer.hpp"
 
@@ -23,8 +26,10 @@ public:
     void reset();
     void destroy();
 
-    // Dispatches M1 frequency split, M2a self-calib tile reduction, and M2b virtual rectification.
-    void recordFrontEnd(VkCommandBuffer cmd, GpuProfiler* profiler = nullptr);
+    // Updates 48 kHz audio token + 100 Hz IMU/nav tokens prior to Batch 1.
+    void beginFrameCpu(const WorldEngine& world, float dt);
+    // Dispatches M1 frequency split, M2a self-calib, M2b virtual rectify, and M3b patch tokenizer.
+    void recordFrontEnd(VkCommandBuffer cmd, GpuProfiler* profiler = nullptr, float dt = 1.0f / 36.0f);
     // Consumes Batch 1 GPU readbacks (e.g. M2a tile gradients) after queue wait.
     void finishBatch1Cpu();
 
@@ -32,6 +37,9 @@ public:
     const FrequencySplit& frequencySplit() const { return freqSplit_; }
     const CameraSelfCalib& selfCalib() const { return selfCalib_; }
     const VirtualCameraRectifier& rectifier() const { return rectifier_; }
+    const PatchTokenizer& patchTokenizer() const { return patchTokenizer_; }
+    const AudioToken& audioToken() const { return audioToken_; }
+    const KinematicNavEncoder& kinematicNav() const { return kinNav_; }
 
 private:
     const SimConfig* cfg_ = nullptr;
@@ -39,6 +47,12 @@ private:
     FrequencySplit freqSplit_;
     CameraSelfCalib selfCalib_;
     VirtualCameraRectifier rectifier_;
+    PatchTokenizer patchTokenizer_;
+    AudioToken audioToken_{};
+    KinematicNavEncoder kinNav_;
+    uint32_t frameIdx_ = 0;
+    bool hasPrevEgo_ = false;
+    EgoState prevEgo_{};
 };
 
 } // namespace cybercab::v15
