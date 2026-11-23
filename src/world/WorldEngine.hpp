@@ -13,6 +13,14 @@ struct SatHit {
     Vec2 normal{}; // Points from B toward A to push A out of B
 };
 
+struct EmergencySirenState {
+    bool active = false;
+    Vec3 pos{};
+    Vec3 vel{};
+    float phase = 0.0f;
+    float baseFreqHz = 780.0f;
+};
+
 class WorldEngine {
 public:
     static constexpr float kLoopHalfX = 56.0f;
@@ -29,6 +37,7 @@ public:
     void triggerJaywalkerCutIn();
     void triggerOccludedDartOut();
     void triggerLeadHardBrake();
+    void triggerEmergencySiren();
     void setForcedRedSignal(bool forcedRed);
 
     // Deterministic SAT & Capsule geometry queries (also tested directly)
@@ -58,6 +67,8 @@ public:
     SignalPhase signalPhase() const { return signalPhase_; }
     bool forcedRedSignal() const { return forcedRed_; }
     const ContactEvent& lastContact() const { return lastContact_; }
+    const EmergencySirenState& siren() const { return siren_; }
+    EmergencySirenState& mutableSiren() { return siren_; }
     float contactFlashAlpha() const { return contactFlashAlpha_; }
     Vec3 contactFlashPos() const { return contactFlashPos_; }
     float findClosestLoopU(const Vec3& pos) const;
@@ -84,6 +95,7 @@ private:
     ContactEvent lastContact_{};
     float contactFlashAlpha_ = 0.0f;
     Vec3 contactFlashPos_{};
+    EmergencySirenState siren_{};
     std::vector<OBB> allCarsScratch_;
 
     void initStaticOBBs();

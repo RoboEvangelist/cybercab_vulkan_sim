@@ -44,7 +44,7 @@ CliArgs parseArgs(int argc, char** argv) {
         else if (a == "--res" && i + 1 < argc) args.resMode = argv[++i];
         else if (a == "--help" || a == "-h") {
             std::cout << "Usage: cybercab_sim [--config path.yaml] [--headless] [--steps N] "
-                      << "[--scenario nominal|jaywalk|occluded|hardbrake|soil_front] "
+                      << "[--scenario nominal|jaywalk|occluded|hardbrake|soil_front|siren] "
                       << "[--trace out.jsonl] [--dump-dir dir] [--car-dump out.bmp] [--res half|full]\n";
             std::exit(0);
         }
@@ -63,6 +63,8 @@ void applyScenario(const std::string& scenario, cybercab::SimConfig& cfg, cyberc
         cfg.cameras[0].soiled = true;
         cfg.cameras[2].soiled = true;
         cfg.cameras[3].soiled = true;
+    } else if (scenario == "siren") {
+        world.triggerEmergencySiren();
     }
 }
 

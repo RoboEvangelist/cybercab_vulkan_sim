@@ -429,6 +429,7 @@ void WorldEngine::reset() {
     forcedRed_ = false;
     lastContact_ = {};
     contactFlashAlpha_ = 0.0f;
+    siren_ = {};
     resetTrafficAndPedestrians();
     resetEgo();
 }
@@ -941,6 +942,14 @@ void WorldEngine::stepAgents(float dt) {
             p.armAngle = lerpf(p.armAngle, 0.0f, clampf(8.0f * dt, 0.0f, 1.0f));
         }
     }
+
+    if (siren_.active) {
+        siren_.pos += siren_.vel * dt;
+        siren_.phase += dt;
+        if (siren_.pos.z < -65.0f || siren_.pos.z > 80.0f) {
+            siren_.active = false;
+        }
+    }
 }
 
 void WorldEngine::stepEgoAndPhysics(float dt, const PlannerCommand& cmd, const ManualInput& manual) {
@@ -1079,6 +1088,14 @@ void WorldEngine::triggerLeadHardBrake() {
     lead.vx = tan.x * lead.speed;
     lead.vz = tan.z * lead.speed;
     ego_.speed = std::max(ego_.speed, 9.5f);
+}
+
+void WorldEngine::triggerEmergencySiren() {
+    siren_.active = true;
+    siren_.pos = {0.0f, 1.2f, 66.0f};
+    siren_.vel = {0.0f, 0.0f, -11.5f};
+    siren_.phase = 0.0f;
+    siren_.baseFreqHz = 780.0f;
 }
 
 void WorldEngine::setForcedRedSignal(bool forcedRed) {
