@@ -190,57 +190,6 @@ void appendWheelAssembly(std::vector<SceneVertex>& verts, std::vector<uint32_t>&
     appendCylinderY(verts, idx, axMat, tireRadius * 0.28f, tireRadius * 0.28f, tireWidth + 0.028f, 16, {0.10f, 0.12f, 0.15f}, 1.0f, 0.0f, sem);
 }
 
-// Emits a smooth longitudinally-lofted strip grid (`stations x cols`) without heap allocations.
-template <int MaxS, int MaxC>
-void emitSmoothStripGrid(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx,
-                         const Mat4& xform,
-                         const Vec3 (&pos)[MaxS][MaxC], int nStations, int nCols,
-                         Vec3 color, float alpha, float emissive, SemanticClass sem, bool flipWinding = false) {
-    Vec3 nrm[MaxS][MaxC]{};
-    for (int s = 0; s < nStations - 1; ++s) {
-        for (int c = 0; c < nCols - 1; ++c) {
-            const Vec3 p00 = pos[s][c];
-            const Vec3 p10 = pos[s][c + 1];
-            const Vec3 p11 = pos[s + 1][c + 1];
-            const Vec3 p01 = pos[s + 1][c];
-            Vec3 fn = flipWinding ? (p01 - p00).cross(p11 - p00) : (p10 - p00).cross(p11 - p00);
-            const float l2 = fn.normSq();
-            if (l2 > 1e-10f) {
-                fn = fn * (1.0f / std::sqrt(l2));
-                nrm[s][c] += fn;
-                nrm[s][c + 1] += fn;
-                nrm[s + 1][c + 1] += fn;
-                nrm[s + 1][c] += fn;
-            }
-        }
-    }
-
-    const float semF = static_cast<float>(static_cast<int>(sem));
-    const uint32_t base = static_cast<uint32_t>(verts.size());
-    for (int s = 0; s < nStations; ++s) {
-        for (int c = 0; c < nCols; ++c) {
-            const Vec3 wp = xform.transformPoint(pos[s][c]);
-            const Vec3 wn = xform.transformVector(nrm[s][c].normalized()).normalized();
-            verts.push_back({wp.x, wp.y, wp.z, wn.x, wn.y, wn.z, color.x, color.y, color.z, alpha, emissive, semF, 0.0f, 0.0f});
-        }
-    }
-    for (int s = 0; s < nStations - 1; ++s) {
-        for (int c = 0; c < nCols - 1; ++c) {
-            const uint32_t i00 = base + static_cast<uint32_t>(s * nCols + c);
-            const uint32_t i10 = base + static_cast<uint32_t>(s * nCols + c + 1);
-            const uint32_t i01 = base + static_cast<uint32_t>((s + 1) * nCols + c);
-            const uint32_t i11 = base + static_cast<uint32_t>((s + 1) * nCols + c + 1);
-            if (!flipWinding) {
-                idx.push_back(i00); idx.push_back(i10); idx.push_back(i11);
-                idx.push_back(i00); idx.push_back(i11); idx.push_back(i01);
-            } else {
-                idx.push_back(i00); idx.push_back(i11); idx.push_back(i10);
-                idx.push_back(i00); idx.push_back(i01); idx.push_back(i11);
-            }
-        }
-    }
-}
-
 void appendQuadXZ(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx,
                   Vec3 center, float w, float len, float yaw, Vec3 color, float emissive, SemanticClass sem) {
     float c = std::cos(yaw), s = std::sin(yaw);
@@ -1225,103 +1174,9 @@ void WorldEngine::appendDynamicGeometry(std::vector<SceneVertex>& verts, std::ve
         appendSphere(verts, indices, Mat4::translation({6.18f, 5.02f, zW}), 0.14f, 8, 12, gCol, 1.0f, gEm, SemanticClass::SignalSign);
     }
 
-    // 2. Ego Tesla Cybercab (matched to real Robotaxi fastback coupe profile & solid gold aero wheel covers)
+    // 2. Ego Tesla Cybercab (sculpted Robotaxi coupe + panoramic canopy + aero wheel covers)
     if (includeEgo) {
-        const Mat4 sprungMat = getEgoSprungWorldMatrix();
-
-        struct CyberStation {
-            float z;
-            float yBot;
-            float yMid;
-            float yTopSide;
-            float yCrown;
-            float wBot;
-            float wMid;
-            float wTop;
-        };
-
-        auto wheelArchFloor = [](float z, float baseY) -> float {
-            const float dR = std::abs(z - 0.00f);
-            const float dF = std::abs(z - 2.75f);
-            const float archR = 0.395f;
-            float y = baseY;
-            if (dR < archR) y = std::max(y, 0.365f + std::sqrt(std::max(0.0f, archR * archR - dR * dR)));
-            if (dF < archR) y = std::max(y, 0.365f + std::sqrt(std::max(0.0f, archR * archR - dF * dF)));
-            return y;
-        };
-
-        constexpr int kNumSt = 23;
-        const float zSamples[kNumSt] = {
-            -0.86f, -0.64f, -0.405f, -0.34f, -0.20f, 0.00f, 0.20f, 0.34f, 0.405f,
-             0.72f,  1.02f,  1.42f,   1.85f,  2.10f,
-             2.345f, 2.41f,  2.55f,   2.75f,  2.95f, 3.09f, 3.155f,
-             3.255f, 3.31f
-        };
-
-        CyberStation st[kNumSt]{};
-        for (int i = 0; i < kNumSt; ++i) {
-            const float z = zSamples[i];
-            st[i].z = z;
-            // Base lower painted body line (diffuser kick at rear, rockers along doors, splitter chin at front)
-            const float baseY = (z < -0.40f) ? lerpf(0.47f, 0.34f, (z + 0.86f) / 0.46f)
-                              : (z > 3.15f)  ? lerpf(0.34f, 0.37f, (z - 3.15f) / 0.16f)
-                                             : 0.335f;
-            st[i].yBot = wheelArchFloor(z, baseY);
-
-            // Smooth fastback roof arch & curved front hood arching cleanly above front wheel wells
-            float yRoof = 1.385f;
-            if (z < 1.02f) {
-                const float t = (1.02f - z) / 1.88f; // 0 at roof crest -> 1 at Kammtail rear
-                yRoof = 1.385f - 0.485f * (0.35f * t + 0.65f * t * t);
-            } else if (z <= 2.08f) {
-                const float t = (z - 1.02f) / 1.06f; // 0 at crest -> 1 at hood cowl
-                yRoof = 1.385f - 0.485f * (t * t * (1.22f - 0.22f * t));
-            } else {
-                const float t = (z - 2.08f) / 1.23f; // cubic droop stays clear above front wheel (z=2.75), curves down at nose
-                yRoof = 0.900f - 0.305f * (0.20f * t + 0.80f * t * t * t);
-            }
-            st[i].yCrown = yRoof;
-            st[i].yTopSide = yRoof - ((z > 0.2f && z < 2.08f) ? 0.042f : 0.020f);
-
-            // Rising crisp beltline / fender shoulder crease (monotonically <= yTopSide and >= yBot everywhere)
-            if (z <= 2.08f) {
-                st[i].yMid = lerpf(0.865f, 0.805f, clampf((z + 0.86f) / 2.94f, 0.0f, 1.0f));
-            } else if (z <= 2.82f) {
-                st[i].yMid = 0.805f;
-            } else {
-                const float t = clampf((z - 2.82f) / (3.31f - 2.82f), 0.0f, 1.0f);
-                st[i].yMid = lerpf(0.805f, 0.550f, t * t);
-            }
-            st[i].yMid = clampf(st[i].yMid, st[i].yBot + 0.026f, st[i].yTopSide - 0.014f);
-
-            // Longitudinal planform width taper (wide sculpted haunches, sleek nose & Kammtail)
-            const float endTaperR = (z < -0.42f) ? clampf((-0.42f - z) / 0.44f, 0.0f, 1.0f) : 0.0f;
-            const float endTaperF = (z > 2.82f) ? clampf((z - 2.82f) / 0.49f, 0.0f, 1.0f) : 0.0f;
-            st[i].wBot = 0.915f - 0.11f * endTaperR * endTaperR - 0.14f * endTaperF * endTaperF;
-            st[i].wMid = 0.955f - 0.10f * endTaperR * endTaperR - 0.15f * endTaperF * endTaperF;
-            const float cabTaper = (z > 0.0f && z < 2.05f) ? 0.21f * std::sin(kPi * (z / 2.05f)) : 0.05f;
-            st[i].wTop = st[i].wMid - cabTaper - 0.04f;
-        }
-
-        if (!fsdWireMode) {
-            appendCybercabVehicleMesh(verts, indices, ego_, getEgoWorldMatrix(), sprungMat, false);
-        } else {
-            // FSD Voxel holographic Cybercab fastback shell (flipWinding=true for +Y top roof)
-            const Vec3 holoCol{0.22f, 0.74f, 0.97f};
-            Vec3 holoRoof[kNumSt][3]{}, holoSideR[kNumSt][2]{}, holoSideL[kNumSt][2]{};
-            for (int i = 0; i < kNumSt; ++i) {
-                holoRoof[i][0] = {-st[i].wTop, st[i].yTopSide, st[i].z};
-                holoRoof[i][1] = { 0.0f,       st[i].yCrown,   st[i].z};
-                holoRoof[i][2] = { st[i].wTop, st[i].yTopSide, st[i].z};
-                holoSideR[i][0] = { st[i].wBot, st[i].yBot,     st[i].z};
-                holoSideR[i][1] = { st[i].wTop, st[i].yTopSide, st[i].z};
-                holoSideL[i][0] = {-st[i].wTop, st[i].yTopSide, st[i].z};
-                holoSideL[i][1] = {-st[i].wBot, st[i].yBot,     st[i].z};
-            }
-            emitSmoothStripGrid<kNumSt, 3>(verts, indices, sprungMat, holoRoof, kNumSt, 3, holoCol, 0.45f, 1.0f, SemanticClass::Vehicle, true);
-            emitSmoothStripGrid<kNumSt, 2>(verts, indices, sprungMat, holoSideR, kNumSt, 2, holoCol, 0.40f, 0.9f, SemanticClass::Vehicle, false);
-            emitSmoothStripGrid<kNumSt, 2>(verts, indices, sprungMat, holoSideL, kNumSt, 2, holoCol, 0.40f, 0.9f, SemanticClass::Vehicle, false);
-        }
+        appendCybercabVehicleMesh(verts, indices, ego_, getEgoWorldMatrix(), getEgoSprungWorldMatrix(), fsdWireMode);
     }
 
     if (fsdWireMode) return;

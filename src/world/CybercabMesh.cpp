@@ -7,7 +7,7 @@ namespace cybercab {
 namespace {
 
 const Vec3 kGoldBase{0.824f, 0.706f, 0.490f}, kGoldBright{0.886f, 0.780f, 0.576f}, kGoldDark{0.615f, 0.514f, 0.337f};
-const Vec3 kCanopyGlass{0.030f, 0.055f, 0.115f}, kTrimDark{0.055f, 0.065f, 0.090f}, kTireDark{0.045f, 0.053f, 0.068f};
+const Vec3 kCanopyGlass{0.024f, 0.045f, 0.095f}, kTrimDark{0.028f, 0.033f, 0.046f}, kTireDark{0.036f, 0.042f, 0.055f};
 const Vec3 kHoloCyan{0.220f, 0.740f, 0.970f}, kDrlLed{0.930f, 0.980f, 1.000f};
 const Vec3 kTailLed{0.960f, 0.130f, 0.130f}, kRevLed{0.980f, 0.980f, 0.960f};
 
@@ -164,16 +164,17 @@ void emitSideWindows(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx
         const float wS = lerpf(st[seg].wShld, st[seg + 1].wShld, tz), wM = lerpf(st[seg].wUpMid, st[seg + 1].wUpMid, tz);
         const float wC = lerpf(st[seg].wCan, st[seg + 1].wCan, tz);
         return ((yq <= yM) ? lerpf(wS, wM, clampf((yq - yS) / std::max(1e-4f, yM - yS), 0.0f, 1.0f))
-                           : lerpf(wM, wC, clampf((yq - yM) / std::max(1e-4f, yC - yM), 0.0f, 1.0f))) + 0.006f;
+                           : lerpf(wM, wC, clampf((yq - yM) / std::max(1e-4f, yC - yM), 0.0f, 1.0f))) + 0.012f;
     };
-    Vec3 wR[kSideWinSt][2]{}, wL[kSideWinSt][2]{};
+    Vec3 wR[kSideWinSt][3]{}, wL[kSideWinSt][3]{};
     for (int i = 0; i < kSideWinSt; ++i) {
-        const float x0 = evalUpperX(wz[i], wyL[i]), x1 = evalUpperX(wz[i], wyH[i]);
-        wR[i][0] = { x0, wyL[i], wz[i]}; wR[i][1] = { x1, wyH[i], wz[i]};
-        wL[i][0] = {-x1, wyH[i], wz[i]}; wL[i][1] = {-x0, wyL[i], wz[i]};
+        const float yMidW = lerpf(wyL[i], wyH[i], 0.50f);
+        const float x0 = evalUpperX(wz[i], wyL[i]), xm = evalUpperX(wz[i], yMidW) + 0.005f, x1 = evalUpperX(wz[i], wyH[i]);
+        wR[i][0] = { x0, wyL[i], wz[i]}; wR[i][1] = { xm, yMidW, wz[i]}; wR[i][2] = { x1, wyH[i], wz[i]};
+        wL[i][0] = {-x1, wyH[i], wz[i]}; wL[i][1] = {-xm, yMidW, wz[i]}; wL[i][2] = {-x0, wyL[i], wz[i]};
     }
-    emitGrid<kSideWinSt, 2>(verts, idx, xf, wR, kSideWinSt, 2, kCanopyGlass, 1.0f, 0.0f, false);
-    emitGrid<kSideWinSt, 2>(verts, idx, xf, wL, kSideWinSt, 2, kCanopyGlass, 1.0f, 0.0f, false);
+    emitGrid<kSideWinSt, 3>(verts, idx, xf, wR, kSideWinSt, 3, kCanopyGlass, 1.0f, 0.0f, false);
+    emitGrid<kSideWinSt, 3>(verts, idx, xf, wL, kSideWinSt, 3, kCanopyGlass, 1.0f, 0.0f, false);
 }
 
 void emitCanopyAndCantrails(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx, const Mat4& xf) {
@@ -291,12 +292,12 @@ void appendCybercabVehicleMesh(std::vector<SceneVertex>& verts, std::vector<uint
     for (int i = 20; i < kNumSt; ++i) for (int c = 0; c < 5; ++c) hoodGrid[i - 20][c] = deckGrid[i][c];
     emitGrid<17, 5>(verts, indices, sprungMat, hoodGrid, kNumSt - 20, 5, kGoldBright, 1.0f, 0.0f, true);
     emitCanopyAndCantrails(verts, indices, sprungMat); emitSculptedEndCap(verts, indices, sprungMat, st[0], false); emitSculptedEndCap(verts, indices, sprungMat, st[kNumSt - 1], true); emitSideWindows(verts, indices, sprungMat, st);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.34f, 1.24f}), {1.12f, 0.34f, 3.62f}, kTrimDark);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.245f, 1.37f}), {1.76f, 0.14f, 1.92f}, kTrimDark);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.26f, 3.24f}), {1.50f, 0.09f, 0.22f}, kTrimDark);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.32f, -0.82f}), {1.56f, 0.14f, 0.20f}, kTrimDark);
-    for (const float dx : {-0.54f, -0.18f, 0.18f, 0.54f}) appendBox(verts, indices, sprungMat * Mat4::translation({dx, 0.31f, -0.86f}), {0.03f, 0.14f, 0.14f}, kTrimDark);
-    for (const float sx : {-1.0f, 1.0f}) { appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.785f, 1.08f, 0.66f}) * Mat4::rotZ(sx * 0.43f), {0.024f, 0.33f, 0.052f}, kTrimDark); appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.902f, 0.77f, 2.16f}), {0.042f, 0.046f, 0.13f}, kTrimDark); }
+    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.34f, 1.24f}), {1.12f, 0.34f, 3.60f}, kTrimDark);
+    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.285f, 1.375f}), {1.68f, 0.11f, 1.92f}, kTrimDark);
+    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.295f, 3.16f}), {1.26f, 0.06f, 0.18f}, kTrimDark);
+    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.375f, -0.68f}), {1.26f, 0.10f, 0.22f}, kTrimDark);
+    for (const float dx : {-0.46f, -0.15f, 0.15f, 0.46f}) appendBox(verts, indices, sprungMat * Mat4::translation({dx, 0.365f, -0.76f}), {0.03f, 0.10f, 0.12f}, kTrimDark);
+    for (const float sx : {-1.0f, 1.0f}) { appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.805f, 1.07f, 0.66f}) * Mat4::rotZ(sx * 0.44f), {0.028f, 0.31f, 0.048f}, kTrimDark); appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.902f, 0.77f, 2.16f}), {0.042f, 0.046f, 0.13f}, kTrimDark); }
     appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.555f, 3.31f}), {1.38f, 0.055f, 0.05f}, kTrimDark);
     appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.555f, 3.332f}), {1.32f, 0.028f, 0.04f}, kDrlLed, 1.0f, 2.9f);
     for (const float sx : {-0.72f, 0.72f}) appendBox(verts, indices, sprungMat * Mat4::translation({sx, 0.555f, 3.24f}) * Mat4::rotY(sx > 0 ? -0.46f : 0.46f), {0.04f, 0.026f, 0.15f}, kDrlLed, 1.0f, 2.6f);
