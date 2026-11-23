@@ -7,7 +7,8 @@ namespace cybercab {
 namespace {
 
 const Vec3 kGoldBase{0.824f, 0.706f, 0.490f}, kGoldBright{0.886f, 0.780f, 0.576f}, kGoldDark{0.615f, 0.514f, 0.337f};
-const Vec3 kCanopyGlass{0.024f, 0.045f, 0.095f}, kTrimDark{0.028f, 0.033f, 0.046f}, kTireDark{0.036f, 0.042f, 0.055f};
+const Vec3 kCanopyGlass{0.024f, 0.045f, 0.095f}, kTrimDark{0.028f, 0.033f, 0.046f}, kCharcoalTrim{0.115f, 0.122f, 0.138f};
+const Vec3 kTireDark{0.036f, 0.042f, 0.055f}, kPlateWhite{0.820f, 0.880f, 0.930f};
 const Vec3 kHoloCyan{0.220f, 0.740f, 0.970f}, kDrlLed{0.930f, 0.980f, 1.000f};
 const Vec3 kTailLed{0.960f, 0.130f, 0.130f}, kRevLed{0.980f, 0.980f, 0.960f};
 
@@ -15,12 +16,12 @@ constexpr float kRearAxleZ = 0.00f, kFrontAxleZ = 2.75f, kWheelAxleY = 0.365f;
 constexpr float kTireOuterR = 0.365f, kTireWidthM = 0.245f, kWheelArchR = 0.402f;
 constexpr float kTrackHalfR = 0.836f, kTrackHalfF = 0.818f;
 constexpr float kBodyRearZ = -0.88f, kBodyCrestZ = 1.04f, kBodyCowlZ = 2.10f, kBodyNoseZ = 3.35f;
-constexpr float kCanopyRearZ = -0.49f, kCanopyFrontZ = 2.05f;
+constexpr float kWindshieldRearZ = 1.32f, kWindshieldFrontZ = 2.05f;
 constexpr int kNumSt = 37, kSideWinSt = 12, kWheelSegs = 36;
 
 constexpr std::array<float, kNumSt> kZStations = {{
     -0.88f, -0.78f, -0.64f, -0.49f, -0.40f, -0.37f, -0.30f, -0.20f, -0.10f, 0.00f,
-     0.10f,  0.20f,  0.30f,  0.37f,  0.40f,  0.62f,  0.86f,  1.12f,  1.45f, 1.78f,
+     0.10f,  0.20f,  0.30f,  0.37f,  0.40f,  0.62f,  0.86f,  1.08f,  1.32f, 1.70f,
      2.05f,  2.20f,  2.34f,  2.38f,  2.45f,  2.55f,  2.65f,  2.75f,  2.85f, 2.95f,
      3.05f,  3.12f,  3.15f,  3.21f,  3.27f,  3.32f,  3.35f
 }};
@@ -177,34 +178,33 @@ void emitSideWindows(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx
     emitGrid<kSideWinSt, 3>(verts, idx, xf, wL, kSideWinSt, 3, kCanopyGlass, 1.0f, 0.0f, false);
 }
 
-void emitCanopyAndCantrails(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx, const Mat4& xf) {
-    constexpr int kCanS = 10, kCanC = 5;
-    Vec3 glassG[kCanS][kCanC]{}, railR[kCanS][2]{}, railL[kCanS][2]{};
-    for (int i = 0; i < kCanS; ++i) {
-        const float z = lerpf(kCanopyRearZ, kCanopyFrontZ, static_cast<float>(i) / static_cast<float>(kCanS - 1));
+void emitWindshieldAndPillars(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx, const Mat4& xf) {
+    constexpr int kWsS = 6, kWsC = 5;
+    Vec3 wsG[kWsS][kWsC]{}, railR[kWsS][2]{}, railL[kWsS][2]{};
+    for (int i = 0; i < kWsS; ++i) {
+        const float z = lerpf(kWindshieldRearZ, kWindshieldFrontZ, static_cast<float>(i) / static_cast<float>(kWsS - 1));
         const Station s = evalStation(z);
-        const float wGlass = std::max(0.18f, s.wCan - 0.062f);
-        for (int c = 0; c < kCanC; ++c) {
-            const float u = lerpf(-1.0f, 1.0f, static_cast<float>(c) / static_cast<float>(kCanC - 1));
-            const float yArch = lerpf(s.yRoof + 0.009f, s.yCan + 0.006f, u * u);
-            glassG[i][c] = {u * wGlass, yArch, z};
+        const float wGlass = std::max(0.24f, s.wCan - 0.058f);
+        for (int c = 0; c < kWsC; ++c) {
+            const float u = lerpf(-1.0f, 1.0f, static_cast<float>(c) / static_cast<float>(kWsC - 1));
+            wsG[i][c] = {u * wGlass, lerpf(s.yRoof + 0.008f, s.yCan + 0.005f, u * u), z};
         }
         railR[i][0] = { wGlass, s.yCan + 0.004f, z}; railR[i][1] = { s.wCan, s.yCan, z};
         railL[i][0] = {-s.wCan, s.yCan, z};          railL[i][1] = {-wGlass, s.yCan + 0.004f, z};
     }
-    emitGrid<kCanS, kCanC>(verts, idx, xf, glassG, kCanS, kCanC, kCanopyGlass, 1.0f, 0.0f, true);
-    emitGrid<kCanS, 2>(verts, idx, xf, railR, kCanS, 2, kGoldBright, 1.0f, 0.0f, true);
-    emitGrid<kCanS, 2>(verts, idx, xf, railL, kCanS, 2, kGoldBright, 1.0f, 0.0f, true);
+    emitGrid<kWsS, kWsC>(verts, idx, xf, wsG, kWsS, kWsC, kCanopyGlass, 1.0f, 0.0f, true);
+    emitGrid<kWsS, 2>(verts, idx, xf, railR, kWsS, 2, kGoldBright, 1.0f, 0.0f, true);
+    emitGrid<kWsS, 2>(verts, idx, xf, railL, kWsS, 2, kGoldBright, 1.0f, 0.0f, true);
 }
 
 void emitAeroWheel(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx, const Mat4& wm, float sideSign) {
     struct RingPt { float r, xOff, nxSign, nRad; Vec3 col; };
     const RingPt prof[] = {
         {kTireOuterR, -0.112f, 0.0f, 1.0f, kTireDark},  {kTireOuterR, 0.112f, 0.0f, 1.0f, kTireDark},
-        {0.340f,       0.123f, 0.7f, 0.7f, kTireDark},  {0.312f,      0.123f, 1.0f, 0.0f, kTireDark},
-        {0.300f,       0.130f, 0.8f, 0.6f, kTrimDark},  {0.248f,      0.131f, 1.0f, 0.0f, kGoldBright},
-        {0.216f,       0.122f, 0.9f,-0.4f, kGoldBase},  {0.068f,      0.122f, 1.0f, 0.0f, kGoldBright},
-        {0.056f,       0.118f, 0.8f,-0.6f, kGoldDark},  {0.000f,      0.118f, 1.0f, 0.0f, kGoldDark}
+        {0.336f,       0.123f, 0.7f, 0.7f, kTireDark},  {0.306f,      0.123f, 1.0f, 0.0f, kTireDark},
+        {0.298f,       0.128f, 0.8f, 0.6f, kTrimDark},  {0.265f,      0.130f, 1.0f, 0.0f, kGoldBright},
+        {0.026f,       0.131f, 1.0f, 0.0f, kGoldBright},{0.020f,      0.125f, 0.9f,-0.3f, kGoldDark},
+        {0.000f,       0.125f, 1.0f, 0.0f, kGoldDark}
     };
     constexpr int kNR = static_cast<int>(sizeof(prof) / sizeof(prof[0]));
     const float semF = static_cast<float>(static_cast<int>(SemanticClass::Vehicle));
@@ -272,39 +272,46 @@ void appendCybercabVehicleMesh(std::vector<SceneVertex>& verts, std::vector<uint
         return;
     }
 
-    Vec3 loR[kNumSt][3]{}, loL[kNumSt][3]{}, upR[kNumSt][3]{}, upL[kNumSt][3]{}, deckGrid[kNumSt][5]{};
+    Vec3 loR[kNumSt][3]{}, loL[kNumSt][3]{}, upR[kNumSt][3]{}, upL[kNumSt][3]{};
+    Vec3 roofGrid[19][7]{}, hoodGrid[17][7]{};
+    constexpr float kRoofCols[7] = {-1.0f, -0.68f, -0.36f, 0.0f, 0.36f, 0.68f, 1.0f};
     for (int i = 0; i < kNumSt; ++i) {
         loR[i][0] = { st[i].wBot, st[i].yBot, st[i].z}; loR[i][1] = { st[i].wBelly, st[i].yBelly, st[i].z}; loR[i][2] = { st[i].wShld, st[i].yShld, st[i].z};
         loL[i][0] = {-st[i].wShld, st[i].yShld, st[i].z}; loL[i][1] = {-st[i].wBelly, st[i].yBelly, st[i].z}; loL[i][2] = {-st[i].wBot, st[i].yBot, st[i].z};
         upR[i][0] = { st[i].wShld, st[i].yShld, st[i].z}; upR[i][1] = { st[i].wUpMid, st[i].yUpMid, st[i].z}; upR[i][2] = { st[i].wCan, st[i].yCan, st[i].z};
         upL[i][0] = {-st[i].wCan, st[i].yCan, st[i].z};   upL[i][1] = {-st[i].wUpMid, st[i].yUpMid, st[i].z}; upL[i][2] = {-st[i].wShld, st[i].yShld, st[i].z};
-        for (int c = 0; c < 5; ++c) {
-            const float u = lerpf(-1.0f, 1.0f, static_cast<float>(c) / 4.0f);
-            deckGrid[i][c] = {u * st[i].wCan, lerpf(st[i].yRoof, st[i].yCan, u * u), st[i].z};
+        if (i < 19) {
+            const float rFade = (st[i].z > -0.82f && st[i].z < 1.24f) ? std::sin(kPi * clampf((st[i].z + 0.82f) / 2.06f, 0.0f, 1.0f)) : 0.0f;
+            for (int c = 0; c < 7; ++c) roofGrid[i][c] = {kRoofCols[c] * st[i].wCan, lerpf(st[i].yRoof, st[i].yCan, kRoofCols[c] * kRoofCols[c]) + ((c == 2 || c == 4) ? 0.012f * rFade : 0.0f), st[i].z};
+        } else if (i >= 20) {
+            for (int c = 0; c < 7; ++c) hoodGrid[i - 20][c] = {kRoofCols[c] * st[i].wCan, lerpf(st[i].yRoof, st[i].yCan, kRoofCols[c] * kRoofCols[c]), st[i].z};
         }
     }
     emitGrid<kNumSt, 3>(verts, indices, sprungMat, loR, kNumSt, 3, kGoldBase, 1.0f, 0.0f, false);
     emitGrid<kNumSt, 3>(verts, indices, sprungMat, loL, kNumSt, 3, kGoldBase, 1.0f, 0.0f, false);
     emitGrid<kNumSt, 3>(verts, indices, sprungMat, upR, kNumSt, 3, kGoldBright, 1.0f, 0.0f, false);
     emitGrid<kNumSt, 3>(verts, indices, sprungMat, upL, kNumSt, 3, kGoldBright, 1.0f, 0.0f, false);
-    emitGrid<kNumSt, 5>(verts, indices, sprungMat, deckGrid, 4, 5, kGoldBright, 1.0f, 0.0f, true);
-    Vec3 hoodGrid[17][5]{};
-    for (int i = 20; i < kNumSt; ++i) for (int c = 0; c < 5; ++c) hoodGrid[i - 20][c] = deckGrid[i][c];
-    emitGrid<17, 5>(verts, indices, sprungMat, hoodGrid, kNumSt - 20, 5, kGoldBright, 1.0f, 0.0f, true);
-    emitCanopyAndCantrails(verts, indices, sprungMat); emitSculptedEndCap(verts, indices, sprungMat, st[0], false); emitSculptedEndCap(verts, indices, sprungMat, st[kNumSt - 1], true); emitSideWindows(verts, indices, sprungMat, st);
+    emitGrid<19, 7>(verts, indices, sprungMat, roofGrid, 19, 7, kGoldBright, 1.0f, 0.0f, true);
+    emitGrid<17, 7>(verts, indices, sprungMat, hoodGrid, 17, 7, kGoldBright, 1.0f, 0.0f, true);
+    emitWindshieldAndPillars(verts, indices, sprungMat); emitSculptedEndCap(verts, indices, sprungMat, st[0], false); emitSculptedEndCap(verts, indices, sprungMat, st[kNumSt - 1], true); emitSideWindows(verts, indices, sprungMat, st);
     appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.34f, 1.24f}), {1.12f, 0.34f, 3.60f}, kTrimDark);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.285f, 1.375f}), {1.68f, 0.11f, 1.92f}, kTrimDark);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.295f, 3.16f}), {1.26f, 0.06f, 0.18f}, kTrimDark);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.375f, -0.68f}), {1.26f, 0.10f, 0.22f}, kTrimDark);
-    for (const float dx : {-0.46f, -0.15f, 0.15f, 0.46f}) appendBox(verts, indices, sprungMat * Mat4::translation({dx, 0.365f, -0.76f}), {0.03f, 0.10f, 0.12f}, kTrimDark);
-    for (const float sx : {-1.0f, 1.0f}) { appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.805f, 1.07f, 0.66f}) * Mat4::rotZ(sx * 0.44f), {0.028f, 0.31f, 0.048f}, kTrimDark); appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.902f, 0.77f, 2.16f}), {0.042f, 0.046f, 0.13f}, kTrimDark); }
+    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.285f, 1.375f}), {1.72f, 0.115f, 1.92f}, kCharcoalTrim);
+    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.295f, 3.16f}), {1.26f, 0.06f, 0.18f}, kCharcoalTrim);
+    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.380f, -0.825f}), {1.52f, 0.165f, 0.13f}, kCharcoalTrim);
+    for (const float sx : {-1.0f, 1.0f}) {
+        appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.76f, 0.380f, -0.60f}), {0.09f, 0.155f, 0.44f}, kCharcoalTrim);
+        appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.805f, 1.07f, 0.66f}) * Mat4::rotZ(sx * 0.44f), {0.028f, 0.31f, 0.048f}, kTrimDark);
+        appendBox(verts, indices, sprungMat * Mat4::translation({sx * 0.902f, 0.77f, 2.16f}), {0.042f, 0.046f, 0.13f}, kTrimDark);
+    }
+    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.385f, -0.892f}), {0.28f, 0.13f, 0.012f}, kPlateWhite);
+    const bool isBraking = ego.accel < -0.45f || ego.speed < 0.25f || ego.aebActive;
+    for (const float rx : {-0.58f, 0.58f}) appendBox(verts, indices, sprungMat * Mat4::translation({rx, 0.468f, -0.890f}), {0.28f, 0.020f, 0.018f}, kTailLed, 1.0f, isBraking ? 2.4f : 0.9f);
     appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.555f, 3.31f}), {1.38f, 0.055f, 0.05f}, kTrimDark);
     appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.555f, 3.332f}), {1.32f, 0.028f, 0.04f}, kDrlLed, 1.0f, 2.9f);
     for (const float sx : {-0.72f, 0.72f}) appendBox(verts, indices, sprungMat * Mat4::translation({sx, 0.555f, 3.24f}) * Mat4::rotY(sx > 0 ? -0.46f : 0.46f), {0.04f, 0.026f, 0.15f}, kDrlLed, 1.0f, 2.6f);
-    const bool isBraking = ego.accel < -0.45f || ego.speed < 0.25f || ego.aebActive;
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.858f, -0.875f}), {1.48f, 0.068f, 0.045f}, kTrimDark);
-    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.858f, -0.892f}), {1.44f, 0.036f, 0.035f}, kTailLed, 1.0f, isBraking ? 4.4f : 1.4f);
-    if (ego.gear < 0) appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.822f, -0.896f}), {0.48f, 0.024f, 0.03f}, kRevLed, 1.0f, 3.2f);
+    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.880f, -0.888f}), {1.50f, 0.032f, 0.055f}, kTrimDark);
+    appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.848f, -0.884f}), {1.46f, 0.030f, 0.036f}, kTailLed, 1.0f, isBraking ? 4.4f : 1.5f);
+    if (ego.gear < 0) appendBox(verts, indices, sprungMat * Mat4::translation({0.0f, 0.818f, -0.888f}), {0.48f, 0.024f, 0.03f}, kRevLed, 1.0f, 3.2f);
     const struct { float x, z; bool front; } wheels[4] = {{kTrackHalfF, kFrontAxleZ, true}, {-kTrackHalfF, kFrontAxleZ, true}, {kTrackHalfR, kRearAxleZ, false}, {-kTrackHalfR, kRearAxleZ, false}};
     for (const auto& w : wheels) {
         emitWheelWellLiner(verts, indices, sprungMat, w.x * 0.90f, w.z);
