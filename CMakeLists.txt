@@ -98,6 +98,8 @@ add_library(cybercab_perception SHARED
     src/perception/OccupancyFlowNet.cpp
     src/perception/WorldModel.cpp
     src/perception/PerceptionPipeline.cpp
+    src/perception/SignalClassifier.cpp
+    src/perception/SignalFilter.cpp
     src/perception/v15/FrequencySplit.cpp
     src/perception/v15/V15Pipeline.cpp
     src/perception/v15/CalibSolver.cpp
