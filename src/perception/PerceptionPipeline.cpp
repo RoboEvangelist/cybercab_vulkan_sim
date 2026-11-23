@@ -161,16 +161,14 @@ EvalMetrics PerceptionPipeline::evaluateAgainstGroundTruth(const WorldEngine& wo
     for (const auto& d : out.detections3D) {
         if (d.semantic == SemanticClass::SignalSign || d.rangeM > 42.0f) continue;
         validDets++;
-        bool matchedAny = false;
         bool matchedSameClass = false;
         for (const auto& g : gtInRangeScratch_) {
             const float dist = std::hypot(d.worldPos.x - g.cx, d.worldPos.z - g.cz);
-            if (dist < 6.0f) matchedAny = true;
             if (g.semantic == d.semantic && dist < ((d.semantic == SemanticClass::Pedestrian) ? 3.5f : 5.0f)) {
                 matchedSameClass = true;
             }
         }
-        if (matchedAny) tpDets++;
+        if (matchedSameClass) tpDets++;
         if (!matchedSameClass) {
             if (d.semantic == SemanticClass::Pedestrian) m.ghostPedDetections++;
             else if (d.semantic == SemanticClass::Vehicle) m.ghostVehDetections++;

@@ -73,7 +73,7 @@ void main() {
     const int y0 = int(fy) * strideY;
 
     float gxAcc = 0.0, gyAcc = 0.0, motAcc = 0.0;
-    float vehScoreAcc = 0.0, pedScoreAcc = 0.0, sigScoreAcc = 0.0, poleSignAcc = 0.0, poleStrongAcc = 0.0, roadScoreAcc = 0.0;
+    float vehScoreAcc = 0.0, pedScoreAcc = 0.0, sigScoreAcc = 0.0, sigStrongAcc = 0.0, poleSignAcc = 0.0, poleStrongAcc = 0.0, roadScoreAcc = 0.0;
     float skyScoreAcc = 0.0, bldgScoreAcc = 0.0, lumAcc = 0.0;
     float samples = 0.0;
     float minObjU = 1.0, maxObjU = 0.0;
@@ -111,16 +111,24 @@ void main() {
                                           (c.b <= c.r * 1.32) && lC >= 0.215 && lC <= 0.85;
             const float roadTopV = min(0.47, camHorizV + 0.008);
             const float isSlateGround = (vFrac > roadTopV && c.b >= c.g && c.g >= c.r && sat < 0.60 && (vFrac <= 0.80 || lC >= 0.105) && lC < 0.34 && !silverColorMatch) ? 1.0 : 0.0;
-            const vec3 cStripeU4 = fetchCurr(cam, px, py - 4);
-            const vec3 cStripeU7 = fetchCurr(cam, px, py - 7);
-            const vec3 cStripeD4 = fetchCurr(cam, px, py + 4);
-            const vec3 cStripeD7 = fetchCurr(cam, px, py + 7);
-            const bool darkAboveStripe = (luma(cStripeU4) < 0.28 && satOf(cStripeU4) < 0.45) ||
-                                         (luma(cStripeU7) < 0.28 && satOf(cStripeU7) < 0.45);
-            const bool darkBelowStripe = (luma(cStripeD4) < 0.28 && satOf(cStripeD4) < 0.45) ||
-                                         (luma(cStripeD7) < 0.28 && satOf(cStripeD7) < 0.45);
-            const bool flatRoadStrip = (vFrac > camHorizV + 0.005) && darkAboveStripe && darkBelowStripe;
-            const float isWhiteStripe = (vFrac > 0.49 || flatRoadStrip) ? (clamp(1.0 - sat * 5.0, 0.0, 1.0) * clamp((lC - 0.42) * 4.5, 0.0, 1.0)) : 0.0;
+            float isWhiteStripe = 0.0;
+            if (sat < 0.20 && lC > 0.42 && (vFrac > 0.49 || vFrac > camHorizV + 0.005)) {
+                bool flatRoadStrip = (vFrac > 0.49);
+                if (!flatRoadStrip) {
+                    const vec3 cStripeU4 = fetchCurr(cam, px, py - 4);
+                    const vec3 cStripeU7 = fetchCurr(cam, px, py - 7);
+                    const vec3 cStripeD4 = fetchCurr(cam, px, py + 4);
+                    const vec3 cStripeD7 = fetchCurr(cam, px, py + 7);
+                    const bool darkAboveStripe = (luma(cStripeU4) < 0.28 && satOf(cStripeU4) < 0.45) ||
+                                                 (luma(cStripeU7) < 0.28 && satOf(cStripeU7) < 0.45);
+                    const bool darkBelowStripe = (luma(cStripeD4) < 0.28 && satOf(cStripeD4) < 0.45) ||
+                                                 (luma(cStripeD7) < 0.28 && satOf(cStripeD7) < 0.45);
+                    flatRoadStrip = darkAboveStripe && darkBelowStripe;
+                }
+                if (flatRoadStrip) {
+                    isWhiteStripe = clamp(1.0 - sat * 5.0, 0.0, 1.0) * clamp((lC - 0.42) * 4.5, 0.0, 1.0);
+                }
+            }
             const float isAmberCurb = (vFrac > min(0.45, camHorizV + 0.004) && c.r > c.g * 1.05 && c.r < c.g * 1.82 && c.g > c.b * 1.15 && (c.r - c.b) > 0.10) ? 1.0 : 0.0;
             const float isRoad = clamp(isAsphalt + isSlateGround + isWhiteStripe + isAmberCurb, 0.0, 1.0);
 
@@ -130,8 +138,8 @@ void main() {
                                        clamp((c.r - c.g * 1.24) * 3.5, 0.0, 1.0) *
                                        clamp((c.r - c.b * 1.24) * 3.5, 0.0, 1.0) *
                                        (1.0 - isAmberCurb);
-            const float isGrnSig = clamp((c.g - 0.55) * 3.0, 0.0, 1.0) * clamp((c.g - c.r) * 2.0, 0.0, 1.0) *
-                                   clamp((c.g - c.b * 0.96) * 5.0, 0.0, 1.0) * (1.0 - isSky) * (1.0 - isRoad) * (vFrac < 0.46 ? 1.0 : 0.15);
+            const float isGrnSig = clamp((c.g - 0.74) * 5.0, 0.0, 1.0) * clamp((c.g - c.r - 0.36) * 4.0, 0.0, 1.0) *
+                                   clamp((c.g * 1.06 - c.b) * 12.0, 0.0, 1.0) * (1.0 - isSky) * (1.0 - isRoad) * (vFrac < min(0.41, camHorizV - 0.075) ? 1.0 : 0.05);
             const float isSig = (vFrac < 0.47) ? clamp(isRedSig + isGrnSig, 0.0, 1.0) : 0.0;
 
             // Mask out ego vehicle's own gold hood/nose/fenders in camera views
@@ -208,15 +216,18 @@ void main() {
             // Road band calibrated per-camera to true world horizon scanline camHorizV
             const float roadBand = smoothstep(camHorizV - 0.008, camHorizV + 0.018, vFrac) *
                                    (1.0 - smoothstep(0.85, 0.93, vFrac));
+            // Orange/coral pedestrian outfits (e.g. PED_01 {0.976,0.451,0.086}) must not trigger red vehicle taillight bias
+            const bool isOrangePed = (c.r > 0.24) && (c.g >= c.r * 0.32) && (c.g > c.b * 1.80) && (sat > 0.50);
             // Crimson-magenta pedestrian outfits (c.b/c.g ~ 1.49 on PED_08; synthetic magenta test cars have c.b/c.g > 2.0)
             const bool isCrimsonPed = (c.r > c.b * 1.40) && (c.b > c.g * 1.24) && (c.b < c.g * 1.85) && (sat > 0.44);
             const float isPedColor = isEgoSelf ? 0.0 : (clamp((sat - 0.44) * 2.8, 0.0, 1.0) * clamp((lC - 0.06) * 5.0, 0.0, 1.0) * (1.0 - isSky) * (1.0 - isRoad));
             const float isPed = isPedColor * roadBand;
 
             // Vehicle chassis: mid-frame painted car body / red-orange or bloomed taillight / shaded or sunlit truck cargo box
+            // Pure red / bloomed-pink taillights have green ~ blue; keep orange/crimson pedestrian outfits off isTail
             const float isTailColor = (c.b < c.g * 1.18 && c.b < c.g + 0.08) ? 1.0 : 0.0;
-            const float isTail = max(isRedSig, isBloomedRed) * isTailColor * smoothstep(camHorizV - 0.015, camHorizV + 0.065, vFrac) * (1.0 - isRoad) * (isCrimsonPed ? 0.0 : 1.0);
-            const float isVehPaint = isEgoSelf ? 0.0 : (clamp((sat - 0.44) * 2.8, 0.0, 1.0) * clamp((lC - 0.06) * 5.0, 0.0, 1.0) * (1.0 - isSky) * (1.0 - isRoad) * roadBand * (isCrimsonPed ? 0.85 : 1.0));
+            const float isTail = max(isRedSig, isBloomedRed) * isTailColor * smoothstep(camHorizV - 0.015, camHorizV + 0.065, vFrac) * (1.0 - isRoad) * ((isCrimsonPed || isOrangePed) ? 0.0 : 1.0);
+            const float isVehPaint = isEgoSelf ? 0.0 : (clamp((sat - 0.44) * 2.8, 0.0, 1.0) * clamp((lC - 0.06) * 5.0, 0.0, 1.0) * (1.0 - isSky) * (1.0 - isRoad) * roadBand * (isOrangePed ? 0.55 : (isCrimsonPed ? 0.85 : 1.0)));
             const bool neutralNonSkyRoad = !isEgoSelf && sat < 0.14 && c.b >= c.r * 0.95 && (1.0 - isSky) > 0.5 && (1.0 - isRoad) > 0.5;
             const bool shadedTruckCore = neutralNonSkyRoad && sat < 0.055 && vFrac > 0.06 && vFrac < 0.62 && lC > 0.28 && lC < 0.44 &&
                                          !(sat < 0.045 && lC < 0.354 && vFrac > 0.55);
@@ -265,6 +276,7 @@ void main() {
             vehScoreAcc += isVeh;
             pedScoreAcc += isPed;
             sigScoreAcc += isSig;
+            if (isSig > 0.45) sigStrongAcc += 1.0;
             poleSignAcc += isPoleOrSign;
             if (isPoleOrSign >= 0.45) poleStrongAcc += 1.0;
             roadScoreAcc += isRoad;
@@ -292,7 +304,8 @@ void main() {
     const float mMot = motAcc / samples;
     const float mVeh = vehScoreAcc / samples;
     const float mPed = pedScoreAcc / samples;
-    const float mSig = sigScoreAcc / samples;
+    const float sigFracPeak = (sigStrongAcc >= 2.0) ? clamp(sigStrongAcc / max(4.0, samples * 0.16), 0.0, 1.0) : 0.0;
+    const float mSig = max(sigScoreAcc / samples, sigFracPeak);
     const float mPoleRaw = poleSignAcc / samples;
     const float mPoleCoh = (poleStrongAcc >= 3.0) ? clamp(mPoleRaw * 3.0, 0.0, 1.0) : mPoleRaw;
     const float mRoad = roadScoreAcc / samples;
@@ -339,12 +352,18 @@ void main() {
         const uint s5H = pc.featHeight / 2u;
         const uint s5Idx = ((cam * s5H + (fy / 2u)) * s5W + (fx / 2u)) * 4u;
         for (int k = 0; k < 4; ++k) {
-            const vec4 avg = 0.25 * (
+            vec4 avg = 0.25 * (
                 s_block[ly][lx][k] +
                 s_block[ly][lx + 1u][k] +
                 s_block[ly + 1u][lx][k] +
                 s_block[ly + 1u][lx + 1u][k]
             );
+            // Preserve compact distant signal bulbs (1 S4 cell) against 2x2 average dilution
+            if (k == 1) {
+                const float maxSig = max(max(s_block[ly][lx][1].z, s_block[ly + 1u][lx][1].z),
+                                         max(s_block[ly][lx + 1u][1].z, s_block[ly + 1u][lx + 1u][1].z));
+                avg.z = max(avg.z, maxSig * 0.72);
+            }
             uFeatS5.feat[s5Idx + uint(k)] = avg;
         }
     }

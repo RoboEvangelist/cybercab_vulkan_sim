@@ -50,6 +50,32 @@ void TrajectoryPlanner::plan(WorldEngine& world, const PerceptionFrameOutput& pe
     cmd.candidateTrajectories.resize(static_cast<size_t>(numCand));
     cmd.candidateBlocked.assign(static_cast<size_t>(numCand), false);
 
+    // Precompute shared centerline samples and coarse obstacle voxel slice once across all candidates.
+    candCenterScratch_.resize(static_cast<size_t>(trajSteps));
+    candLeftScratch_.resize(static_cast<size_t>(trajSteps));
+    for (int s = 0; s < trajSteps; ++s) {
+        const float frac = static_cast<float>(s) / static_cast<float>(trajSteps - 1);
+        const float distAlong = frac * lookaheadDist;
+        float u = std::fmod(loopU + distAlong / totalLoopLen, 1.0f);
+        if (u < 0.0f) u += 1.0f;
+        candCenterScratch_[s] = centerline.getPointAt(u);
+        const Vec3 tan = centerline.getTangentAt(u);
+        candLeftScratch_[s] = {tan.z, 0.0f, -tan.x};
+    }
+
+    candVoxScratch_.clear();
+    const float candMaxRadSq = (lookaheadDist + 10.0f) * (lookaheadDist + 10.0f);
+    for (size_t k = 0; k < perc.activeVoxels.size(); k += 2) {
+        const auto& v = perc.activeVoxels[k];
+        if (v.wy > 2.2f || v.sem == SemanticClass::Overhang ||
+            v.sem == SemanticClass::SignalSign || v.sem == SemanticClass::Curb) continue;
+        const float dx = v.wx - ego.pos.x;
+        const float dz = v.wz - ego.pos.z;
+        if (dx * dx + dz * dz <= candMaxRadSq) {
+            candVoxScratch_.push_back(&v);
+        }
+    }
+
     for (int c = 0; c < numCand; ++c) {
         const float targetLat = candidateOffsets[c];
         auto& pts = cmd.candidateTrajectories[c];
@@ -60,23 +86,15 @@ void TrajectoryPlanner::plan(WorldEngine& world, const PerceptionFrameOutput& pe
         for (int s = 0; s < trajSteps; ++s) {
             const float frac = static_cast<float>(s) / static_cast<float>(trajSteps - 1);
             const float distAlong = frac * lookaheadDist;
-            float u = std::fmod(loopU + distAlong / totalLoopLen, 1.0f);
-            if (u < 0.0f) u += 1.0f;
-
-            const Vec3 cPt = centerline.getPointAt(u);
-            const Vec3 tan = centerline.getTangentAt(u);
-            const Vec3 left{tan.z, 0.0f, -tan.x};
             const float lat = quinticLateralOffset(currentLat, targetLat, std::min(1.0f, frac * 1.35f));
-            Vec3 wp = cPt + left * lat;
+            Vec3 wp = candCenterScratch_[s] + candLeftScratch_[s] * lat;
             wp.y = 0.12f;
             pts[s] = wp;
 
             if (s > 1) {
                 const float tPred = distAlong / std::max(4.0f, ego.speed);
-                for (size_t k = 0; k < perc.activeVoxels.size(); k += 2) {
-                    const auto& v = perc.activeVoxels[k];
-                    if (v.wy > 2.2f || v.sem == SemanticClass::Overhang ||
-                        v.sem == SemanticClass::SignalSign || v.sem == SemanticClass::Curb) continue;
+                for (const ActiveVoxel* vp : candVoxScratch_) {
+                    const auto& v = *vp;
                     const float predVx = v.wx + v.vx * std::min(1.8f, tPred);
                     const float predVz = v.wz + v.vz * std::min(1.8f, tPred);
                     const float dObs = std::hypot(wp.x - predVx, wp.z - predVz);
@@ -236,15 +254,20 @@ void TrajectoryPlanner::plan(WorldEngine& world, const PerceptionFrameOutput& pe
         }
     }
 
+    const float maxVoxCorrRadSq = (rssDist + 10.0f) * (rssDist + 10.0f);
     for (const auto& v : perc.activeVoxels) {
         if (v.wy > 2.1f || v.sem == SemanticClass::Overhang || v.sem == SemanticClass::Static ||
-            v.sem == SemanticClass::SignalSign || v.sem == SemanticClass::Curb) {
+            v.sem == SemanticClass::SignalSign || v.sem == SemanticClass::Curb ||
+            v.confidence <= 0.52f) {
             continue;
         }
+        const float vdx = v.wx - ego.pos.x;
+        const float vdz = v.wz - ego.pos.z;
+        if (vdx * vdx + vdz * vdz > maxVoxCorrRadSq) continue;
         float fwd = 0.0f, lat = 0.0f, vtX = sinEgo, vtZ = cosEgo;
         rss::projectOntoPolyline(corridorScratch_, corridorArcScratch_, v.wx, v.wz, fwd, lat, vtX, vtZ);
         const float corr = (v.sem == SemanticClass::Pedestrian) ? 1.50f : 1.25f;
-        if (fwd > 0.25f && fwd < rssDist + 4.0f && lat < corr && v.confidence > 0.52f) {
+        if (fwd > 0.25f && fwd < rssDist + 4.0f && lat < corr) {
             minForwardObsDist = std::min(minForwardObsDist, std::max(0.0f, fwd));
             if (fwd <= rssDist * 0.88f && ego.speed > 0.5f) {
                 aebTriggered = true;

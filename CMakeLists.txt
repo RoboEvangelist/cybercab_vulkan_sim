@@ -127,6 +127,10 @@ add_executable(cybercab_tests
     tests/test_occupancy_net.cpp
     tests/test_fmea_suite.cpp
     tests/test_fmea_perception_safety.cpp
+    tests/test_core_world_coverage.cpp
+    tests/test_model_quality_and_pr.cpp
+    tests/test_tracking_and_occlusion.cpp
+    tests/test_world_model_and_latency.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
 target_link_libraries(cybercab_tests PRIVATE

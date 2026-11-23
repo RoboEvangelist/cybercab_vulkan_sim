@@ -22,6 +22,7 @@ public:
     void init(bool enableValidation, SDL_Window* window = nullptr);
     void cleanup();
 
+    bool tryFindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties, uint32_t& outIndex) const;
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const;
     VkFormat findDepthFormat() const;
 

@@ -180,7 +180,7 @@ TEST(FMEAPerceptionTest, OcclusionShadowRaycastAndWorldModelRolloutCoherence) {
     const SimConfig cfg = SimConfig::loadFromYaml(resolveAssetPath("config/cybercab_sim.yaml"));
     ASSERT_TRUE(cfg.occEnableShadows);
     ASSERT_EQ(cfg.wmHorizonsSec.size(), 4u);
-    EXPECT_FLOAT_EQ(cfg.wmUncertaintyGrowthRate, 0.55f);
+    EXPECT_FLOAT_EQ(cfg.wmUncertaintyGrowthRate, 0.90f);
 
     VulkanContext ctx;
     ctx.init(false, nullptr);

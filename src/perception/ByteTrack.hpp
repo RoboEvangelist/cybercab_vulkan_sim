@@ -28,6 +28,7 @@ private:
         Track3D pub;
         std::array<float, 4> x{};
         std::array<float, 16> P{};
+        std::array<float, 4> classVotes{}; // index: 1=Vehicle, 2=Pedestrian, 3=SignalSign
         Vec3 lastDetPos{};
         int lastCamIndex = -1;
         float lastDt = 1.0f / 36.0f;

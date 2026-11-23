@@ -170,7 +170,32 @@ void main() {
     const bool isVehDominant = (f1.x >= f1.y && f1.x >= fSig && wy < 3.4);
     const float vehGroundGate = isVehDominant ? smoothstep(0.04, 0.20, zResp.x)
                                               : (isSigPillar ? smoothstep(0.02, 0.10, zResp.x) : 1.0);
-    const float visualOcc = clamp((zScore * 1.25 + f1.x * 0.85 + f1.y * 1.15 + max(f1.z * 0.70, f2.w * 1.45)) * skyRoadMask * structMask * obsWeight * vehGroundGate, 0.0, 1.0);
+    // Suppress single-camera monocular projective ray bleed strictly behind foreground tracked agents
+    float rayBleedSuppress = 1.0;
+    if (meta.z < 1.55) {
+        for (uint t = 0u; t < pc.numTracks; ++t) {
+            TrackPriorGpu tr = uTracks.tracks[t];
+            uint trSem = uint(round(tr.sizeMeta.z));
+            if (tr.yawValid.w < 0.5 || trSem == 3u) continue;
+            vec2 camOrig = (abs(tr.posVel.y) > 2.2) ? vec2(0.55, sign(tr.posVel.y) * 0.80) : vec2(1.20, 0.0);
+            vec2 vTr = tr.posVel.xy - camOrig;
+            vec2 vVox = vec2(egoX, egoY) - camOrig;
+            float rTr = length(vTr);
+            float rVox = length(vVox);
+            float trRad = max(tr.sizeMeta.x, tr.sizeMeta.y);
+            if (rTr > 1.2 && rVox > rTr + trRad + 0.60) {
+                vec2 dirTr = vTr / rTr;
+                float along = dot(vVox, dirTr);
+                float perp = abs(vVox.x * dirTr.y - vVox.y * dirTr.x);
+                float coneHalf = trRad + 0.55 + 0.14 * (rVox - rTr);
+                if (along > rTr && perp <= coneHalf) {
+                    rayBleedSuppress = 0.0;
+                    break;
+                }
+            }
+        }
+    }
+    const float visualOcc = clamp((zScore * 1.25 + f1.x * 0.85 + f1.y * 1.15 + max(f1.z * 0.70, f2.w * 1.45)) * skyRoadMask * structMask * obsWeight * vehGroundGate * rayBleedSuppress, 0.0, 1.0);
 
     uint sem = (prevConf > 0.08) ? prevSem : 0u;
     float newConf = prevConf;
@@ -205,7 +230,7 @@ void main() {
 
     for (uint t = 0u; t < pc.numTracks; ++t) {
         TrackPriorGpu tr = uTracks.tracks[t];
-        if (tr.yawValid.w < 0.5) continue;
+        if (tr.yawValid.w < 0.5 || uint(round(tr.sizeMeta.z)) == 3u) continue;
         float tEgoX = tr.posVel.x;
         float tEgoY = tr.posVel.y;
         float dx = egoX - tEgoX;

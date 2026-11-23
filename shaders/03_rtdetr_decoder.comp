@@ -89,13 +89,21 @@ void main() {
 
             // Multi-scale Deformable Cross-Attention: layer 0 uses stride-2 (radius 32px),
             // subsequent layers keep stride-1 while expanding seamlessly across connected vehicle components.
-            const int step = (layer == 0u) ? 2 : 1;
             const vec4 prevQF = s_qFeat[q];
+            const vec4 seedM1 = readMem(cam, gx, gy, 1u);
+            const bool sigQuery = (layer == 0u)
+                ? (seedM1.z > max(seedM1.x, seedM1.y) * 1.15 && seedM1.z > 0.08)
+                : (prevQF.z > max(prevQF.x, prevQF.y) * 1.15 && prevQF.z > 0.04);
+            const bool vpQuery = (layer == 0u)
+                ? (!sigQuery && max(seedM1.x, seedM1.y) > 0.12 && seedM1.z <= 0.04)
+                : (!sigQuery && max(prevQF.x, prevQF.y) > 0.04 && max(prevQF.x, prevQF.y) > prevQF.z * 1.15);
+            const int step = (layer == 0u) ? (sigQuery ? 1 : 2) : 1;
             const bool vehQuery = (prevQF.x > prevQF.y * 1.15) && (prevQF.x >= prevQF.z * 0.90) && (prevQF.x > 0.04);
             const bool expandVeh = (layer > 0u) && vehQuery && (w > 0.20 || h > 0.22);
 
-            int scanMinDx = -4, scanMaxDx = 4;
-            int scanMinDy = -4, scanMaxDy = 4;
+            const int r0 = (layer == 0u && sigQuery) ? 2 : 4;
+            int scanMinDx = -r0, scanMaxDx = r0;
+            int scanMinDy = -r0, scanMaxDy = r0;
             if (layer > 0u) {
                 if (expandVeh) {
                     // Step A: Find full vertical span at query column gx (+/- 1 col) so lower bumper/undercarriage seeds reach tall upper cargo.
@@ -210,7 +218,7 @@ void main() {
                         const vec4 sm3 = readMem(cam, gx + sx, gy + sy, 3u);
                         if (sm3.x < 0.0 || sm3.z < 0.0) continue;
                         const float sMask = clamp(1.0 - sm2.x * 1.2 - sm1.w * 0.25, 0.20, 1.0);
-                        const float sSal = (sm1.x * 1.25 + sm1.y * 1.45 + sm1.z * 1.35) * sMask;
+                        const float sSal = (sm1.x * 1.25 + sm1.y * 1.45) * sMask + sm1.z * 1.35;
                         if (sSal > bestSeedSal) {
                             bestSeedSal = sSal;
                             seedMin = vec2(floor(sm3.x / 2048.0), mod(sm3.x, 2048.0)) / 2047.0;
@@ -230,8 +238,11 @@ void main() {
                     const vec4 m3 = readMem(cam, gx + dx, gy + dy, 3u);
 
                     const float mask = clamp(1.0 - m2.x * 1.2 - m1.w * 0.25, 0.20, 1.0);
-                    const float clsSal = (m1.x * 1.25 + m1.y * 1.45 + m1.z * 1.35) * mask;
-                    const float sal = clsSal + m0.z * 0.15 * mask;
+                    const bool skipPureSig = vpQuery && (max(m1.x, m1.y) <= 0.02) && (m1.z > 0.05);
+                    const float sigTerm = skipPureSig ? 0.0 : (m1.z * 1.35);
+                    const float vpTerm = sigQuery ? 0.0 : ((m1.x * 1.25 + m1.y * 1.45) * mask);
+                    const float clsSal = sigTerm + vpTerm;
+                    const float sal = clsSal + (sigQuery ? 0.0 : (m0.z * 0.15 * mask));
                     const float ndx = float(dx) / float(step);
                     const float ndy = float(dy) / float(step);
                     const float kernScale = wideConn ? 0.045 : 0.18;
@@ -241,9 +252,9 @@ void main() {
                                            (float(gy + dy) + 0.5) / float(pc.featH));
                     sumW += a;
                     weightedPos += a * cPos;
-                    sumVeh += a * m1.x;
-                    sumPed += a * m1.y;
-                    sumSig += a * m1.z;
+                    sumVeh += sigQuery ? 0.0 : (a * m1.x);
+                    sumPed += sigQuery ? 0.0 : (a * m1.y);
+                    sumSig += skipPureSig ? 0.0 : (a * m1.z);
 
                     if (clsSal > 0.18 || (!wideConn && sal > 0.25)) {
                         const float ab = pow(max(clsSal - 0.14, 0.02), 1.35);
@@ -255,7 +266,9 @@ void main() {
                         minDy = min(minDy, dy);
                         maxDy = max(maxDy, dy);
                     }
-                    const bool vehSubMatch = !wideConn || (m1.x * mask > 0.15 && m1.x >= m1.y * 0.85);
+                    const bool vehSubMatch = sigQuery
+                        ? (m1.z > 0.12 && m1.z >= max(m1.x, m1.y))
+                        : (wideConn ? (m1.x * mask > 0.15 && m1.x >= m1.y * 0.85) : !skipPureSig);
                     if (layer > 0u && m3.x >= 0.0 && m3.z >= 0.0 && vehSubMatch &&
                         (clsSal > 0.18 || (abs(dx) <= 1 && abs(dy) <= 1))) {
                         const vec2 cMin = vec2(floor(m3.x / 2048.0), mod(m3.x, 2048.0)) / 2047.0;
@@ -279,12 +292,17 @@ void main() {
                 cy = mix(cy, refined.y, (layer == 0u) ? 0.80 : 0.65);
             }
 
-            if (layer > 0u && hasSub && (wideConn || ((maxDx - minDx) < 4 && (maxDy - minDy) < 4)) &&
-                subMax.x > subMin.x && subMax.y > subMin.y) {
+            const float subW = subMax.x - subMin.x;
+            const float subH = subMax.y - subMin.y;
+            const bool midHorizTruckSub = hasSub && (cy > 0.428 && cy < 0.458) && (subH > 0.075 && subH < 0.130) &&
+                                          (sumPed < sumVeh * 0.05) && (sumVeh > 0.20) &&
+                                          ((maxDx - minDx) <= 4 && (maxDy - minDy) == 4);
+            if (layer > 0u && hasSub && (wideConn || midHorizTruckSub || ((maxDx - minDx) < 4 && (maxDy - minDy) < 4)) &&
+                subW > 0.0 && subH > 0.0) {
                 cx = 0.5 * (subMin.x + subMax.x);
-                cy = 0.5 * (subMin.y + subMax.y);
-                w = clamp(subMax.x - subMin.x, 0.008, wideConn ? 0.92 : 0.45);
-                h = clamp(subMax.y - subMin.y, 0.010, wideConn ? 0.92 : 0.55);
+                cy = 0.5 * (subMin.y + subMax.y) + (midHorizTruckSub ? subH * 0.07 : 0.0);
+                w = clamp(subW, 0.008, wideConn ? 0.92 : 0.45);
+                h = clamp(midHorizTruckSub ? (subH * 1.14) : subH, 0.010, wideConn ? 0.92 : 0.55);
             } else if (layer > 0u && sumBoxW > 1e-4 && (maxDx - minDx) < 4 && (maxDy - minDy) < 4) {
                 const vec2 meanB = weightedBoxPos / sumBoxW;
                 const vec2 varB = max(weightedBoxPos2 / sumBoxW - meanB * meanB, vec2(0.0));
@@ -361,12 +379,14 @@ void main() {
 
     // Aspect-ratio & vertical-position geometric inductive bias in FFN head
     if (cy < 0.45 && sScore > 0.05) sScore *= 1.55;
-    if (wPx >= hPx * 1.18 && w > 0.060 && vScore >= pScore * 0.90 && vScore > 0.04) {
+    if ((wPx >= hPx * 1.18 || (wPx >= hPx * 1.06 && (h > 0.125 || vScore >= pScore * 1.03))) &&
+        w > 0.065 && vScore >= pScore * 0.88 && vScore > 0.04) {
         vScore *= 1.45;
         pScore *= 0.75;
     } else if (((hPx > wPx * 1.01 && w <= 0.095 && h < 0.135 && pScore >= vScore * 0.88) ||
                 (hPx > wPx * 1.05 && pScore >= vScore * 0.88) ||
-                (w <= 0.062 && hPx >= wPx * 0.90 && pScore >= vScore * 0.92)) &&
+                (w <= 0.062 && hPx >= wPx * 0.90 && pScore >= vScore * 0.92) ||
+                (w <= 0.115 && h <= 0.122 && hPx >= wPx * 0.72 && pScore >= vScore * 0.96)) &&
                h > 0.024 && pScore > 0.08) {
         pScore *= 1.45;
         vScore *= 0.75;

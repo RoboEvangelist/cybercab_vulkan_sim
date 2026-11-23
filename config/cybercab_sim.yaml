@@ -26,21 +26,21 @@ perception:
     patch_rows: 8                # Spatial patch grid rows per camera
     edge_threshold: 0.045        # Low gradient energy indicates blur / mud occlusion
     glare_threshold: 0.82        # Over-bright / hazy saturation indicator
-    min_token_weight: 0.12       # Minimum transformer token weight when fully soiled
+    min_token_weight: 0.18       # Minimum transformer token weight when fully soiled
     base_epistemic_var: 0.04     # Base normalized variance sigma_0^2
     soil_var_gain: 0.85          # Variance inflation scale for soiled lenses
   rtdetr:
     num_queries: 16              # Top-K object queries per camera (total 8 * 16 = 128 max)
     num_decoder_layers: 2
-    high_conf_thresh: 0.52       # ByteTrack stage-1 high-confidence detection threshold
-    low_conf_thresh: 0.24        # ByteTrack stage-2 low-confidence detection threshold
+    high_conf_thresh: 0.46       # ByteTrack stage-1 high-confidence detection threshold
+    low_conf_thresh: 0.22        # ByteTrack stage-2 low-confidence detection threshold
     nms_iou_thresh: 0.45
     max_det_range_m: 65.0
   bytetrack:
     max_tracks: 64
     max_time_lost_sec: 1.5
-    high_match_dist_m: 3.5
-    low_match_dist_m: 4.5
+    high_match_dist_m: 4.0
+    low_match_dist_m: 5.2
     process_noise_pos: 0.18
     process_noise_vel: 0.85
     base_meas_noise_m: 0.45      # Multiplied by 1 / max(cam_weight, 0.12)
@@ -53,7 +53,7 @@ perception:
     max_y: 20.0
     z_anchors: [0.45, 1.05, 1.75, 2.65]
     channels: 16
-    temporal_blend: 0.58         # Temporal self-attention retention weight across ego-warped frames
+    temporal_blend: 0.45         # Temporal self-attention retention weight across ego-warped frames
   occupancy_flow:
     min_x: -22.0
     max_x: 38.0
@@ -69,7 +69,7 @@ perception:
     enable_shadows: true
   world_model:
     horizons_sec: [0.5, 1.0, 1.5, 2.0]
-    uncertainty_growth_rate: 0.55
+    uncertainty_growth_rate: 0.90
 
 planning:
   target_cruise_speed_ms: 10.5

@@ -107,23 +107,23 @@ struct SimConfig {
     int soilPatchRows = 8;
     float soilEdgeThreshold = 0.045f;
     float soilGlareThreshold = 0.82f;
-    float soilMinTokenWeight = 0.12f;
+    float soilMinTokenWeight = 0.18f;
     float soilBaseEpistemicVar = 0.04f;
     float soilVarGain = 0.85f;
 
     // RT-DETR
     int rtdetrNumQueries = 16;
     int rtdetrDecoderLayers = 2;
-    float rtdetrHighConfThresh = 0.52f;
-    float rtdetrLowConfThresh = 0.24f;
+    float rtdetrHighConfThresh = 0.46f;
+    float rtdetrLowConfThresh = 0.22f;
     float rtdetrNmsIouThresh = 0.45f;
     float rtdetrMaxRangeM = 65.0f;
 
     // ByteTrack
     int btMaxTracks = 64;
     float btMaxTimeLostSec = 1.5f;
-    float btHighMatchDistM = 3.5f;
-    float btLowMatchDistM = 4.5f;
+    float btHighMatchDistM = 4.0f;
+    float btLowMatchDistM = 5.2f;
     float btProcessNoisePos = 0.18f;
     float btProcessNoiseVel = 0.85f;
     float btBaseMeasNoiseM = 0.45f;
@@ -137,7 +137,7 @@ struct SimConfig {
     float bevMaxY = 20.0f;
     std::vector<float> bevZAnchors{0.45f, 1.05f, 1.75f, 2.65f};
     int bevChannels = 16;
-    float bevTemporalBlend = 0.58f;
+    float bevTemporalBlend = 0.45f;
 
     // Occupancy & Flow
     float occMinX = -22.0f;
@@ -160,7 +160,7 @@ struct SimConfig {
 
     // World Model
     std::vector<float> wmHorizonsSec{0.5f, 1.0f, 1.5f, 2.0f};
-    float wmUncertaintyGrowthRate = 0.55f;
+    float wmUncertaintyGrowthRate = 0.90f;
 
     // Planning & RSS
     float targetCruiseSpeedMs = 10.5f;

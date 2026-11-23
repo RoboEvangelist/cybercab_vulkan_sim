@@ -413,8 +413,9 @@ void BackboneRTDETR::decodeAndLift3D(const SimConfig& cfg,
                                      geomTallRoof &&
                                      ((hPx >= wPx * 0.68f) || (aboveHoriz > 0.045f && wPx >= hPx * 0.55f));
             // Sub-cell 1px chromatic pedestrian boxes capture lit torso (WorldEngine y=[0.75, 1.33]m, height 0.58m)
+            const float sigPrior = (d.cyNorm < camHorizonV_[c] - 0.08f && d.hNorm < 0.065f) ? 0.25f : 1.05f;
             const float hPrior = (d.semantic == SemanticClass::Pedestrian) ? 0.56f :
-                                 (d.semantic == SemanticClass::SignalSign) ? 1.15f :
+                                 (d.semantic == SemanticClass::SignalSign) ? sigPrior :
                                  isTallTruck ? 2.68f : 1.50f;
             const bool borderClipX = (d.cxNorm - d.wNorm * 0.5f < 0.035f) || (d.cxNorm + d.wNorm * 0.5f > 0.965f);
             const float tHeight = clampf((cm.intr.fy * hPrior) / hPx, 1.5f, std::min(spec.maxRangeM, maxRangeM_));
@@ -426,7 +427,7 @@ void BackboneRTDETR::decodeAndLift3D(const SimConfig& cfg,
                               : tHeight;
 
             float tEst = tSize;
-            const float planeY = (d.semantic == SemanticClass::Pedestrian) ? 0.76f :
+            const float planeY = (d.semantic == SemanticClass::Pedestrian) ? ((spec.hfovDeg < 40.0f) ? 0.80f : 0.76f) :
                                  isTallTruck ? 0.35f : 0.0f;
             if (d.semantic != SemanticClass::SignalSign) {
                 const float maxCenterY = isTallTruck ? 0.085f : (d.hNorm < 0.11f ? 0.005f : 0.025f);
@@ -522,9 +523,12 @@ void BackboneRTDETR::decodeAndLift3D(const SimConfig& cfg,
         if (fov < 40.0f) {
             // Telephoto wins on distant/mid-range compact targets, yielding to wider main cams when close, overflowing, or border-clipped.
             if (clippedX) return 0.32f;
+            const bool tallMidTele = (d.semantic == SemanticClass::Vehicle && d.halfExtents.y > 1.20f) &&
+                                     (d.det2d.wNorm > 0.205f && d.det2d.cyNorm < 0.46f);
             const bool saturatedTele = d.det2d.wNorm > 0.45f || d.det2d.hNorm > 0.50f;
             if (saturatedTele) return 0.48f;
-            const bool closeTele = d.det2d.wNorm > 0.20f || d.det2d.hNorm > 0.26f ||
+            const bool closeTele = d.det2d.wNorm > (tallMidTele ? 0.30f : 0.20f) ||
+                                   d.det2d.hNorm > (tallMidTele ? 0.36f : 0.26f) ||
                                    (d.det2d.cyNorm > 0.60f && d.det2d.hNorm > 0.12f) ||
                                    (d.det2d.cyNorm + d.det2d.hNorm * 0.5f) > 0.94f;
             return closeTele ? 0.50f : 2.15f;

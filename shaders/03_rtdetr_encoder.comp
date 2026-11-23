@@ -76,10 +76,31 @@ void main() {
 
     // Uncertainty-minimal objectness score (f1 already weighted by patchW; avoid double-squaring f3.y)
     const float skyBldgSuppress = clamp(1.0 - f2.x * 1.4 - f2.y * 0.75, 0.10, 1.0);
-    const float s5EdgeGate = smoothstep(0.008, 0.032, localEdge);
+    // Preserve interior seeds on solid multi-cell vehicles whose uniform panels lack strong internal gradients
+    float solidVehInt = 0.0;
+    float vehSeedFloor = 0.0;
+    {
+        const uint encCam = gl_WorkGroupID.z;
+        const int sx = int(gl_LocalInvocationID.x);
+        const int sy = int(gl_LocalInvocationID.y);
+        const int maxX = int(pc.s5W) - 1;
+        const int maxY = int(pc.s5H) - 1;
+        const uint rL = ((encCam * pc.s5H + uint(sy)) * pc.s5W + uint(max(0, sx - 1))) * 4u + 1u;
+        const uint rR = ((encCam * pc.s5H + uint(sy)) * pc.s5W + uint(min(maxX, sx + 1))) * 4u + 1u;
+        const uint rU = ((encCam * pc.s5H + uint(max(0, sy - 1))) * pc.s5W + uint(sx)) * 4u + 1u;
+        const uint rD = ((encCam * pc.s5H + uint(min(maxY, sy + 1))) * pc.s5W + uint(sx)) * 4u + 1u;
+        const float minVehN4 = min(min(uFeatS5.feat[rL].x, uFeatS5.feat[rR].x),
+                                   min(uFeatS5.feat[rU].x, uFeatS5.feat[rD].x));
+        const float cleanVehMask = (1.0 - smoothstep(0.10, 0.35, f2.x)) * (1.0 - smoothstep(0.25, 0.55, f2.y));
+        solidVehInt = smoothstep(0.40, 0.65, min(f1.x, minVehN4)) * cleanVehMask;
+        vehSeedFloor = max(clamp(solidVehInt * 2.0, 0.0, 1.0),
+                           smoothstep(0.55, 0.78, f1.x) * cleanVehMask * 0.70);
+    }
+    const float s5EdgeGate = max(smoothstep(0.008, 0.032, localEdge), vehSeedFloor);
     const float groundVertGate = (py < 0.28 || py > 0.86) ? 0.08 : 1.0;
     const float sigVertGate = (py > 0.52) ? 0.05 : 1.0;
-    const float rawObj = ((f1.y * 2.15 + f1.x * 1.95) * groundVertGate + f1.z * 1.65 * sigVertGate) * skyBldgSuppress * s5EdgeGate;
+    const float rawObj = (((f1.y * 2.15 + f1.x * 1.95) * groundVertGate * skyBldgSuppress) + (f1.z * 1.65 * sigVertGate)) * s5EdgeGate +
+                         (solidVehInt * 0.35 * groundVertGate);
     s_scores[tid] = rawObj;
 
     barrier();
@@ -150,10 +171,15 @@ void main() {
             if (bestIdx >= 0) {
                 int bx = bestIdx % int(pc.s5W);
                 int by = bestIdx / int(pc.s5W);
-                // Suppress immediate 3x3 S5 neighbors so queries cover distinct candidate objects
+                const bool sigSeed = (s_tokens[bestIdx][0].w > max(s_tokens[bestIdx][0].y, s_tokens[bestIdx][0].z) * 1.15);
+                // Suppress immediate 3x3 S5 neighbors so queries cover distinct objects; keep compact SignalSign peaks from swallowing nearby vehicles/peds.
                 for (int ny = max(0, by - 1); ny <= min(int(pc.s5H) - 1, by + 1); ++ny) {
                     for (int nx = max(0, bx - 1); nx <= min(int(pc.s5W) - 1, bx + 1); ++nx) {
-                        used[ny * int(pc.s5W) + nx] = true;
+                        const int nIdx = ny * int(pc.s5W) + nx;
+                        const bool strongVehPed = max(s_tokens[nIdx][0].y, s_tokens[nIdx][0].z) > (s_tokens[nIdx][0].w * 1.25 + 0.05);
+                        if (!sigSeed || nIdx == bestIdx || !strongVehPed) {
+                            used[nIdx] = true;
+                        }
                     }
                 }
                 uint s5Idx = ((cam * pc.s5H + uint(by)) * pc.s5W + uint(bx)) * 4u;

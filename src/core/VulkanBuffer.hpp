@@ -18,10 +18,16 @@ public:
 
     void create(const VulkanContext& ctx, VkDeviceSize size,
                 VkBufferUsageFlags usage, VkMemoryPropertyFlags memProps);
+    void createPreferred(const VulkanContext& ctx, VkDeviceSize size,
+                         VkBufferUsageFlags usage,
+                         VkMemoryPropertyFlags preferredMemProps,
+                         VkMemoryPropertyFlags fallbackMemProps);
     void destroy();
 
     void upload(const void* data, VkDeviceSize bytes, VkDeviceSize offset = 0);
     void download(void* dst, VkDeviceSize bytes, VkDeviceSize offset = 0) const;
+    void invalidateCache() const;
+    void flushCache() const;
 
     template <typename T>
     void uploadVector(const std::vector<T>& vec) {
@@ -35,6 +41,8 @@ public:
 
     void* map();
     void unmap();
+    void* mappedData() const { return mapped_; }
+    bool isHostCached() const { return (memProps_ & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0; }
 
     VkBuffer handle() const { return buffer_; }
     VkDeviceSize size() const { return size_; }

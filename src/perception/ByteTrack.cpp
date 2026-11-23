@@ -277,9 +277,16 @@ void ByteTracker::updateTrack(InternalTrack& tr, const EgoState& ego, const Dete
     tr.pub.timeSinceUpdateSec = 0.0f;
     tr.pub.score = det.score;
     tr.pub.matchedLowConf = lowConfMatch;
+    // Exponentially decayed multi-frame class evidence suppresses single-frame class flicker
+    for (float& v : tr.classVotes) v *= 0.72f;
+    const int detCls = std::clamp(static_cast<int>(det.semantic), 0, 3);
     if (det.camWeight > 0.45f) {
-        tr.pub.semantic = det.semantic;
-        tr.pub.halfExtents = det.halfExtents;
+        tr.classVotes[detCls] += det.score;
+        const int curCls = std::clamp(static_cast<int>(tr.pub.semantic), 0, 3);
+        if (detCls == curCls || tr.pub.hits < 3 || tr.classVotes[detCls] > tr.classVotes[curCls] * 1.15f) {
+            tr.pub.semantic = det.semantic;
+            tr.pub.halfExtents = det.halfExtents;
+        }
     }
     const float maxSpeed = (tr.pub.semantic == SemanticClass::Pedestrian) ? 2.6f : 22.0f;
     const float spd = std::hypot(tr.x[2], tr.x[3]);
@@ -311,6 +318,7 @@ void ByteTracker::spawnTrack(const Detection3D& det) {
     tr.pub.yaw = det.yaw;
     tr.lastDetPos = det.worldPos;
     tr.lastCamIndex = det.camIndex;
+    tr.classVotes[std::clamp(static_cast<int>(det.semantic), 0, 3)] = det.score;
 
     tr.x = {det.worldPos.x, det.worldPos.z, 0.0f, 0.0f};
     const float pPos = std::max(0.4f, det.epistemicSigma * det.epistemicSigma);

@@ -256,15 +256,24 @@ void VulkanContext::createCommandAndDescriptorPools() {
     VK_CHECK(vkCreateDescriptorPool(device_, &dpci, nullptr, &descriptorPool_));
 }
 
-uint32_t VulkanContext::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const {
+bool VulkanContext::tryFindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties, uint32_t& outIndex) const {
     VkPhysicalDeviceMemoryProperties memProps{};
     vkGetPhysicalDeviceMemoryProperties(physicalDevice_, &memProps);
     for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i) {
         if ((typeFilter & (1u << i)) && (memProps.memoryTypes[i].propertyFlags & properties) == properties) {
-            return i;
+            outIndex = i;
+            return true;
         }
     }
-    throw std::runtime_error("Failed to find suitable Vulkan memory type");
+    return false;
+}
+
+uint32_t VulkanContext::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const {
+    uint32_t idx = 0;
+    if (!tryFindMemoryType(typeFilter, properties, idx)) {
+        throw std::runtime_error("Failed to find suitable Vulkan memory type");
+    }
+    return idx;
 }
 
 VkFormat VulkanContext::findDepthFormat() const {

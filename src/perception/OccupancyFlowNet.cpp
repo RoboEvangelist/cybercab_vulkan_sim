@@ -58,13 +58,15 @@ void OccupancyFlowNet::init(const VulkanContext& ctx, const SimConfig& cfg,
                        sizeof(ShadowPC));
 
     const VkDeviceSize voxBytes = static_cast<VkDeviceSize>(nx_ * ny_ * nz_) * sizeof(Vec4);
+    const VkMemoryPropertyFlags hostCached = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    const VkMemoryPropertyFlags hostCoherent = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
     trackPriorsSSBO_.create(*ctx_, static_cast<VkDeviceSize>(cfg.btMaxTracks) * sizeof(TrackPriorGpu),
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    voxelStateSSBO_.create(*ctx_, voxBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    voxelUncertSSBO_.create(*ctx_, voxBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                            hostCoherent);
+    voxelStateSSBO_.createPreferred(*ctx_, voxBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, hostCached, hostCoherent);
+    voxelUncertSSBO_.createPreferred(*ctx_, voxBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, hostCached, hostCoherent);
+    voxelStateSSBO_.map();
+    voxelUncertSSBO_.map();
     prevVoxelStateSSBO_.create(*ctx_, voxBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     prevVoxelUncertSSBO_.create(*ctx_, voxBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -187,10 +189,22 @@ void OccupancyFlowNet::readbackVoxels(const SimConfig& cfg, const EgoState& ego,
     outShadows.clear();
 
     const size_t total = static_cast<size_t>(nx_ * ny_ * nz_);
-    statesScratch_.resize(total);
-    uncertScratch_.resize(total);
-    voxelStateSSBO_.downloadVector(statesScratch_);
-    voxelUncertSSBO_.downloadVector(uncertScratch_);
+    const Vec4* statePtr = nullptr;
+    const Vec4* uncertPtr = nullptr;
+    if (voxelStateSSBO_.isHostCached() && voxelUncertSSBO_.isHostCached() &&
+        voxelStateSSBO_.mappedData() && voxelUncertSSBO_.mappedData()) {
+        voxelStateSSBO_.invalidateCache();
+        voxelUncertSSBO_.invalidateCache();
+        statePtr = static_cast<const Vec4*>(voxelStateSSBO_.mappedData());
+        uncertPtr = static_cast<const Vec4*>(voxelUncertSSBO_.mappedData());
+    } else {
+        statesScratch_.resize(total);
+        uncertScratch_.resize(total);
+        voxelStateSSBO_.downloadVector(statesScratch_);
+        voxelUncertSSBO_.downloadVector(uncertScratch_);
+        statePtr = statesScratch_.data();
+        uncertPtr = uncertScratch_.data();
+    }
 
     const float sinEgo = std::sin(ego.yaw);
     const float cosEgo = std::cos(ego.yaw);
@@ -204,16 +218,16 @@ void OccupancyFlowNet::readbackVoxels(const SimConfig& cfg, const EgoState& ego,
 
             for (int iz = 0; iz < nz_; ++iz) {
                 const size_t idx = (static_cast<size_t>(ix) * ny_ + iy) * nz_ + iz;
-                const float conf = statesScratch_[idx].y;
+                const float conf = statePtr[idx].y;
                 if (conf <= 0.08f) continue;
 
-                const int semInt = static_cast<int>(std::round(statesScratch_[idx].x));
+                const int semInt = static_cast<int>(std::round(statePtr[idx].x));
                 const SemanticClass sem = static_cast<SemanticClass>(semInt);
                 const float wy = cfg.occMinZ + (static_cast<float>(iz) + 0.5f) * cfg.occStepZ;
 
                 const ActiveVoxel v{
                     egoX, egoY, wy, wx, wz, sem, conf,
-                    statesScratch_[idx].z, statesScratch_[idx].w, uncertScratch_[idx].x
+                    statePtr[idx].z, statePtr[idx].w, uncertPtr[idx].x
                 };
                 if (sem == SemanticClass::OccShadow) {
                     outShadows.push_back(v);
