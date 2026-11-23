@@ -23,8 +23,8 @@ void main() {
     const float ambient = pc.sunDirAmbient.w * (0.6 + 0.4 * hemi);
     vec3 lit = inColor.rgb * (ambient + ndotl * 0.85) + inColor.rgb * inEmissive;
 
-    // Soft metallic clearcoat & tinted canopy glass shading on vehicles/wheels (SemId == 1)
-    if (abs(inSemId - 1.0) < 0.25 && inEmissive < 0.1) {
+    // Soft metallic clearcoat & tinted canopy glass shading on Cybercab ego mesh (SemId == 1.25)
+    if (abs(inSemId - 1.25) < 0.08 && inEmissive < 0.1) {
         const float kSpecTightPow = 42.0, kSpecTightGain = 0.24;
         const float kSpecBroadPow = 10.0, kSpecBroadGain = 0.09;
         const float kGlassSpecPow = 96.0, kGlassSpecGain = 0.55;

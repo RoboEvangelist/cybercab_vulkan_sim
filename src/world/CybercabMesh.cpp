@@ -18,6 +18,7 @@ constexpr float kTrackHalfR = 0.836f, kTrackHalfF = 0.818f;
 constexpr float kBodyRearZ = -0.88f, kBodyCrestZ = 1.02f, kBodyCowlZ = 2.08f, kBodyNoseZ = 3.35f;
 constexpr float kWindshieldRearZ = 1.06f, kWindshieldFrontZ = 2.08f;
 constexpr int kNumSt = 37, kSideWinSt = 12, kWheelSegs = 36;
+constexpr float kCybercabSemTag = 1.25f;
 
 constexpr std::array<float, kNumSt> kZStations = {{
     -0.88f, -0.78f, -0.64f, -0.45f, -0.41f, -0.34f, -0.22f, -0.10f,  0.00f,  0.12f,
@@ -94,7 +95,7 @@ void emitGrid(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx, const
             }
         }
     }
-    const float semF = static_cast<float>(static_cast<int>(SemanticClass::Vehicle));
+    const float semF = kCybercabSemTag;
     const uint32_t base = static_cast<uint32_t>(verts.size());
     for (int s = 0; s < nS; ++s) {
         for (int c = 0; c < nC; ++c) {
@@ -116,7 +117,7 @@ void emitGrid(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx, const
 void appendBox(std::vector<SceneVertex>& v, std::vector<uint32_t>& idx, const Mat4& xf,
                Vec3 sz, Vec3 col, float a = 1.0f, float em = 0.0f) {
     const float hx = sz.x * 0.5f, hy = sz.y * 0.5f, hz = sz.z * 0.5f;
-    const float semF = static_cast<float>(static_cast<int>(SemanticClass::Vehicle));
+    const float semF = kCybercabSemTag;
     const Vec3 ns[6] = {{0,0,1},{0,0,-1},{1,0,0},{-1,0,0},{0,1,0},{0,-1,0}};
     const Vec3 ps[6][4] = {
         {{-hx,-hy, hz},{ hx,-hy, hz},{ hx, hy, hz},{-hx, hy, hz}}, {{ hx,-hy,-hz},{-hx,-hy,-hz},{-hx, hy,-hz},{ hx, hy,-hz}},
@@ -208,7 +209,7 @@ void emitAeroWheel(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx, 
         {0.055f,  0.115f, 0.92f,-0.38f, kGoldBase},  {0.000f, 0.115f, 1.00f, 0.00f, kGoldDark}
     };
     constexpr int kNR = static_cast<int>(sizeof(prof) / sizeof(prof[0]));
-    const float semF = static_cast<float>(static_cast<int>(SemanticClass::Vehicle));
+    const float semF = kCybercabSemTag;
     const float dTheta = (2.0f * kPi) / static_cast<float>(kWheelSegs);
     for (int p = 0; p + 1 < kNR; ++p) {
         const auto& a = prof[p]; const auto& b = prof[p + 1];
@@ -233,7 +234,7 @@ void emitAeroWheel(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx, 
 void emitWheelWellLiner(std::vector<SceneVertex>& verts, std::vector<uint32_t>& idx,
                         const Mat4& sprungMat, float xCenter, float zCenter, float axleY, float linerR) {
     constexpr int kArchSegs = 16;
-    const float semF = static_cast<float>(static_cast<int>(SemanticClass::Vehicle));
+    const float semF = kCybercabSemTag;
     const uint32_t base = static_cast<uint32_t>(verts.size());
     for (int i = 0; i <= kArchSegs; ++i) {
         const float a = lerpf(0.0f, kPi, static_cast<float>(i) / static_cast<float>(kArchSegs));
