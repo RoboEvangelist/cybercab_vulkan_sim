@@ -174,6 +174,9 @@ add_executable(cybercab_tests
     tests/test_v15_cybercab_camera_res.cpp
     tests/test_camera_corrob_and_bounds.cpp
     tests/test_cybercab_res_full_validation.cpp
+    tests/test_all_res_v14_v15_validation.cpp
+    tests/test_all_res_fmea_safety.cpp
+    tests/test_all_res_fmea_env_and_sync.cpp
     tests/test_v15_e2e_closed_loop.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
