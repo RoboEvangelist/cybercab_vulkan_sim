@@ -23,10 +23,12 @@ reasoning with a certificate the author cannot fill in by guessing. Here the cer
 | 3 | M1b Poisson-Gaussian sensor noise | [step03_m1b_sensor_noise.md](step03_m1b_sensor_noise.md) | `fbfa1fa` |
 | 4 | M1c frequency separation (illumination vs. detail) | [step04_m1c_frequency_split.md](step04_m1c_frequency_split.md) | `8d4c767` |
 | 5a | M1 dark read-noise verification & adaptive FrequencySplit | [step05a_m1_dark_noise_and_scaling.md](step05a_m1_dark_noise_and_scaling.md) | `0691227` |
-| 5b | M1 `V15Pipeline` wiring (`v15()` switch & budget) | [step05b_m1_pipeline_wiring.md](step05b_m1_pipeline_wiring.md) | `886f6e2` + tests |
+| 5b | M1 `V15Pipeline` wiring (`v15()` switch & budget) | [step05b_m1_pipeline_wiring.md](step05b_m1_pipeline_wiring.md) | `886f6e2`, `12ee828` |
+| 6a | M2a online pitch/roll self-calibration | [step06a_m2a_self_calibration.md](step06a_m2a_self_calibration.md) | see `git log` |
 
 ## Open UNVERIFIED items
 - step02 R2: v14 perception quality under `pipeline_version: v15` not yet re-validated.
+- step06a R1: rendered-world self-calibration accuracy is 0.31° (half-res) / 0.11° (full-res), not yet 0.1°.
 
 ## Regression gate (every step)
 - `ctest --test-dir build` must show **100%** pass.
