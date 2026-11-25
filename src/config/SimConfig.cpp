@@ -218,6 +218,9 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
             cfg.gf3d.splatRadiusSigmaMul = readOr(gf, "splat_radius_sigma_mul", cfg.gf3d.splatRadiusSigmaMul);
             cfg.gf3d.splatSigmaCutoffSq = readOr(gf, "splat_sigma_cutoff_sq", cfg.gf3d.splatSigmaCutoffSq);
             cfg.gf3d.minVoxelOccProb = readOr(gf, "min_voxel_occ_prob", cfg.gf3d.minVoxelOccProb);
+            cfg.gf3d.splatVoxelStepX = readOr(gf, "splat_voxel_step_x", cfg.gf3d.splatVoxelStepX);
+            cfg.gf3d.splatVoxelStepY = readOr(gf, "splat_voxel_step_y", cfg.gf3d.splatVoxelStepY);
+            cfg.gf3d.splatVoxelStepZ = readOr(gf, "splat_voxel_step_z", cfg.gf3d.splatVoxelStepZ);
             cfg.gf3d.camAttnWeight = readOr(gf, "cam_attn_weight", cfg.gf3d.camAttnWeight);
             cfg.gf3d.lidarAttnWeight = readOr(gf, "lidar_attn_weight", cfg.gf3d.lidarAttnWeight);
             cfg.gf3d.temporalSmoothAlpha = readOr(gf, "temporal_smooth_alpha", cfg.gf3d.temporalSmoothAlpha);

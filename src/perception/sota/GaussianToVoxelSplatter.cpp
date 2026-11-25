@@ -93,9 +93,12 @@ uint32_t GaussianToVoxelSplatter::splatToVoxels(const SimConfig& cfg,
                                               const EgoState& ego,
                                               const std::vector<Gaussian3DPrimitive>& gaussians,
                                               std::vector<ActiveVoxel>& inOutVoxels) {
-    const int nx = std::max(1, cfg.occNx());
-    const int ny = std::max(1, cfg.occNy());
-    const int nz = std::max(1, cfg.occNz());
+    const float stepX = (gfCfg.splatVoxelStepX > 0.05f) ? gfCfg.splatVoxelStepX : cfg.occStepX;
+    const float stepY = (gfCfg.splatVoxelStepY > 0.05f) ? gfCfg.splatVoxelStepY : cfg.occStepY;
+    const float stepZ = (gfCfg.splatVoxelStepZ > 0.05f) ? gfCfg.splatVoxelStepZ : cfg.occStepZ;
+    const int nx = std::max(1, static_cast<int>(std::lround((cfg.occMaxX - cfg.occMinX) / stepX)));
+    const int ny = std::max(1, static_cast<int>(std::lround((cfg.occMaxY - cfg.occMinY) / stepY)));
+    const int nz = std::max(1, static_cast<int>(std::lround((cfg.occMaxZ - cfg.occMinZ) / stepZ)));
     const size_t totalCells = static_cast<size_t>(nx) * static_cast<size_t>(ny) * static_cast<size_t>(nz);
 
     if (cellIndexMap_.capacity() < totalCells) cellIndexMap_.reserve(totalCells);
@@ -122,9 +125,9 @@ uint32_t GaussianToVoxelSplatter::splatToVoxels(const SimConfig& cfg,
     // Preserve prior non-shadow observations without double-counting into Gaussian products.
     for (const auto& v : inOutVoxels) {
         if (v.sem == SemanticClass::Empty || v.sem == SemanticClass::OccShadow) continue;
-        const int ix = static_cast<int>(std::floor((v.egoX - cfg.occMinX) / cfg.occStepX));
-        const int iy = static_cast<int>(std::floor((v.egoY - cfg.occMinY) / cfg.occStepY));
-        const int iz = static_cast<int>(std::floor((v.wy - cfg.occMinZ) / cfg.occStepZ));
+        const int ix = static_cast<int>(std::floor((v.egoX - cfg.occMinX) / stepX));
+        const int iy = static_cast<int>(std::floor((v.egoY - cfg.occMinY) / stepY));
+        const int iz = static_cast<int>(std::floor((v.wy - cfg.occMinZ) / stepZ));
         if (ix < 0 || ix >= nx || iy < 0 || iy >= ny || iz < 0 || iz >= nz) continue;
 
         const int slot = getOrCreateSlot(ix, iy, iz);
@@ -141,6 +144,8 @@ uint32_t GaussianToVoxelSplatter::splatToVoxels(const SimConfig& cfg,
     const size_t priorCellCount = accumScratch_.size();
 
     // Splat live-observed anisotropic 3D Gaussians over local voxel neighborhood.
+    const int maxSpanXY = std::min(5, std::max(kMaxSplatSpanXY, static_cast<int>(std::ceil(2.0f / stepX))));
+    const int maxSpanZ = std::min(4, std::max(kMaxSplatSpanZ, static_cast<int>(std::ceil(1.0f / stepZ))));
     std::array<float, kNumGaussianSemClasses> probs{};
     for (const auto& g : gaussians) {
         if (g.opacity < kMinGaussianOpacity || g.fromStaticMem) continue;
@@ -149,16 +154,19 @@ uint32_t GaussianToVoxelSplatter::splatToVoxels(const SimConfig& cfg,
         const float sy = clampf(g.scale.y * gfCfg.voxelScaleY, kDefaultMinScaleM, kDefaultMaxScaleM);
         const float sz = clampf(g.scale.z * gfCfg.voxelScaleZ, kDefaultMinScaleM, kDefaultMaxScaleM);
         const float rIso = gfCfg.splatRadiusSigmaMul * std::max({sx, sy, sz});
-        const int capXY = (!g.isDynamic || rIso <= 1.25f) ? 1 : kMaxSplatSpanXY;
+        const int capXY = (!g.isDynamic || rIso <= 1.25f)
+            ? std::min(maxSpanXY, std::max(1, static_cast<int>(std::lround(1.0f / stepX))))
+            : maxSpanXY;
         const int capZ = (!g.isDynamic && g.argmaxSemantic() != SemanticClass::SignalSign)
-            ? 1 : kMaxSplatSpanZ;
-        const int spanX = std::min(capXY, static_cast<int>(std::ceil(rIso / cfg.occStepX)));
-        const int spanY = std::min(capXY, static_cast<int>(std::ceil(rIso / cfg.occStepY)));
-        const int spanZ = std::min(capZ, static_cast<int>(std::ceil(rIso / cfg.occStepZ)));
+            ? std::min(maxSpanZ, std::max(1, static_cast<int>(std::lround(0.5f / stepZ))))
+            : maxSpanZ;
+        const int spanX = std::min(capXY, static_cast<int>(std::ceil(rIso / stepX)));
+        const int spanY = std::min(capXY, static_cast<int>(std::ceil(rIso / stepY)));
+        const int spanZ = std::min(capZ, static_cast<int>(std::ceil(rIso / stepZ)));
 
-        const int cx = static_cast<int>(std::floor((centerIso.x - cfg.occMinX) / cfg.occStepX));
-        const int cy = static_cast<int>(std::floor((centerIso.y - cfg.occMinY) / cfg.occStepY));
-        const int cz = static_cast<int>(std::floor((centerIso.z - cfg.occMinZ) / cfg.occStepZ));
+        const int cx = static_cast<int>(std::floor((centerIso.x - cfg.occMinX) / stepX));
+        const int cy = static_cast<int>(std::floor((centerIso.y - cfg.occMinY) / stepY));
+        const int cz = static_cast<int>(std::floor((centerIso.z - cfg.occMinZ) / stepZ));
 
         const int ixMin = std::max(0, cx - spanX), ixMax = std::min(nx - 1, cx + spanX);
         const int iyMin = std::max(0, cy - spanY), iyMax = std::min(ny - 1, cy + spanY);
@@ -168,11 +176,11 @@ uint32_t GaussianToVoxelSplatter::splatToVoxels(const SimConfig& cfg,
         g.softmaxProbs(probs);
 
         for (int iz = izMin; iz <= izMax; ++iz) {
-            const float zIso = cfg.occMinZ + (static_cast<float>(iz) + 0.5f) * cfg.occStepZ;
+            const float zIso = cfg.occMinZ + (static_cast<float>(iz) + 0.5f) * stepZ;
             for (int iy = iyMin; iy <= iyMax; ++iy) {
-                const float yIso = cfg.occMinY + (static_cast<float>(iy) + 0.5f) * cfg.occStepY;
+                const float yIso = cfg.occMinY + (static_cast<float>(iy) + 0.5f) * stepY;
                 for (int ix = ixMin; ix <= ixMax; ++ix) {
-                    const float xIso = cfg.occMinX + (static_cast<float>(ix) + 0.5f) * cfg.occStepX;
+                    const float xIso = cfg.occMinX + (static_cast<float>(ix) + 0.5f) * stepX;
                     const Vec3 wp = worldFromIso.transformPoint({xIso, yIso, zIso});
                     const Vec3 local = g.rot.invRotateVector(wp - g.mean);
                     const float mSq = (local.x * local.x) / (sx * sx) +
@@ -183,7 +191,15 @@ uint32_t GaussianToVoxelSplatter::splatToVoxels(const SimConfig& cfg,
                     const int existingSlot = cellIndexMap_[static_cast<size_t>(key)];
                     const bool hasPriorCell =
                         (existingSlot >= 0 && static_cast<size_t>(existingSlot) < priorCellCount);
-                    if (!hasPriorCell && !g.fromTrack) continue;
+                    if (g.fromTrack) {
+                        if (std::abs(local.x) > g.scale.x + 0.12f ||
+                            std::abs(local.y) > g.scale.y + 0.15f ||
+                            std::abs(local.z) > g.scale.z + 0.12f) {
+                            continue;
+                        }
+                    } else if (!hasPriorCell) {
+                        continue;
+                    }
 
                     const float w = clampf(g.opacity * kSplatVoxelWeight * std::exp(kGaussianExpHalf * mSq),
                                            0.0f, kMaxGaussianOpacity);
@@ -215,7 +231,7 @@ uint32_t GaussianToVoxelSplatter::splatToVoxels(const SimConfig& cfg,
     for (const auto& acc : accumScratch_) {
         const float dynOcc = (acc.dynSplatCount > 0u)
             ? clampf(static_cast<float>(1.0 - acc.emptyProd), 0.0f, 1.0f) : 0.0f;
-        const float staticOcc = (acc.staticSplatCount > 0u)
+        const float staticOcc = (acc.staticSplatCount > 0u && acc.maxCorrob > 0u)
             ? std::max(acc.priorConf, lerpf(acc.priorConf, acc.maxStaticOcc, 0.45f)) : acc.priorConf;
         const float occProb = std::max(dynOcc, staticOcc);
 
@@ -233,9 +249,9 @@ uint32_t GaussianToVoxelSplatter::splatToVoxels(const SimConfig& cfg,
             ? std::min(occThresh, 0.25f) : occThresh;
         if (occProb < cellThresh) continue;
 
-        const float xIso = cfg.occMinX + (static_cast<float>(acc.ix) + 0.5f) * cfg.occStepX;
-        const float yIso = cfg.occMinY + (static_cast<float>(acc.iy) + 0.5f) * cfg.occStepY;
-        const float zIso = cfg.occMinZ + (static_cast<float>(acc.iz) + 0.5f) * cfg.occStepZ;
+        const float xIso = cfg.occMinX + (static_cast<float>(acc.ix) + 0.5f) * stepX;
+        const float yIso = cfg.occMinY + (static_cast<float>(acc.iy) + 0.5f) * stepY;
+        const float zIso = cfg.occMinZ + (static_cast<float>(acc.iz) + 0.5f) * stepZ;
         const Vec3 wp = worldFromIso.transformPoint({xIso, yIso, zIso});
         const float invW = (acc.wSum > kMinWeightEps) ? (1.0f / acc.wSum) : 0.0f;
         const SemanticClass outSem = static_cast<SemanticClass>(bestCls);

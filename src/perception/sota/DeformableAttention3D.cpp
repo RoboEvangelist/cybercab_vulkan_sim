@@ -94,11 +94,10 @@ void attendTo3DGeometry(const Gaussian3DPrimitive& g,
 
     if (wSum > kMinWeightEps) {
         outGeomMean = sumPos * (1.0f / wSum);
-        if (!g.isDynamic) {
-            maxLocal.x = std::min(maxLocal.x, g.scale.x * 1.15f);
-            maxLocal.y = std::min(maxLocal.y, g.scale.y * 1.15f);
-            maxLocal.z = std::min(maxLocal.z, g.scale.z * 1.15f);
-        }
+        const float scaleCapMul = g.fromTrack ? 1.05f : 1.15f;
+        maxLocal.x = std::min(maxLocal.x, g.scale.x * scaleCapMul);
+        maxLocal.y = std::min(maxLocal.y, g.scale.y * scaleCapMul);
+        maxLocal.z = std::min(maxLocal.z, g.scale.z * scaleCapMul);
         outTargetScale = {
             clampf(maxLocal.x, kDefaultMinScaleM, kDefaultMaxScaleM),
             clampf(maxLocal.y, kDefaultMinScaleM, kDefaultMaxScaleM),
@@ -214,7 +213,8 @@ void DeformableAttention3D::refineWithViews(const GaussianFormer3DConfig& gfCfg,
             const Vec3 geomDelta = geomMean - g.mean;
             const Vec3 fusedDelta = (camPull * camW + geomDelta * lidW) * (1.0f / normModal);
             Vec3 step = fusedDelta * kMeanStepGain;
-            const float stepCap = g.isDynamic ? kMaxDynLayerShiftM : kMaxStaticLayerShiftM;
+            const float stepCap = g.fromTrack ? 0.15f
+                : (g.isDynamic ? kMaxDynLayerShiftM : kMaxStaticLayerShiftM);
             const float stepLen = step.norm();
             if (stepLen > stepCap) step = step * (stepCap / stepLen);
             g.mean += step;

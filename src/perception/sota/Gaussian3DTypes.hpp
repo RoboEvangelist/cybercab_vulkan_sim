@@ -143,8 +143,11 @@ struct GaussianFormer3DConfig {
     float camAttnWeight = 0.55f;
     float lidarAttnWeight = 0.45f;
     float temporalSmoothAlpha = 0.30f;
-    float splatSigmaCutoffSq = 4.50f;
+    float splatSigmaCutoffSq = 2.50f;
     float minVoxelOccProb = 0.38f;
+    float splatVoxelStepX = 0.0f;
+    float splatVoxelStepY = 0.0f;
+    float splatVoxelStepZ = 0.0f;
     bool enableDeformableAttn = true;
 };
 

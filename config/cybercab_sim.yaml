@@ -93,8 +93,11 @@ perception:
     voxel_scale_y: 0.80
     voxel_scale_z: 0.72
     splat_radius_sigma_mul: 1.25 # Tightened Gaussian-to-voxel splat neighborhood radius
-    splat_sigma_cutoff_sq: 4.50
+    splat_sigma_cutoff_sq: 2.50
     min_voxel_occ_prob: 0.38
+    splat_voxel_step_x: 0.0      # 0.0 = inherit occupancy_flow.step_x (or set 0.5 / 0.4 m)
+    splat_voxel_step_y: 0.0
+    splat_voxel_step_z: 0.0
     cam_attn_weight: 0.55
     lidar_attn_weight: 0.45
     temporal_smooth_alpha: 0.30

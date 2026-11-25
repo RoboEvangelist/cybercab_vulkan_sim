@@ -1,22 +1,10 @@
-# FSD v15 Change Certificates
+# FSD v15 & Stage-1 Documentation Index
 
-Every v15 step is committed together with a **semi-formal change certificate**, following
-*Agentic Code Reasoning* (Ugare & Chandra, Meta, arXiv:2603.01896). That paper replaces free-form
-reasoning with a certificate the author cannot fill in by guessing. Here the certificate has:
+Index of FSD v15 modules and Stage-1 spatial representation reports (`docs/v15/`).
 
-1. **Scope**: one feature, the files touched, and what is explicitly *out* of scope.
-2. **Premises (P#)**: concrete facts with `file:line` citations, no claims from function names alone.
-3. **Trace (T#)**: symbolic execution of the changed paths, done **separately for `v14` and `v15`**.
-4. **Claims (C#)**:
-   - **C-EQ (patch equivalence)**: with `pipeline_version: v14`, observable outputs are *identical* to the parent commit, derived only from P/T.
-   - **C-V15**: the new behavior, stated as measurable properties.
-5. **Evidence (E#)**: test names and the observed numbers (gtest `RecordProperty` values / ctest totals).
-   A claim without a test stays marked **UNVERIFIED**.
-6. **Known limits / risks**: what is approximate, analog-only, or deferred.
+## Module Index
 
-## Step index
-
-| Step | Module | Certificate | Commit |
+| Step | Module | Document | Commit |
 |---|---|---|---|
 | 1 | Config switch `pipeline_version` | [step01_config_switch.md](step01_config_switch.md) | `84b73e4` |
 | 2 | M1a ISP-bypass linear 14-bit photon tensor | [step02_m1a_linear_photon_tensor.md](step02_m1a_linear_photon_tensor.md) | `47f26e2` |
@@ -37,23 +25,24 @@ reasoning with a certificate the author cannot fill in by guessing. Here the cer
 | 13 | Box-free 4D Gaussian occupancy & comfort multi-rollout planner | [step13_gaussian_occupancy_and_comfort_planner.md](step13_gaussian_occupancy_and_comfort_planner.md) | `47dea4f`..`6bea1fb` |
 | 14 | Live Reality View HUD, `VulkanViewer` PIP & `v15.*` `TraceLogger` telemetry | [step14_reality_view_hud_and_v15_trace.md](step14_reality_view_hud_and_v15_trace.md) | `6f4e845`..`0eb32bb` |
 | 15 | Dynamic-range `day` / `night_glare` lighting, RCCB mosaic & HDR closed-loop | [step15_hdr_lighting_rccb_and_glare_test.md](step15_hdr_lighting_rccb_and_glare_test.md) | `d96829b`..`c92759a` |
-| 16 | Post-v15 SOTA declaration-only headers (`GaussianSurfel2DWorld`, `TruncatedDiffusionPolicy`) | — (syntax-checked declarations, no tests per user request) | Step 16 |
-| 17 | Parameter effects, all 11 driving actions, `Autoshift` D->R->D & camera-knock calib | [step17_params_actions_autoshift_and_calib_tests.md](step17_params_actions_autoshift_and_calib_tests.md) | `3efb471`..`d2431a4` |
-| 18 | Voxels, detections/AP, empty-road hallucinations, 6 missions, ISO 34502 & 0-alloc | [step18_voxels_hallucinations_mission_and_zero_alloc.md](step18_voxels_hallucinations_mission_and_zero_alloc.md) | `8ecc082`..`5cc12a4` |
+| 16 | Post-v15 SOTA headers (`GaussianSurfel2DWorld`, `TruncatedDiffusionPolicy`) | — | Step 16 |
+| 17 | Parameter effects, driving actions, `Autoshift` D->R->D & camera-knock calib | [step17_params_actions_autoshift_and_calib_tests.md](step17_params_actions_autoshift_and_calib_tests.md) | `3efb471`..`d2431a4` |
+| 18 | Voxels, detections/AP, empty-road checks, 6 missions & zero-alloc | [step18_voxels_hallucinations_mission_and_zero_alloc.md](step18_voxels_hallucinations_mission_and_zero_alloc.md) | `8ecc082`..`5cc12a4` |
 | 19 | Real Cybercab `2896x1876` / `1448x938` presets + `320x240` default & shader scaling | [step19_cybercab_native_camera_resolution.md](step19_cybercab_native_camera_resolution.md) | `6bda981`..`d92ac83` |
-| 20 | Multi-camera corroboration, aspect-invariant RT-DETR & Cybercab full validation | [step20_corroboration_and_cybercab_full_validation.md](step20_corroboration_and_cybercab_full_validation.md) | `b92a036`..`3b2844e` |
-| 21 | All-4-resolution v14/v15 validation, full FMEA suite & descriptor-leak fix | [step21_all_res_validation_and_fmea.md](step21_all_res_validation_and_fmea.md) | `d56b888`..`47f4596` |
-| 22 | Full-vision AV validation (MOT/IDSW, Lane IoU/assoc, ECE/slicing, RSS, poles/gantry) & night-glare fix | [step22_av_validation_framework.md](step22_av_validation_framework.md) | `7589de1`..`c5c8c91` |
-| 23 | Per-condition calib, vision signal FSM, open-set road obstacles, hierarchy & shadow replay | [step23_calibration_signal_openset_and_replay.md](step23_calibration_signal_openset_and_replay.md) | Step 23 |
-| S1 | Stage 1: Multi-modal GaussianFormer3D (`--spatial-rep legacy\|gaussianformer3d`) | [stage1_gaussianformer3d.md](stage1_gaussianformer3d.md) | Stage 1 |
-| S1b | Stage 1 A/B evaluation, YAML voxel/volume tuning & latency/NFR audit | [stage1_gaussianformer3d_ab_report.md](stage1_gaussianformer3d_ab_report.md) | Stage 1b |
+| 20 | Multi-camera corroboration, aspect-invariant RT-DETR & Cybercab validation | [step20_corroboration_and_cybercab_full_validation.md](step20_corroboration_and_cybercab_full_validation.md) | `b92a036`..`3b2844e` |
+| 21 | All-4-resolution v14/v15 runs, FMEA suite & descriptor-leak fix | [step21_all_res_validation_and_fmea.md](step21_all_res_validation_and_fmea.md) | `d56b888`..`47f4596` |
+| 22 | Full-vision MOT/IDSW, Lane IoU/assoc, ECE/slicing, RSS & poles/gantry | [step22_av_validation_framework.md](step22_av_validation_framework.md) | `7589de1`..`c5c8c91` |
+| 23 | Per-condition calib, vision signal FSM, open-set road obstacles & shadow replay | [step23_calibration_signal_openset_and_replay.md](step23_calibration_signal_openset_and_replay.md) | Step 23 |
+| S1 | Stage 1: Multi-modal GaussianFormer3D (`--spatial-rep legacy\|gaussianformer3d`) | [stage1_gaussianformer3d.md](stage1_gaussianformer3d.md) | `fe61e78` |
+| S1b | Stage 1 A/B evaluation, YAML voxel/volume tuning & latency/NFR audit | [stage1_gaussianformer3d_ab_report.md](stage1_gaussianformer3d_ab_report.md) | `2d10b85` |
 
-## Open UNVERIFIED items
-- ~~step02 R2~~ **CLOSED in Step 11**: closed-loop `v15` perception validated (`recall=0.5811`, `precision=0.8077`, 0 collisions, `4.88 ms` half-res / `7.38 ms` full-res).
-- ~~step06a R1~~ **CLOSED in Step 17**: live rendered camera-knock self-calibration validated in `LiveCameraKnockSelfCalibRecoversPitchRoll` (`knock_recov_pitch_deg=1.7545`, `knock_recov_roll_deg=-1.4989`).
-- ~~step22 night ECE~~ **CLOSED in Step 23**: per-condition `v15` calibration lowers `night_glare` ECE `0.3934 -> 0.2527` (`oce 0.2488 -> 0.1041`).
-
-## Regression gate (every step)
-- `ctest --test-dir build` must show **100%** pass (`201/201`).
-- The 96 pre-v15 tests are the v14 equivalence oracle (`pipeline_version: v14`); 105 v15/Stage-1/all-res/validation tests cover Modules 1–7, policy config bounds, CybercabMesh, 4D Gaussian planner, Reality HUD/telemetry, HDR night-glare/RCCB, params/actions/autoshift/calib, voxels/hallucinations/AP/missions/zero-alloc, all 4 camera presets (`half`/`full`/`cybercab_binned`/`cybercab`), multi-camera corroboration/HW4 range hierarchy, FMEA safety cases, full-vision MOT/ECE/slicing/RSS/lane/pole validation, per-condition calibration, pure-vision signal FSM/association, open-set road obstacles, zero-tolerance hierarchy, deterministic shadow replay, and Stage 1 GaussianFormer3D (`--spatial-rep`).
-- New files are kept to **350 lines or fewer**.
+## References
+- **GaussianFormer3D** (ICRA 2026, [arXiv:2505.10685](https://arxiv.org/abs/2505.10685)) — Multi-modal 3D Gaussian semantic occupancy prediction with 3D deformable attention.
+- **GaussianFormer / GaussianFormer-2** (Huang et al., ECCV 2024 [arXiv:2405.17429](https://arxiv.org/abs/2405.17429); CVPR 2025 [arXiv:2412.04384](https://arxiv.org/abs/2412.04384)) — Object-centric 3D semantic Gaussians & probabilistic occupancy superposition.
+- **3D Gaussian Splatting & EWA Splatting** (Kerbl et al., SIGGRAPH 2023 [arXiv:2308.04079](https://arxiv.org/abs/2308.04079); Zwicker et al., IEEE TVCG 2002) — Reality View EWA covariance projection & alpha blending.
+- **BEVFormer** (Li et al., ECCV 2022 [arXiv:2203.17270](https://arxiv.org/abs/2203.17270)) — Spatial-temporal BEV lifting.
+- **RT-DETR** (Zhao et al., CVPR 2024 [arXiv:2304.08069](https://arxiv.org/abs/2304.08069)) — Real-time multi-scale object detection.
+- **ByteTrack** (Zhang et al., ECCV 2022 [arXiv:2110.06864](https://arxiv.org/abs/2110.06864)) — Multi-object association & tracking.
+- **Occ3D / SurroundOcc** (Tian et al., NeurIPS 2023 [arXiv:2304.14365](https://arxiv.org/abs/2304.14365); Wei et al., ICCV 2023 [arXiv:2303.09551](https://arxiv.org/abs/2303.09551)) — `0.4 m` / `0.5 m` 3D semantic occupancy benchmarks.
+- **Responsibility-Sensitive Safety (RSS)** (Shalev-Shwartz et al., [arXiv:1708.06374](https://arxiv.org/abs/1708.06374)) — Stopping-distance & corridor safety envelope.
+- **Agentic Code Reasoning** (Ugare & Chandra, Meta, [arXiv:2603.01896](https://arxiv.org/abs/2603.01896)) — Structured reasoning & verification methodology.

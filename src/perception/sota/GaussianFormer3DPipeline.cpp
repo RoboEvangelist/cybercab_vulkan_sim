@@ -2,6 +2,7 @@
 #include "perception/v15/GaussianWorldModel.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace cybercab::sota {
 namespace {
@@ -19,6 +20,9 @@ GaussianFormer3DConfig mapFromSimParams(const SimConfig::GaussianFormer3DParams&
     c.splatRadiusSigmaMul = p.splatRadiusSigmaMul;
     c.splatSigmaCutoffSq = p.splatSigmaCutoffSq;
     c.minVoxelOccProb = p.minVoxelOccProb;
+    c.splatVoxelStepX = p.splatVoxelStepX;
+    c.splatVoxelStepY = p.splatVoxelStepY;
+    c.splatVoxelStepZ = p.splatVoxelStepZ;
     c.camAttnWeight = p.camAttnWeight;
     c.lidarAttnWeight = p.lidarAttnWeight;
     c.temporalSmoothAlpha = p.temporalSmoothAlpha;
@@ -35,7 +39,14 @@ void GaussianFormer3DPipeline::init(const SimConfig& cfg) {
 void GaussianFormer3DPipeline::init(const SimConfig& cfg, const GaussianFormer3DConfig& gfCfg) {
     gfCfg_ = gfCfg;
     const size_t maxG = static_cast<size_t>(std::max(gfCfg_.maxGaussians, 64u));
-    const size_t maxVox = static_cast<size_t>(std::max(cfg.occTotalVoxels(), 1024));
+    const float sx = (gfCfg_.splatVoxelStepX > 0.05f) ? gfCfg_.splatVoxelStepX : cfg.occStepX;
+    const float sy = (gfCfg_.splatVoxelStepY > 0.05f) ? gfCfg_.splatVoxelStepY : cfg.occStepY;
+    const float sz = (gfCfg_.splatVoxelStepZ > 0.05f) ? gfCfg_.splatVoxelStepZ : cfg.occStepZ;
+    const int snx = std::max(1, static_cast<int>(std::lround((cfg.occMaxX - cfg.occMinX) / sx)));
+    const int sny = std::max(1, static_cast<int>(std::lround((cfg.occMaxY - cfg.occMinY) / sy)));
+    const int snz = std::max(1, static_cast<int>(std::lround((cfg.occMaxZ - cfg.occMinZ) / sz)));
+    const size_t splatVox = static_cast<size_t>(snx) * static_cast<size_t>(sny) * static_cast<size_t>(snz);
+    const size_t maxVox = std::max(static_cast<size_t>(std::max(cfg.occTotalVoxels(), 1024)), splatVox);
 
     initializer_.reserve(gfCfg_.maxGaussians);
     attn_.reserve(gfCfg_.maxGaussians);
