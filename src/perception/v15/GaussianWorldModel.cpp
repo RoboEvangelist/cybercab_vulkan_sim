@@ -18,6 +18,17 @@ constexpr float kMahalanobisSqCutoff = 18.0f;
 constexpr float kGaussianExpHalf = -0.5f;
 constexpr float kMaxGaussianOccProb = 0.999f;
 
+bool isValidSplatGaussian(const Gaussian3DGpu& g) {
+    return std::isfinite(g.meanOpacity.x) && std::isfinite(g.meanOpacity.y) &&
+           std::isfinite(g.meanOpacity.z) && std::isfinite(g.meanOpacity.w) &&
+           std::isfinite(g.scaleSem.x) && std::isfinite(g.scaleSem.y) &&
+           std::isfinite(g.scaleSem.z) && std::isfinite(g.velYaw.z) &&
+           std::isfinite(g.colorConf.x) && std::isfinite(g.colorConf.y) &&
+           std::isfinite(g.colorConf.z) &&
+           g.meanOpacity.w > 0.0f &&
+           g.scaleSem.x > 1e-4f && g.scaleSem.y > 1e-4f && g.scaleSem.z > 1e-4f;
+}
+
 }  // namespace
 
 GaussianWorldModel::~GaussianWorldModel() { destroy(); }
@@ -68,12 +79,25 @@ void GaussianWorldModel::dispatchRealitySplat(VkCommandBuffer cmd, const SimConf
 void GaussianWorldModel::dispatchRealitySplat(VkCommandBuffer cmd, const Mat4& camFromWorld,
                                                 const CameraIntrinsics& intr) {
     if (!ctx_) return;
+    const auto isStaticBg = [](const Gaussian3DGpu& g) {
+        return g.velYaw.w < 0.5f &&
+               static_cast<int>(std::lround(g.scaleSem.w)) == static_cast<int>(SemanticClass::Static);
+    };
     sortedScratch_.clear();
     for (const auto& g : gaussians_) {
+        if (!isValidSplatGaussian(g)) continue;
         const float z = camFromWorld.transformPoint({g.meanOpacity.x, g.meanOpacity.y, g.meanOpacity.z}).z;
-        if (z > 0.35f) sortedScratch_.push_back(g);
+        if (!std::isfinite(z) || z <= 0.35f) continue;
+        Gaussian3DGpu gCopy = g;
+        if (isStaticBg(gCopy)) {
+            gCopy.meanOpacity.w = std::min(gCopy.meanOpacity.w * 0.22f, 0.20f);
+        }
+        sortedScratch_.push_back(gCopy);
     }
     std::sort(sortedScratch_.begin(), sortedScratch_.end(), [&](const Gaussian3DGpu& a, const Gaussian3DGpu& b) {
+        const bool aBg = isStaticBg(a);
+        const bool bBg = isStaticBg(b);
+        if (aBg != bBg) return !aBg;
         return camFromWorld.transformPoint({a.meanOpacity.x, a.meanOpacity.y, a.meanOpacity.z}).z <
                camFromWorld.transformPoint({b.meanOpacity.x, b.meanOpacity.y, b.meanOpacity.z}).z;
     });

@@ -17,9 +17,9 @@ A modular, zero-hot-path-allocation **C++ + Vulkan** simulation of the **Tesla C
 - **Stage 1 Spatial Representation Switch (`simulation.spatial_rep_mode` or `--spatial-rep legacy|gaussianformer3d`):**
   - **`legacy` (default):** Existing BEVFormer/OccupancyFlowNet voxel path (`v14`) and GPU `GaussianWorldModel::updateFromPerception` (`v15`).
   - **`gaussianformer3d` (opt-in, ICRA 2026 / arXiv:2505.10685):** Replaces Stage-1 spatial construction with [`GaussianFormer3DPipeline`](src/perception/sota/GaussianFormer3DPipeline.hpp) (`VoxelToGaussianInit` -> `DeformableAttention3D` -> `GaussianToVoxelSplatter`), with YAML voxel/volume tuning (`occupancy_flow.step_x/y/z` + `gaussianformer3d.splat_voxel_step_x/y/z`, `voxel_scale_x/y/z`, `splat_sigma_cutoff_sq`, `max_gaussians`, `min_voxel_occ_prob`).
-  - **A/B Summary ([report](docs/v15/stage1_gaussianformer3d_ab_report.md)):** Improves dynamic voxel precision (`0.881 -> 0.919`, `0.943` at `0.5m` splat step), Gaussian GT occupancy (`0.301 -> 0.457`), open-set `BARRIER` efficiency (`707 -> 323` voxels, `0.29 -> 1.02 m` clearance), and `v15` hardbrake/glare comfort at `0.32-0.40 ms` CPU stage time (`10.20-20.41 ms` mean wall time vs `13.57-19.69 ms` legacy under `RelWithDebInfo`) and `0` steady-state heap allocs.
+  - **A/B Summary ([report](docs/v15/stage1_gaussianformer3d_ab_report.md)):** Improves dynamic voxel precision (`0.881 -> 0.919`, `0.945` at `0.5m` splat step), Gaussian GT occupancy (`0.301 -> 0.459`, `0.512` hit), open-set `BARRIER` efficiency (`707 -> 323` voxels, `0.29 -> 1.02 m` clearance), and `v15` nominal/hardbrake/glare smoothness at `0.34-0.54 ms` CPU stage time (`11.62-19.40 ms` mean wall time under `RelWithDebInfo`) and `0` steady-state heap allocs.
 - **8-Camera Calibrated Surround Matrix & HDR Night Lighting:** Concurrent offscreen rendering across 4 camera presets (`half` `320x240`, `full` `640x480`, `cybercab_binned` `1448x938`, `cybercab` `2896x1876`) with `day` / `night_glare` HDR + RCCB mosaic support via [`cam_isp_soil.comp`](shaders/cam_isp_soil.comp).
-- **Interactive HUD & Telemetry:** Clickable mode/layer/scenario controls, 8-camera live matrix overlays (`Neural`, `RGB`, `Calib`, `SoilHeatmap`, `VoxelReproj`), per-stage Vulkan GPU query profiling, and JSONL trace logging.
+- **Interactive HUD & Hardened FSD v15 Reality Window:** Clickable mode/layer/scenario controls, 8-camera live matrix overlays (`Neural`, `RGB`, `Calib`, `SoilHeatmap`, `VoxelReproj`), 2-layer foreground-over-translucent-static EWA Reality View with `R/N/D` gear & `AEB`/`MRM` alerts, `NaN`/degenerate-splat & stale-buffer guards, per-stage GPU profiling, and JSONL tracing.
 
 ## Project Structure
 ```text
@@ -38,7 +38,7 @@ cybercab_vulkan_sim/
 │   ├── planning/                   # v14 quintic RSS planner & v15/ (StaticVoxelGuard, AutoregSafety, Policy)
 │   ├── app/                        # Interactive SDL2 + Vulkan HUD viewer & bitmap font
 │   └── main.cpp                    # Interactive / headless CLI entry point
-└── tests/                          # 202 GoogleTest tests (v14/v15/Stage-1/validation/FMEA/benchmark)
+└── tests/                          # 205 GoogleTest tests (v14/v15/Stage-1/Reality-View/FMEA/benchmark)
 ```
 
 ## Dependencies (Ubuntu / Debian)

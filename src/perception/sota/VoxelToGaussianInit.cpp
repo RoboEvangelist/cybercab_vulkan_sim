@@ -267,19 +267,21 @@ uint32_t VoxelToGaussianInit::initialize(const SimConfig& cfg,
         const Mat4 wFromIso = BEVFormer::worldFromIsoEgo(ego);
         const float cellDx = (cfg.bevMaxX - cfg.bevMinX) / static_cast<float>(staticNx);
         const float cellDy = (cfg.bevMaxY - cfg.bevMinY) / static_cast<float>(staticNy);
-        for (int pass = 0; pass < 2 && outGaussians.size() < cap; ++pass) {
-            const bool wantLocked = (pass == 0);
+        // Prioritize forward roadside locked structures (matching v15 fusion) before behind-ego cells.
+        for (int pass = 0; pass < 3 && outGaussians.size() < cap; ++pass) {
             for (int iy = 0; iy < staticNy && outGaussians.size() < cap; ++iy) {
+                const float yIso = cfg.bevMinY + (static_cast<float>(iy) + 0.5f) * cellDy;
                 for (int ix = 0; ix < staticNx && outGaussians.size() < cap; ++ix) {
                     const auto& c = (*staticCells)[static_cast<size_t>(iy) * staticNx + ix];
                     if (c.featConf.x < staticOccThresh || c.featConf.w < kStaticCellMinConf) continue;
                     const bool isLocked = (c.meta.z > 0.5f);
-                    if (isLocked != wantLocked) continue;
+                    const float xIso = cfg.bevMinX + (static_cast<float>(ix) + 0.5f) * cellDx;
+                    const bool isFwdRoadside = (xIso > 0.0f && std::abs(yIso) > 2.2f);
+                    const int cellPass = !isLocked ? 2 : (isFwdRoadside ? 0 : 1);
+                    if (cellPass != pass) continue;
                     const int rawSem = static_cast<int>(std::lround(c.featConf.z));
                     const SemanticClass sem = (rawSem == static_cast<int>(SemanticClass::SignalSign))
                         ? SemanticClass::SignalSign : SemanticClass::Static;
-                    const float xIso = cfg.bevMinX + (static_cast<float>(ix) + 0.5f) * cellDx;
-                    const float yIso = cfg.bevMinY + (static_cast<float>(iy) + 0.5f) * cellDy;
                     const Vec3 wp = wFromIso.transformPoint({xIso, yIso, 0.0f});
                     const float h = std::max(kStaticCellMinHeightM, c.featConf.y);
                     const Vec3 center{wp.x, 0.5f * h, wp.z};

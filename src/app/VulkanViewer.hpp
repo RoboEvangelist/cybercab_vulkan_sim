@@ -142,6 +142,8 @@ private:
 
     VulkanImage fontAtlas_;
     VulkanImage realityImg_;
+    bool realityFrameValid_ = false;
+    std::vector<uint8_t> realityBlankScratch_;
 
     // Pre-allocated dynamic geometry & UI vertex/index buffers (zero hot-path allocations)
     VulkanBuffer dynWorldVB_, dynWorldIB_;

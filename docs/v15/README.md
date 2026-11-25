@@ -34,7 +34,9 @@ Index of FSD v15 modules and Stage-1 spatial representation reports (`docs/v15/`
 | 22 | Full-vision MOT/IDSW, Lane IoU/assoc, ECE/slicing, RSS & poles/gantry | [step22_av_validation_framework.md](step22_av_validation_framework.md) | `7589de1`..`c5c8c91` |
 | 23 | Per-condition calib, vision signal FSM, open-set road obstacles & shadow replay | [step23_calibration_signal_openset_and_replay.md](step23_calibration_signal_openset_and_replay.md) | Step 23 |
 | S1 | Stage 1: Multi-modal GaussianFormer3D (`--spatial-rep legacy\|gaussianformer3d`) | [stage1_gaussianformer3d.md](stage1_gaussianformer3d.md) | `fe61e78` |
-| S1b | Stage 1 A/B evaluation, YAML voxel/volume tuning & latency/NFR audit | [stage1_gaussianformer3d_ab_report.md](stage1_gaussianformer3d_ab_report.md) | `2d10b85` |
+| S1b | Stage 1 A/B evaluation, OBB clamp, YAML voxel presets, Reality Window hardening & 205-test validation | [stage1_gaussianformer3d_ab_report.md](stage1_gaussianformer3d_ab_report.md) | `2d10b85`..latest |
+
+- **FSD v15 Reality Window & Stage-1 Highlights:** [`GaussianWorldModel`](../../src/perception/v15/GaussianWorldModel.cpp) splats foreground semantic primitives ahead of translucent (`<= 0.20` alpha) `Static` background and filters `NaN`/degenerate Gaussians; [`V15HudOverlay`](../../src/app/V15HudOverlay.cpp) adds `R/N/D` gear, `| AEB`/`| MRM` tags, and non-finite sanitization; [`VulkanViewer`](../../src/app/VulkanViewer.cpp) guards stale buffers; validated in [`test_v15_reality_window_validation.cpp`](../../tests/test_v15_reality_window_validation.cpp).
 
 ## References
 - **GaussianFormer3D** (ICRA 2026, [arXiv:2505.10685](https://arxiv.org/abs/2505.10685)) — Multi-modal 3D Gaussian semantic occupancy prediction with 3D deformable attention.

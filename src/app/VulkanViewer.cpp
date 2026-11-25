@@ -205,14 +205,15 @@ void VulkanViewer::init(SimConfig& cfg, WorldEngine& world, CameraRigRenderer& r
     *ctx_, v15_hud::kRealityTexW, v15_hud::kRealityTexH,
     VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT,
     VK_IMAGE_ASPECT_COLOR_BIT, true, VK_FILTER_LINEAR);
-  std::vector<uint8_t> initReality(
+  realityBlankScratch_.assign(
     v15_hud::kRealityExpectedBytes, kRealityZeroByte);
   for (size_t i = v15_hud::kRealityRgbaChannels - 1u;
-       i < initReality.size(); i += v15_hud::kRealityRgbaChannels) {
-    initReality[i] = kRealityBgAlpha;
+       i < realityBlankScratch_.size(); i += v15_hud::kRealityRgbaChannels) {
+    realityBlankScratch_[i] = kRealityBgAlpha;
   }
   realityImg_.uploadRGBA8(
-    initReality.data(), v15_hud::kRealityTexW, v15_hud::kRealityTexH);
+    realityBlankScratch_.data(), v15_hud::kRealityTexW, v15_hud::kRealityTexH);
+  realityFrameValid_ = false;
 
   for (int c = 0; c < v15_hud::kTotalUiSetCount; ++c) {
     VkDescriptorSetAllocateInfo ai{
@@ -1428,6 +1429,11 @@ void VulkanViewer::buildUiOverlay(const SimConfig& cfg, const WorldEngine& world
     constexpr float kHeaderTxtY = 4.0f;
     const Vec4 kWhiteTint{1.0f, 1.0f, 1.0f, 1.0f};
     const auto hud = v15_hud::formatV15HudTelemetry(ego, perc, cmd);
+    const bool alertState =
+      !realityFrameValid_ || cmd.aebActive ||
+      cmd.behaviorState == "SENSOR_SOILED_MRM";
+    const Vec4 headerCol = alertState ? kRealityWarnCol : kRealityHeaderCol;
+    const Vec4 borderCol = alertState ? kRealityWarnCol : kRealityCardBorder;
     const bool fullReal = (toggles.viewMode == ViewMode::RealityView);
     const float sc = fullReal ? kPipFullScale : kBorderPx;
     const float imgW = static_cast<float>(v15_hud::kRealityTexW) * sc;
@@ -1439,12 +1445,17 @@ void VulkanViewer::buildUiOverlay(const SimConfig& cfg, const WorldEngine& world
     const float cy = fullReal ? (topBarH + kFullTopMargin) : (H - pad - cardH);
     uiPanelsScratch_.push_back({cx, cy, cardW, cardH});
     uiRect(cx, cy, cardW, cardH, kRealityCardBg);
-    uiRectOutline(cx, cy, cardW, cardH, kBorderPx, kRealityCardBorder);
+    uiRectOutline(cx, cy, cardW, cardH, kBorderPx, borderCol);
     uiText(cx + kPipCardPad, cy + kHeaderTxtY, kPipTextScale,
-           kRealityHeaderCol, hud.header.data());
+           headerCol, hud.header.data());
     flushBatch(0);
     uiTexQuad(cx + kPipCardPad, cy + kPipHeaderH, imgW, imgH, kWhiteTint);
     flushBatch(v15_hud::kRealityUiSetIdx);
+    if (!realityFrameValid_) {
+      uiText(cx + kPipCardPad + 16.0f, cy + kPipHeaderH + imgH * kCenterHalf,
+             kPipTextScale, kRealityWarnCol,
+             "NO REALITY DATA (STALE BUFFER)");
+    }
     const float sy = cy + kPipHeaderH + imgH + kStripPadY;
     uiText(cx + kPipCardPad, sy, kPipTextScale, kRealitySubCol,
            hud.calib.data());
@@ -1485,6 +1496,11 @@ void VulkanViewer::renderFrame(const SimConfig& cfg, const WorldEngine& world, c
       perc.v15RealityRgba.size() == v15_hud::kRealityExpectedBytes) {
     realityImg_.uploadRGBA8(perc.v15RealityRgba.data(), v15_hud::kRealityTexW,
                             v15_hud::kRealityTexH);
+    realityFrameValid_ = true;
+  } else if (perc.v15.active && realityFrameValid_) {
+    realityImg_.uploadRGBA8(realityBlankScratch_.data(), v15_hud::kRealityTexW,
+                            v15_hud::kRealityTexH);
+    realityFrameValid_ = false;
   }
 
     dynVertsScratch_.clear();
