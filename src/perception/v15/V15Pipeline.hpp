@@ -39,7 +39,8 @@ public:
     void recordBackEnd(VkCommandBuffer cmd, const EgoState& ego, float dt,
                        const std::vector<TrackPriorGpu>& tracks, GpuProfiler* profiler = nullptr);
     void finishBackEnd(const VulkanContext& ctx, const EgoState& ego,
-                       PerceptionFrameOutput& out, GpuProfiler* profiler = nullptr);
+                       PerceptionFrameOutput& out, GpuProfiler* profiler = nullptr,
+                       const std::vector<V15Gaussian3D>* externalGaussians = nullptr);
 
     bool isInitialized() const { return initialized_; }
     const FrequencySplit& frequencySplit() const { return freqSplit_; }

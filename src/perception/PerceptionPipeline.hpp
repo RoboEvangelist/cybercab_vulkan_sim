@@ -10,6 +10,7 @@
 #include "perception/PerceptionTypes.hpp"
 #include "perception/SoilDetector.hpp"
 #include "perception/WorldModel.hpp"
+#include "perception/sota/GaussianFormer3DPipeline.hpp"
 #include "perception/v15/V15Pipeline.hpp"
 #include "sensors/CameraRigRenderer.hpp"
 #include "world/WorldEngine.hpp"
@@ -50,6 +51,7 @@ public:
     const OccupancyFlowNet& occupancyFlow() const { return occ_; }
     const WorldModel& worldModel() const { return wm_; }
     const v15::V15Pipeline* v15() const { return v15_.get(); }
+    const sota::GaussianFormer3DPipeline* gaussianFormer3D() const { return gf3d_.get(); }
 
 private:
     const SimConfig& cfg_;
@@ -60,6 +62,7 @@ private:
     OccupancyFlowNet occ_;
     WorldModel wm_;
     std::unique_ptr<v15::V15Pipeline> v15_;
+    std::unique_ptr<sota::GaussianFormer3DPipeline> gf3d_;
 
     // Pre-allocated hot-path scratch buffers
     std::vector<TrackPriorGpu> trackPriorsScratch_;

@@ -115,9 +115,14 @@ void V15Pipeline::recordBackEnd(VkCommandBuffer cmd, const EgoState& ego, float 
 }
 
 void V15Pipeline::finishBackEnd(const VulkanContext& ctx, const EgoState& ego,
-                                PerceptionFrameOutput& out, GpuProfiler* profiler) {
+                                PerceptionFrameOutput& out, GpuProfiler* profiler,
+                                const std::vector<V15Gaussian3D>* externalGaussians) {
     if (!initialized_ || !cfg_) return;
-    gaussianWorld_.updateFromPerception(*cfg_, ego, staticMem_, patchTokenizer_, out);
+    if (externalGaussians != nullptr) {
+        gaussianWorld_.setExternalGaussians(*externalGaussians);
+    } else {
+        gaussianWorld_.updateFromPerception(*cfg_, ego, staticMem_, patchTokenizer_, out);
+    }
     VkCommandBuffer cmd = ctx.beginSingleTimeCommands();
     runStage(cmd, profiler, "6_v15_gaussian_splat",
              [&] { gaussianWorld_.dispatchRealitySplat(cmd, *cfg_, ego); });

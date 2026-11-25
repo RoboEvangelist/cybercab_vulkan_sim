@@ -22,6 +22,13 @@ public:
                   const PerceptionFrameOutput& perc,
                   const ContactEvent& contact);
 
+    static std::string formatFrameJson(int stepIdx, float simTimeSec,
+                                       const SimConfig& cfg,
+                                       const EgoState& ego,
+                                       const PlannerCommand& cmd,
+                                       const PerceptionFrameOutput& perc,
+                                       const ContactEvent& contact);
+
     bool isOpen() const { return file_.is_open(); }
 
 private:

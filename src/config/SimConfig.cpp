@@ -34,6 +34,10 @@ bool SimConfig::isValidResMode(const std::string& mode) {
          mode == "cybercab_binned" || mode == "cybercab";
 }
 
+bool SimConfig::isValidSpatialRepMode(const std::string& mode) {
+  return mode == "legacy" || mode == "gaussianformer3d";
+}
+
 std::array<CamResPreset, 4> SimConfig::resolutionPresets() const {
   return {{
     {"half", camWidth, camHeight, "Legacy Half"},
@@ -117,6 +121,7 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
         cfg.useVulkanValidation = readOr(sim, "use_vulkan_validation", cfg.useVulkanValidation);
         cfg.pipelineVersion = readOr(sim, "pipeline_version", cfg.pipelineVersion);
     cfg.lightingMode = readOr(sim, "lighting_mode", cfg.lightingMode);
+    cfg.spatialRepMode = readOr(sim, "spatial_rep_mode", cfg.spatialRepMode);
     cfg.cameraKnockRpyDeg =
       readVec3Or(sim, "camera_knock_rpy_deg", cfg.cameraKnockRpyDeg);
         cfg.v15PolicyPath = readOr(sim, "v15_policy_config", cfg.v15PolicyPath);

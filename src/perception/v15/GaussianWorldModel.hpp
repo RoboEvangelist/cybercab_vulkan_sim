@@ -47,6 +47,7 @@ public:
                                   bool roadBlockingOnly = false);
   float queryOccupancyProb(const Vec3& worldPt, float horizonSec = 0.0f) const;
     void rollout4D(float horizonSec, std::vector<Gaussian3DGpu>& outPred) const;
+    void setExternalGaussians(const std::vector<Gaussian3DGpu>& src);
     void setGaussiansForTest(std::vector<Gaussian3DGpu> gaussians) { gaussians_ = std::move(gaussians); }
     const std::vector<Gaussian3DGpu>& gaussians() const { return gaussians_; }
 

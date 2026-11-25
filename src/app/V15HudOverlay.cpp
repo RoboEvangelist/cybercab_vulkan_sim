@@ -13,10 +13,18 @@ V15HudTelemetryLines formatV15HudTelemetry(
   V15HudTelemetryLines out{};
   const char* gearLbl = (ego.gear < 0 || cmd.gear < 0) ? "R" : "D";
   const char* sirenLbl = perc.v15.sirenDetected ? "YIELD" : "CLEAR";
-  std::snprintf(
-    out.header.data(), out.header.size(),
-    "FSD v15 REALITY | GEAR:%s | LAT:%+.2fm | GAUSS:%zu", gearLbl,
-    ego.currentLateralOffset, perc.v15Gaussians.size());
+  if (perc.gaussianFormer3D.active) {
+    std::snprintf(
+      out.header.data(), out.header.size(),
+      "FSD v15 REALITY | GEAR:%s | LAT:%+.2fm | GAUSS:%zu | GF3D:%u",
+      gearLbl, ego.currentLateralOffset, perc.v15Gaussians.size(),
+      perc.gaussianFormer3D.gaussianCount);
+  } else {
+    std::snprintf(
+      out.header.data(), out.header.size(),
+      "FSD v15 REALITY | GEAR:%s | LAT:%+.2fm | GAUSS:%zu", gearLbl,
+      ego.currentLateralOffset, perc.v15Gaussians.size());
+  }
   std::snprintf(
     out.calib.data(), out.calib.size(),
     "CALIB P:%+.2fd R:%+.2fd | PREF:%+.2fm | REAR:%.1fm",

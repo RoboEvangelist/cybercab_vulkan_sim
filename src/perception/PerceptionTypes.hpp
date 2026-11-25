@@ -148,6 +148,19 @@ struct V15PerceptionSummary {
   float calibRollDeg = 0.0f;
 };
 
+struct GaussianFormer3DSummary {
+    bool active = false;
+    bool usedDeformableAttn = false;
+    uint32_t initSeedCount = 0;
+    uint32_t gaussianCount = 0;
+    uint32_t camCorroboratedCount = 0;
+    uint32_t splattedVoxelCount = 0;
+    float meanOpacity = 0.0f;
+    float meanSemanticConf = 0.0f;
+    float meanScaleM = 0.0f;
+    float attnResidualM = 0.0f;
+};
+
 struct PerceptionFrameOutput {
     std::array<SoilCameraSummary, 8> soilCameras{};
     std::vector<SoilPatchStats> soilPatches; // 8 * patchCols * patchRows
@@ -165,6 +178,7 @@ struct PerceptionFrameOutput {
     std::map<std::string, double> gpuStageMs;
     EvalMetrics eval{};
     V15PerceptionSummary v15{};
+    GaussianFormer3DSummary gaussianFormer3D{};
   std::vector<V15Gaussian3D> v15Gaussians;
   std::vector<uint8_t> v15RealityRgba;
 

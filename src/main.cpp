@@ -30,6 +30,7 @@ struct CliArgs {
     std::string resMode;
     std::string pipelineVer;
   std::string lightingMode;
+  std::string spatialRepMode;
 };
 
 CliArgs parseArgs(int argc, char** argv) {
@@ -46,9 +47,11 @@ CliArgs parseArgs(int argc, char** argv) {
         else if (a == "--res" && i + 1 < argc) args.resMode = argv[++i];
         else if (a == "--pipeline" && i + 1 < argc) args.pipelineVer = argv[++i];
     else if (a == "--lighting" && i + 1 < argc) args.lightingMode = argv[++i];
+    else if (a == "--spatial-rep" && i + 1 < argc) args.spatialRepMode = argv[++i];
         else if (a == "--help" || a == "-h") {
           std::cout
             << "Usage: cybercab_sim [--config path.yaml] [--pipeline v14|v15]"
+            << " [--spatial-rep legacy|gaussianformer3d]"
             << " [--lighting day|night_glare] [--headless] [--steps N] "
             << "[--scenario nominal|jaywalk|occluded|hardbrake|soil_front|"
             << "siren] [--trace out.jsonl] [--dump-dir dir]"
@@ -98,6 +101,15 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("--pipeline must be \"v14\" or \"v15\", got \"" + args.pipelineVer + "\"");
             }
             cfg.pipelineVersion = args.pipelineVer;
+        }
+        if (!args.spatialRepMode.empty()) {
+            if (!cybercab::SimConfig::isValidSpatialRepMode(args.spatialRepMode)) {
+                throw std::runtime_error("--spatial-rep must be \"legacy\" or \"gaussianformer3d\", got \"" + args.spatialRepMode + "\"");
+            }
+            cfg.spatialRepMode = args.spatialRepMode;
+        }
+        if (!cybercab::SimConfig::isValidSpatialRepMode(cfg.spatialRepMode)) {
+            throw std::runtime_error("spatial_rep_mode must be \"legacy\" or \"gaussianformer3d\", got \"" + cfg.spatialRepMode + "\"");
         }
     if (!args.lightingMode.empty()) {
       if (args.lightingMode != "day" && args.lightingMode != "night_glare") {
@@ -174,7 +186,13 @@ int main(int argc, char** argv) {
                               << " trk=" << percOut.tracks.size()
                               << " vox=" << percOut.activeVoxels.size()
                               << " shad=" << percOut.shadowVoxels.size()
-                              << " gpu=" << totGpuMs << "ms\n";
+                              << " gpu=" << totGpuMs << "ms";
+                    if (percOut.gaussianFormer3D.active) {
+                        std::cout << " gf3d=" << percOut.gaussianFormer3D.gaussianCount
+                                  << " corr=" << percOut.gaussianFormer3D.camCorroboratedCount
+                                  << " splat=" << percOut.gaussianFormer3D.splattedVoxelCount;
+                    }
+                    std::cout << "\n";
                 }
             }
 

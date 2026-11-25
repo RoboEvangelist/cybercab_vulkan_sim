@@ -111,6 +111,10 @@ add_library(cybercab_perception SHARED
     src/perception/v15/StaticSpatialMemory.cpp
     src/perception/v15/GaussianWorldModel.cpp
     src/perception/v15/LatentPredictor.cpp
+    src/perception/sota/VoxelToGaussianInit.cpp
+    src/perception/sota/DeformableAttention3D.cpp
+    src/perception/sota/GaussianToVoxelSplatter.cpp
+    src/perception/sota/GaussianFormer3DPipeline.cpp
 )
 add_dependencies(cybercab_perception compile_shaders)
 target_link_libraries(cybercab_perception PUBLIC cybercab_world)
@@ -188,6 +192,8 @@ add_executable(cybercab_tests
     tests/test_av_open_set_obstacles_and_freespace.cpp
     tests/test_av_shadow_replay_and_hierarchy.cpp
     tests/test_v15_e2e_closed_loop.cpp
+    tests/test_sota_gaussianformer3d.cpp
+    tests/test_sota_gaussianformer3d_closed_loop.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
 target_link_libraries(cybercab_tests PRIVATE

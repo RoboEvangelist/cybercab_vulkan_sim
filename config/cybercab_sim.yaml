@@ -20,6 +20,7 @@ simulation:
   use_vulkan_validation: false
   pipeline_version: "v14"        # "v14" (RT-DETR/BEVFormer/voxels) | "v15" (photon-count/Plücker/Gaussian world)
   lighting_mode: "day"           # "day" | "night_glare"
+  spatial_rep_mode: "legacy"     # "legacy" | "gaussianformer3d" (Stage 1 GaussianFormer3D + 3D deformable attn)
 
 perception:
   # Feature & Transformer dimensions (pure Vulkan compute shaders)

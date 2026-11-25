@@ -26,7 +26,15 @@ void TraceLogger::logFrame(int stepIdx, float simTimeSec,
                            const PerceptionFrameOutput& perc,
                            const ContactEvent& contact) {
     if (!file_.is_open()) return;
+    file_ << formatFrameJson(stepIdx, simTimeSec, cfg, ego, cmd, perc, contact) << "\n";
+}
 
+std::string TraceLogger::formatFrameJson(int stepIdx, float simTimeSec,
+                                         const SimConfig& cfg,
+                                         const EgoState& ego,
+                                         const PlannerCommand& cmd,
+                                         const PerceptionFrameOutput& perc,
+                                         const ContactEvent& contact) {
     Json::Value root;
     root["step"] = stepIdx;
     root["time_sec"] = simTimeSec;
@@ -136,12 +144,27 @@ void TraceLogger::logFrame(int stepIdx, float simTimeSec,
     root["v15"] = jV15;
   }
 
+  if (perc.gaussianFormer3D.active) {
+    Json::Value jGf;
+    jGf["active"] = true;
+    jGf["used_deformable_attn"] = perc.gaussianFormer3D.usedDeformableAttn;
+    jGf["init_seed_count"] = perc.gaussianFormer3D.initSeedCount;
+    jGf["gaussian_count"] = perc.gaussianFormer3D.gaussianCount;
+    jGf["cam_corroborated_count"] = perc.gaussianFormer3D.camCorroboratedCount;
+    jGf["splatted_voxel_count"] = perc.gaussianFormer3D.splattedVoxelCount;
+    jGf["mean_opacity"] = perc.gaussianFormer3D.meanOpacity;
+    jGf["mean_semantic_conf"] = perc.gaussianFormer3D.meanSemanticConf;
+    jGf["mean_scale_m"] = perc.gaussianFormer3D.meanScaleM;
+    jGf["attn_residual_m"] = perc.gaussianFormer3D.attnResidualM;
+    root["gaussianformer3d"] = jGf;
+  }
+
     root["sat_contact"] = contact.occurred;
     if (contact.occurred) root["sat_contact_other"] = contact.otherId;
 
     Json::StreamWriterBuilder wb;
     wb["indentation"] = "";
-    file_ << Json::writeString(wb, root) << "\n";
+    return Json::writeString(wb, root);
 }
 
 } // namespace cybercab

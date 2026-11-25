@@ -169,6 +169,14 @@ float GaussianWorldModel::queryOccupancyProb(const Vec3& worldPt,
   return queryOccupancyProb(gaussians_, worldPt, horizonSec, false);
 }
 
+void GaussianWorldModel::setExternalGaussians(const std::vector<Gaussian3DGpu>& src) {
+    if (gaussians_.capacity() < static_cast<size_t>(kMaxGaussians)) {
+        gaussians_.reserve(static_cast<size_t>(kMaxGaussians));
+    }
+    const size_t n = std::min(src.size(), static_cast<size_t>(kMaxGaussians));
+    gaussians_.assign(src.begin(), src.begin() + static_cast<std::ptrdiff_t>(n));
+}
+
 void GaussianWorldModel::rollout4D(float horizonSec, std::vector<Gaussian3DGpu>& outPred) const {
     const float t = std::max(0.0f, horizonSec);
     const float grow = 1.0f + 0.15f * t;

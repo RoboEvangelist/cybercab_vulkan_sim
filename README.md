@@ -14,11 +14,14 @@ A modular, zero-hot-path-allocation **C++ + Vulkan** simulation of the **Tesla C
     5. **Persistent SE(3) Static Spatial Memory:** Ego-warped `60x40` static map with dynamic occlusion masking & selective refresh skipping (`v15_static_memory.comp`).
     6. **3D/4D Gaussian World Model & Open-Set Protection:** GaussianFormer-2 occupancy, 4D rollout, Zwicker/Kerbl EWA `320x180` splatting (`v15_gaussian_splat.comp`), and `v15` raised-cargo + grounded on-road static voxel protection ([`StaticVoxelGuard.hpp`](src/planning/v15/StaticVoxelGuard.hpp)).
     7. **Autoregressive Middle-of-Lane Planner (`AutoregressivePolicy` + `AutoregSafety`):** Sequential `(x, y, v, kappa)` lane-center rollout (`+/-1.95 m`), bounded truck shy-away, `YIELDING_SIREN`, and `Autoshift D/R`.
+- **Stage 1 Spatial Representation Switch (`simulation.spatial_rep_mode` or `--spatial-rep legacy|gaussianformer3d`):**
+  - **`legacy` (default):** Existing BEVFormer/OccupancyFlowNet voxel path (`v14`) and GPU `GaussianWorldModel::updateFromPerception` (`v15`).
+  - **`gaussianformer3d` (opt-in, ICRA 2026 / arXiv:2505.10685):** Replaces Stage-1 spatial construction with modular [`GaussianFormer3DPipeline`](src/perception/sota/GaussianFormer3DPipeline.hpp) (`VoxelToGaussianInit` -> multi-modal camera+3D `DeformableAttention3D` -> `GaussianToVoxelSplatter`), refining both `activeVoxels` (`v14`/`v15`) and EWA Reality View Gaussians (`v15`), with `TraceLogger` & HUD telemetry.
 - **8-Camera Calibrated Surround Matrix & HDR Night Lighting:** Concurrent offscreen rendering across 4 camera presets (`half` `320x240`, `full` `640x480`, `cybercab_binned` `1448x938`, `cybercab` `2896x1876`) with `day` / `night_glare` HDR + RCCB mosaic support via [`cam_isp_soil.comp`](shaders/cam_isp_soil.comp).
 - **Interactive HUD & Telemetry:** Clickable mode/layer/scenario controls, 8-camera live matrix overlays (`Neural`, `RGB`, `Calib`, `SoilHeatmap`, `VoxelReproj`), per-stage Vulkan GPU query profiling, and JSONL trace logging.
 
 ## AV Safety & Validation Framework
-Built across [`docs/v15/`](docs/v15/README.md) (`189` GoogleTest cases: `96` v14 equivalence oracle + `93` v15/all-res/validation/FMEA tests):
+Built across [`docs/v15/`](docs/v15/README.md) (`196` GoogleTest cases: `96` v14 equivalence oracle + `100` v15/Stage-1/all-res/validation/FMEA tests):
 - **Component & Calibration Validation:** Multi-camera corroboration/HW4 range hierarchy, class/distance/weather/lighting slicing (`M(s,c,d,w,l,o,m)`), Expected Calibration Error (ECE) & overconfidence (OCE), and asymmetric safety-weighted confusion matrices.
 - **Tracking, Lanes & Road Structure:** MOTA/MOTP, ID switches (`idsw = 0`), class swaps, lane boundary IoU/localization error, maneuver-aware split-phase signal association, ego-velocity vs. RSS stopping margin, and class-agnostic poles/barriers/gantry underpass checks.
 - **Open-Set Hazards, FMEA & Replay:** Closed-loop avoidance of unboxed fallen cargo & barriers, empty-road zero-ghost/AEB FMEA across all 4 resolutions, 6-level zero-tolerance scenario hierarchy (`frame -> track -> association -> decision -> behavior -> scenario`), and deterministic paired `v14`/`v15` JSONL trace replay.
@@ -40,7 +43,7 @@ cybercab_vulkan_sim/
 │   ├── planning/                   # v14 quintic RSS planner & v15/ (StaticVoxelGuard, AutoregSafety, Policy)
 │   ├── app/                        # Interactive SDL2 + Vulkan HUD viewer & bitmap font
 │   └── main.cpp                    # Interactive / headless CLI entry point
-└── tests/                          # 189 GoogleTest tests (96 v14 oracle + 93 v15/all-res/validation/FMEA)
+└── tests/                          # 196 GoogleTest tests (96 v14 oracle + 100 v15/Stage-1/validation/FMEA)
 ```
 
 ## Dependencies (Ubuntu / Debian)
@@ -78,6 +81,7 @@ ctest --test-dir build --output-on-failure
 Options:
 - `--config <path.yaml>` (defaults to `config/cybercab_sim.yaml`; loads `config/v15_policy.yaml`)
 - `--pipeline v14|v15` (overrides `simulation.pipeline_version`)
+- `--spatial-rep legacy|gaussianformer3d` (overrides `simulation.spatial_rep_mode`)
 - `--lighting day|night_glare` (selects daytime or HDR night-glare rendering)
 - `--scenario nominal|jaywalk|occluded|hardbrake|soil_front|siren`
 - `--steps N` (control ticks at 36 Hz)

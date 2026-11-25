@@ -22,6 +22,10 @@ void PerceptionPipeline::init(const VulkanContext& ctx, const CameraRigRenderer&
         v15_ = std::make_unique<v15::V15Pipeline>();
         v15_->init(ctx, cfg_, rig);
     }
+    if (cfg_.isGaussianFormer3D()) {
+        gf3d_ = std::make_unique<sota::GaussianFormer3DPipeline>();
+        gf3d_->init(cfg_, {});
+    }
 }
 
 void PerceptionPipeline::onCameraResized(const CameraRigRenderer& rig) {
@@ -36,9 +40,14 @@ void PerceptionPipeline::reset() {
     bev_.resetHistory();
     occ_.resetVoxels();
     if (v15_) v15_->reset();
+    if (gf3d_) gf3d_->reset();
 }
 
 void PerceptionPipeline::destroy() {
+    if (gf3d_) {
+        gf3d_->reset();
+        gf3d_.reset();
+    }
     if (v15_) {
         v15_->destroy();
         v15_.reset();
@@ -135,8 +144,15 @@ void PerceptionPipeline::runFrame(const VulkanContext& ctx,
     out.bevSummary = bev_.readbackSummary();
     occ_.readbackVoxels(cfg_, ego, out.activeVoxels, out.shadowVoxels);
     wm_.readbackGhosts(out.worldGhosts);
+    if (gf3d_) {
+        const v15::StaticSpatialMemory* staticMemPtr = v15_ ? &v15_->staticMemory() : nullptr;
+        gf3d_->runStage(cfg_, ego, &rig, staticMemPtr, out);
+    } else {
+        out.gaussianFormer3D = {};
+    }
     if (v15_) {
-        v15_->finishBackEnd(ctx, ego, out, profiler);
+        const std::vector<V15Gaussian3D>* gfGauss = gf3d_ ? &gf3d_->v15Gaussians() : nullptr;
+        v15_->finishBackEnd(ctx, ego, out, profiler, gfGauss);
     }
     if (cfg_.isV15()) calib::calibrateFrame(cfg_, out);
 
