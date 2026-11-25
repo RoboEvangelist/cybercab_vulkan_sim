@@ -194,6 +194,9 @@ add_executable(cybercab_tests
     tests/test_v15_e2e_closed_loop.cpp
     tests/test_sota_gaussianformer3d.cpp
     tests/test_sota_gaussianformer3d_closed_loop.cpp
+    tests/test_sota_gaussianformer3d_ab_metrics.cpp
+    tests/test_sota_gaussianformer3d_ab_missions_nfr.cpp
+    tests/test_sota_gaussianformer3d_ab_robustness.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
 target_link_libraries(cybercab_tests PRIVATE

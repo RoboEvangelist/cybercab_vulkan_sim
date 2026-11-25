@@ -16,12 +16,13 @@ A modular, zero-hot-path-allocation **C++ + Vulkan** simulation of the **Tesla C
     7. **Autoregressive Middle-of-Lane Planner (`AutoregressivePolicy` + `AutoregSafety`):** Sequential `(x, y, v, kappa)` lane-center rollout (`+/-1.95 m`), bounded truck shy-away, `YIELDING_SIREN`, and `Autoshift D/R`.
 - **Stage 1 Spatial Representation Switch (`simulation.spatial_rep_mode` or `--spatial-rep legacy|gaussianformer3d`):**
   - **`legacy` (default):** Existing BEVFormer/OccupancyFlowNet voxel path (`v14`) and GPU `GaussianWorldModel::updateFromPerception` (`v15`).
-  - **`gaussianformer3d` (opt-in, ICRA 2026 / arXiv:2505.10685):** Replaces Stage-1 spatial construction with modular [`GaussianFormer3DPipeline`](src/perception/sota/GaussianFormer3DPipeline.hpp) (`VoxelToGaussianInit` -> multi-modal camera+3D `DeformableAttention3D` -> `GaussianToVoxelSplatter`), refining both `activeVoxels` (`v14`/`v15`) and EWA Reality View Gaussians (`v15`), with `TraceLogger` & HUD telemetry.
+  - **`gaussianformer3d` (opt-in, ICRA 2026 / arXiv:2505.10685):** Replaces Stage-1 spatial construction with [`GaussianFormer3DPipeline`](src/perception/sota/GaussianFormer3DPipeline.hpp) (`VoxelToGaussianInit` -> `DeformableAttention3D` -> `GaussianToVoxelSplatter`), with YAML voxel/volume tuning (`perception.occupancy_flow` step/bounds and `perception.gaussianformer3d` `voxel_scale_x/y/z`, `splat_radius_sigma_mul`, `max_gaussians`, `min_voxel_occ_prob`).
+  - **A/B Summary ([report](docs/v15/stage1_gaussianformer3d_ab_report.md)):** Improves Gaussian GT occupancy (`0.301 -> 0.542`), dynamic voxel precision (`0.881 -> 0.907`), and `v15` safety/comfort (0 AEB false-positives in occluded/hard-brake, lower jerk, `8/8` missions passed) at `0.33-0.54 ms` CPU stage time (`10.58-18.48 ms` mean wall time vs `13.01-19.93 ms` legacy under `RelWithDebInfo`) and `0` steady-state heap allocs.
 - **8-Camera Calibrated Surround Matrix & HDR Night Lighting:** Concurrent offscreen rendering across 4 camera presets (`half` `320x240`, `full` `640x480`, `cybercab_binned` `1448x938`, `cybercab` `2896x1876`) with `day` / `night_glare` HDR + RCCB mosaic support via [`cam_isp_soil.comp`](shaders/cam_isp_soil.comp).
 - **Interactive HUD & Telemetry:** Clickable mode/layer/scenario controls, 8-camera live matrix overlays (`Neural`, `RGB`, `Calib`, `SoilHeatmap`, `VoxelReproj`), per-stage Vulkan GPU query profiling, and JSONL trace logging.
 
 ## AV Safety & Validation Framework
-Built across [`docs/v15/`](docs/v15/README.md) (`196` GoogleTest cases: `96` v14 equivalence oracle + `100` v15/Stage-1/all-res/validation/FMEA tests):
+Built across [`docs/v15/`](docs/v15/README.md) (`201` GoogleTest cases: `96` v14 equivalence oracle + `105` v15/Stage-1/all-res/validation/FMEA tests):
 - **Component & Calibration Validation:** Multi-camera corroboration/HW4 range hierarchy, class/distance/weather/lighting slicing (`M(s,c,d,w,l,o,m)`), Expected Calibration Error (ECE) & overconfidence (OCE), and asymmetric safety-weighted confusion matrices.
 - **Tracking, Lanes & Road Structure:** MOTA/MOTP, ID switches (`idsw = 0`), class swaps, lane boundary IoU/localization error, maneuver-aware split-phase signal association, ego-velocity vs. RSS stopping margin, and class-agnostic poles/barriers/gantry underpass checks.
 - **Open-Set Hazards, FMEA & Replay:** Closed-loop avoidance of unboxed fallen cargo & barriers, empty-road zero-ghost/AEB FMEA across all 4 resolutions, 6-level zero-tolerance scenario hierarchy (`frame -> track -> association -> decision -> behavior -> scenario`), and deterministic paired `v14`/`v15` JSONL trace replay.
@@ -43,7 +44,7 @@ cybercab_vulkan_sim/
 │   ├── planning/                   # v14 quintic RSS planner & v15/ (StaticVoxelGuard, AutoregSafety, Policy)
 │   ├── app/                        # Interactive SDL2 + Vulkan HUD viewer & bitmap font
 │   └── main.cpp                    # Interactive / headless CLI entry point
-└── tests/                          # 196 GoogleTest tests (96 v14 oracle + 100 v15/Stage-1/validation/FMEA)
+└── tests/                          # 201 GoogleTest tests (96 v14 oracle + 105 v15/Stage-1/validation/FMEA)
 ```
 
 ## Dependencies (Ubuntu / Debian)

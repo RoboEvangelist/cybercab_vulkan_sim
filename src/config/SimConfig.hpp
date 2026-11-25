@@ -205,6 +205,25 @@ struct SimConfig {
     uint32_t photonNoiseSeed = 1234u;
   bool photonRccbMosaic = false;
 
+  // Stage 1 GaussianFormer3D voxel/volume & deformable attention parameters
+  struct GaussianFormer3DParams {
+    uint32_t maxGaussians = 512u;
+    uint32_t numRefinementLayers = 2u;
+    uint32_t numDeformableSamplePts = 7u;
+    float mergeRadiusM = 0.75f;
+    float minInitConf = 0.25f;
+    float voxelScaleX = 0.72f;
+    float voxelScaleY = 0.80f;
+    float voxelScaleZ = 0.72f;
+    float splatRadiusSigmaMul = 1.25f;
+    float splatSigmaCutoffSq = 4.50f;
+    float minVoxelOccProb = 0.38f;
+    float camAttnWeight = 0.55f;
+    float lidarAttnWeight = 0.45f;
+    float temporalSmoothAlpha = 0.30f;
+    bool enableDeformableAttn = true;
+  } gf3d{};
+
     // Planning & RSS
     float targetCruiseSpeedMs = 10.5f;
     int numPlannerCandidates = 9;

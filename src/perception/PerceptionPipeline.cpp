@@ -24,7 +24,7 @@ void PerceptionPipeline::init(const VulkanContext& ctx, const CameraRigRenderer&
     }
     if (cfg_.isGaussianFormer3D()) {
         gf3d_ = std::make_unique<sota::GaussianFormer3DPipeline>();
-        gf3d_->init(cfg_, {});
+        gf3d_->init(cfg_);
     }
 }
 

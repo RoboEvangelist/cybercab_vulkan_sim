@@ -12,12 +12,12 @@ namespace {
 constexpr int kMaxSplatSpanXY = 2;
 constexpr int kMaxSplatSpanZ = 2;
 constexpr float kBaseEpistemicSigmaM = 0.24f;
-constexpr float kMinEpistemicSigmaM = 0.04f;
+constexpr float kMinDynEpistemicSigmaM = 0.05f;
+constexpr float kMinStaticEpistemicSigmaM = 0.11f;
 constexpr float kMaxEpistemicSigmaM = 0.85f;
 constexpr float kCorrobSigmaDecay = 0.35f;
-constexpr float kSplatRadiusSigmaMul = 2.25f;
 constexpr float kPriorVoxelWeight = 0.30f;
-constexpr float kSplatVoxelWeight = 0.70f;
+constexpr float kSplatVoxelWeight = 1.00f;
 constexpr float kMinWeightEps = 1e-5f;
 
 } // namespace
@@ -84,7 +84,7 @@ float GaussianToVoxelSplatter::queryVoxelOccupancyAndSemantic(
     outVel = (wSum > kMinWeightEps) ? Vec3{velX / wSum, 0.0f, velZ / wSum} : Vec3{};
     outEpistemicSigma = clampf(
         kBaseEpistemicSigmaM / (1.0f + kCorrobSigmaDecay * static_cast<float>(maxCorrob)),
-        kMinEpistemicSigmaM, kMaxEpistemicSigmaM);
+        kMinDynEpistemicSigmaM, kMaxEpistemicSigmaM);
     return occProb;
 }
 
@@ -110,12 +110,16 @@ uint32_t GaussianToVoxelSplatter::splatToVoxels(const SimConfig& cfg,
         int& slot = cellIndexMap_[static_cast<size_t>(key)];
         if (slot < 0) {
             slot = static_cast<int>(accumScratch_.size());
-            accumScratch_.push_back(CellAccum{ix, iy, iz, 1.0, {}, 0.0f, 0.0f, 0.0f, 0u});
+            CellAccum cell{};
+            cell.ix = ix;
+            cell.iy = iy;
+            cell.iz = iz;
+            accumScratch_.push_back(cell);
         }
         return slot;
     };
 
-    // Preserve prior non-shadow occupancy observations as weak priors in overlapping cells.
+    // Preserve prior non-shadow observations without double-counting into Gaussian products.
     for (const auto& v : inOutVoxels) {
         if (v.sem == SemanticClass::Empty || v.sem == SemanticClass::OccShadow) continue;
         const int ix = static_cast<int>(std::floor((v.egoX - cfg.occMinX) / cfg.occStepX));
@@ -125,24 +129,32 @@ uint32_t GaussianToVoxelSplatter::splatToVoxels(const SimConfig& cfg,
 
         const int slot = getOrCreateSlot(ix, iy, iz);
         auto& acc = accumScratch_[static_cast<size_t>(slot)];
-        const float priorW = clampf(v.confidence * kPriorVoxelWeight, 0.0f, kMaxGaussianOpacity);
-        acc.emptyProd *= (1.0 - static_cast<double>(priorW));
+        const float cleanConf = clampf(v.confidence, 0.0f, kMaxGaussianOpacity);
+        acc.priorConf = std::max(acc.priorConf, cleanConf);
+        const float priorW = cleanConf * kPriorVoxelWeight;
         const uint32_t cls = std::min(static_cast<uint32_t>(v.sem), kNumGaussianSemClasses - 1u);
         acc.semWeighted[cls] += priorW;
         acc.velXSum += v.vx * priorW;
         acc.velZSum += v.vz * priorW;
         acc.wSum += priorW;
     }
+    const size_t priorCellCount = accumScratch_.size();
 
-    // Splat every refined anisotropic 3D Gaussian over local voxel neighborhood.
+    // Splat live-observed anisotropic 3D Gaussians over local voxel neighborhood.
     std::array<float, kNumGaussianSemClasses> probs{};
     for (const auto& g : gaussians) {
-        if (g.opacity < kMinGaussianOpacity) continue;
+        if (g.opacity < kMinGaussianOpacity || g.fromStaticMem) continue;
         const Vec3 centerIso = isoFromWorld.transformPoint(g.mean);
-        const float rIso = kSplatRadiusSigmaMul * std::max({g.scale.x, g.scale.y, g.scale.z});
-        const int spanX = std::min(kMaxSplatSpanXY, static_cast<int>(std::ceil(rIso / cfg.occStepX)));
-        const int spanY = std::min(kMaxSplatSpanXY, static_cast<int>(std::ceil(rIso / cfg.occStepY)));
-        const int spanZ = std::min(kMaxSplatSpanZ, static_cast<int>(std::ceil(rIso / cfg.occStepZ)));
+        const float sx = clampf(g.scale.x * gfCfg.voxelScaleX, kDefaultMinScaleM, kDefaultMaxScaleM);
+        const float sy = clampf(g.scale.y * gfCfg.voxelScaleY, kDefaultMinScaleM, kDefaultMaxScaleM);
+        const float sz = clampf(g.scale.z * gfCfg.voxelScaleZ, kDefaultMinScaleM, kDefaultMaxScaleM);
+        const float rIso = gfCfg.splatRadiusSigmaMul * std::max({sx, sy, sz});
+        const int capXY = (!g.isDynamic || rIso <= 1.25f) ? 1 : kMaxSplatSpanXY;
+        const int capZ = (!g.isDynamic && g.argmaxSemantic() != SemanticClass::SignalSign)
+            ? 1 : kMaxSplatSpanZ;
+        const int spanX = std::min(capXY, static_cast<int>(std::ceil(rIso / cfg.occStepX)));
+        const int spanY = std::min(capXY, static_cast<int>(std::ceil(rIso / cfg.occStepY)));
+        const int spanZ = std::min(capZ, static_cast<int>(std::ceil(rIso / cfg.occStepZ)));
 
         const int cx = static_cast<int>(std::floor((centerIso.x - cfg.occMinX) / cfg.occStepX));
         const int cy = static_cast<int>(std::floor((centerIso.y - cfg.occMinY) / cfg.occStepY));
@@ -154,9 +166,6 @@ uint32_t GaussianToVoxelSplatter::splatToVoxels(const SimConfig& cfg,
         if (ixMin > ixMax || iyMin > iyMax || izMin > izMax) continue;
 
         g.softmaxProbs(probs);
-        const float sx = std::max(kDefaultMinScaleM, g.scale.x);
-        const float sy = std::max(kDefaultMinScaleM, g.scale.y);
-        const float sz = std::max(kDefaultMinScaleM, g.scale.z);
 
         for (int iz = izMin; iz <= izMax; ++iz) {
             const float zIso = cfg.occMinZ + (static_cast<float>(iz) + 0.5f) * cfg.occStepZ;
@@ -170,12 +179,23 @@ uint32_t GaussianToVoxelSplatter::splatToVoxels(const SimConfig& cfg,
                                       (local.y * local.y) / (sy * sy) +
                                       (local.z * local.z) / (sz * sz);
                     if (mSq > gfCfg.splatSigmaCutoffSq) continue;
+                    const int key = packCellKey(ix, iy, iz, nx, ny);
+                    const int existingSlot = cellIndexMap_[static_cast<size_t>(key)];
+                    const bool hasPriorCell =
+                        (existingSlot >= 0 && static_cast<size_t>(existingSlot) < priorCellCount);
+                    if (!hasPriorCell && !g.fromTrack) continue;
 
                     const float w = clampf(g.opacity * kSplatVoxelWeight * std::exp(kGaussianExpHalf * mSq),
                                            0.0f, kMaxGaussianOpacity);
                     const int slot = getOrCreateSlot(ix, iy, iz);
                     auto& acc = accumScratch_[static_cast<size_t>(slot)];
-                    acc.emptyProd *= (1.0 - static_cast<double>(w));
+                    if (g.fromTrack) {
+                        acc.emptyProd *= (1.0 - static_cast<double>(w));
+                        ++acc.dynSplatCount;
+                    } else {
+                        acc.maxStaticOcc = std::max(acc.maxStaticOcc, w);
+                        ++acc.staticSplatCount;
+                    }
                     for (uint32_t c = 0u; c < kNumGaussianSemClasses; ++c) {
                         acc.semWeighted[c] += w * probs[c];
                     }
@@ -193,8 +213,11 @@ uint32_t GaussianToVoxelSplatter::splatToVoxels(const SimConfig& cfg,
     uint32_t splattedCount = 0u;
     const float occThresh = std::max(gfCfg.minVoxelOccProb, cfg.occThreshold * 0.85f);
     for (const auto& acc : accumScratch_) {
-        const float occProb = clampf(static_cast<float>(1.0 - acc.emptyProd), 0.0f, 1.0f);
-        if (occProb < occThresh) continue;
+        const float dynOcc = (acc.dynSplatCount > 0u)
+            ? clampf(static_cast<float>(1.0 - acc.emptyProd), 0.0f, 1.0f) : 0.0f;
+        const float staticOcc = (acc.staticSplatCount > 0u)
+            ? std::max(acc.priorConf, lerpf(acc.priorConf, acc.maxStaticOcc, 0.45f)) : acc.priorConf;
+        const float occProb = std::max(dynOcc, staticOcc);
 
         uint32_t bestCls = 0u;
         float bestScore = -1.0f;
@@ -206,23 +229,49 @@ uint32_t GaussianToVoxelSplatter::splatToVoxels(const SimConfig& cfg,
         }
         if (bestScore <= kMinWeightEps) continue;
 
+        const float cellThresh = (bestCls == static_cast<uint32_t>(SemanticClass::SignalSign))
+            ? std::min(occThresh, 0.25f) : occThresh;
+        if (occProb < cellThresh) continue;
+
         const float xIso = cfg.occMinX + (static_cast<float>(acc.ix) + 0.5f) * cfg.occStepX;
         const float yIso = cfg.occMinY + (static_cast<float>(acc.iy) + 0.5f) * cfg.occStepY;
         const float zIso = cfg.occMinZ + (static_cast<float>(acc.iz) + 0.5f) * cfg.occStepZ;
         const Vec3 wp = worldFromIso.transformPoint({xIso, yIso, zIso});
         const float invW = (acc.wSum > kMinWeightEps) ? (1.0f / acc.wSum) : 0.0f;
+        const SemanticClass outSem = static_cast<SemanticClass>(bestCls);
+        const bool isDynCls = (outSem == SemanticClass::Vehicle || outSem == SemanticClass::Pedestrian);
+        const float minSigma = isDynCls ? kMinDynEpistemicSigmaM : kMinStaticEpistemicSigmaM;
         const float sigma = clampf(
             kBaseEpistemicSigmaM / (1.0f + kCorrobSigmaDecay * static_cast<float>(acc.maxCorrob)),
-            kMinEpistemicSigmaM, kMaxEpistemicSigmaM);
+            minSigma, kMaxEpistemicSigmaM);
 
         inOutVoxels.push_back(ActiveVoxel{
             xIso, yIso, zIso, wp.x, wp.z,
-            static_cast<SemanticClass>(bestCls),
+            outSem,
             occProb,
             acc.velXSum * invW,
             acc.velZSum * invW,
             sigma
         });
+        ++splattedCount;
+    }
+
+    int staticMemFused = 0;
+    for (const auto& g : gaussians) {
+        if (!g.fromStaticMem || !g.staticMemLocked || g.confidence < 0.55f || staticMemFused >= 32) continue;
+        const Vec3 iso = isoFromWorld.transformPoint(g.mean);
+        if (iso.x <= 0.0f || std::abs(iso.y) <= 2.2f) continue;
+        if (iso.x < cfg.occMinX || iso.x > cfg.occMaxX ||
+            iso.y < cfg.occMinY || iso.y > cfg.occMaxY ||
+            g.mean.y < 0.0f || g.mean.y > cfg.occMaxZ) continue;
+        inOutVoxels.push_back(ActiveVoxel{
+            iso.x, iso.y, g.mean.y, g.mean.x, g.mean.z,
+            g.argmaxSemantic(),
+            g.confidence,
+            0.0f, 0.0f,
+            kMinDynEpistemicSigmaM
+        });
+        ++staticMemFused;
         ++splattedCount;
     }
     return splattedCount;

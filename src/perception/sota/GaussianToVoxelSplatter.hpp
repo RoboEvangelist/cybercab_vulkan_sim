@@ -41,7 +41,11 @@ private:
         float velXSum = 0.0f;
         float velZSum = 0.0f;
         float wSum = 0.0f;
+        float priorConf = 0.0f;
+        float maxStaticOcc = 0.0f;
         uint32_t maxCorrob = 0u;
+        uint32_t dynSplatCount = 0u;
+        uint32_t staticSplatCount = 0u;
     };
 
     static int packCellKey(int ix, int iy, int iz, int nx, int ny);

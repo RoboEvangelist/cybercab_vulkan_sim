@@ -83,6 +83,9 @@ struct Gaussian3DPrimitive {
     Vec3 velWorld{0.0f, 0.0f, 0.0f};
     float confidence = 0.0f;
     bool isDynamic = false;
+    bool fromStaticMem = false;
+    bool fromTrack = false;
+    bool staticMemLocked = false;
     uint32_t camCorrobCount = 0u;
     float lastDisplacementM = 0.0f;
 
@@ -129,15 +132,19 @@ struct Gaussian3DPrimitive {
 
 struct GaussianFormer3DConfig {
     uint32_t maxGaussians = 512u;
-    uint32_t numRefinementLayers = 3u;
+    uint32_t numRefinementLayers = 2u;
     uint32_t numDeformableSamplePts = 7u;
-    float mergeRadiusM = 0.90f;
-    float minInitConf = 0.20f;
+    float mergeRadiusM = 0.75f;
+    float minInitConf = 0.25f;
+    float voxelScaleX = 0.72f;
+    float voxelScaleY = 0.80f;
+    float voxelScaleZ = 0.72f;
+    float splatRadiusSigmaMul = 1.25f;
     float camAttnWeight = 0.55f;
     float lidarAttnWeight = 0.45f;
-    float temporalSmoothAlpha = 0.35f;
-    float splatSigmaCutoffSq = kMahalanobisSqCutoff;
-    float minVoxelOccProb = 0.35f;
+    float temporalSmoothAlpha = 0.30f;
+    float splatSigmaCutoffSq = 4.50f;
+    float minVoxelOccProb = 0.38f;
     bool enableDeformableAttn = true;
 };
 

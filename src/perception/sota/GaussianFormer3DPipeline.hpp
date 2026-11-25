@@ -18,7 +18,8 @@ namespace cybercab::sota {
 
 class GaussianFormer3DPipeline {
 public:
-    void init(const SimConfig& cfg, const GaussianFormer3DConfig& gfCfg = {});
+    void init(const SimConfig& cfg);
+    void init(const SimConfig& cfg, const GaussianFormer3DConfig& gfCfg);
     void reset();
 
     void runStage(const SimConfig& cfg,

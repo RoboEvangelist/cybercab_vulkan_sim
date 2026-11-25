@@ -4,6 +4,33 @@
 #include <algorithm>
 
 namespace cybercab::sota {
+namespace {
+
+GaussianFormer3DConfig mapFromSimParams(const SimConfig::GaussianFormer3DParams& p) {
+    GaussianFormer3DConfig c{};
+    c.maxGaussians = p.maxGaussians;
+    c.numRefinementLayers = p.numRefinementLayers;
+    c.numDeformableSamplePts = p.numDeformableSamplePts;
+    c.mergeRadiusM = p.mergeRadiusM;
+    c.minInitConf = p.minInitConf;
+    c.voxelScaleX = p.voxelScaleX;
+    c.voxelScaleY = p.voxelScaleY;
+    c.voxelScaleZ = p.voxelScaleZ;
+    c.splatRadiusSigmaMul = p.splatRadiusSigmaMul;
+    c.splatSigmaCutoffSq = p.splatSigmaCutoffSq;
+    c.minVoxelOccProb = p.minVoxelOccProb;
+    c.camAttnWeight = p.camAttnWeight;
+    c.lidarAttnWeight = p.lidarAttnWeight;
+    c.temporalSmoothAlpha = p.temporalSmoothAlpha;
+    c.enableDeformableAttn = p.enableDeformableAttn;
+    return c;
+}
+
+} // namespace
+
+void GaussianFormer3DPipeline::init(const SimConfig& cfg) {
+    init(cfg, mapFromSimParams(cfg.gf3d));
+}
 
 void GaussianFormer3DPipeline::init(const SimConfig& cfg, const GaussianFormer3DConfig& gfCfg) {
     gfCfg_ = gfCfg;

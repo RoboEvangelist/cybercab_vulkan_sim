@@ -236,13 +236,19 @@ void AutoregressivePolicy::plan(const SimConfig& cfg, WorldEngine& world,
                       continue;
                     }
                     if (v.sem == SemanticClass::Static &&
-                        !isOnRoadBlockingStaticVoxel(world, v)) {
+                        !isGroundedStaticVoxel(v)) {
                       continue;
                     }
                     const float r = (v.sem == SemanticClass::Pedestrian) ? kVoxelPedRadM : kVoxelVehRadM;
                     const float vxP = v.wx + v.vx * std::min(1.5f, tPred), vzP = v.wz + v.vz * std::min(1.5f, tPred);
                     const float d = std::min(std::hypot(wpObb.x - vxP, wpObb.z - vzP), std::hypot(wpFront.x - vxP, wpFront.z - vzP));
-                    if (d < r) { ++voxHits; voxCost += (r - d) * kVoxelCostGain; candLeadGap[c] = std::min(candLeadGap[c], distAlong); }
+                    if (d < r) {
+                      if (v.sem == SemanticClass::Static &&
+                          !isOnRoadBlockingStaticVoxel(world, v)) {
+                        continue;
+                      }
+                      ++voxHits; voxCost += (r - d) * kVoxelCostGain; candLeadGap[c] = std::min(candLeadGap[c], distAlong);
+                    }
                 }
             }
             for (size_t i = 0; i < perc.tracks.size(); ++i) {

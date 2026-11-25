@@ -6,28 +6,21 @@
 
 #include "config/SimConfig.hpp"
 #include "perception/PerceptionTypes.hpp"
+#include "perception/sota/DeformableCameraOps.hpp"
 #include "perception/sota/Gaussian3DTypes.hpp"
+#include "perception/sota/SpatialHashIndex3D.hpp"
 #include "sensors/CameraRigRenderer.hpp"
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
 namespace cybercab::sota {
 
-struct DeformableCamView {
-    int camIdx = 0;
-    Mat4 camFromWorld{};
-    CameraIntrinsics intr{};
-    float width = 320.0f;
-    float height = 240.0f;
-    float tokenWeight = 1.0f;
-};
-
 class DeformableAttention3D {
 public:
     void reserve(uint32_t maxGaussians);
 
-    // Full pipeline entry point using CameraRigRenderer camera extrinsics/intrinsics.
     void refine(const SimConfig& cfg,
                 const GaussianFormer3DConfig& gfCfg,
                 const EgoState& ego,
@@ -37,7 +30,6 @@ public:
                 uint32_t& outCamCorrobCount,
                 float& outMeanResidualM);
 
-    // Pure-CPU overload allowing synthetic multi-camera projections in unit tests without Vulkan.
     void refineWithViews(const GaussianFormer3DConfig& gfCfg,
                          const std::vector<DeformableCamView>& views,
                          const std::vector<Detection2D>& detections2D,
@@ -49,6 +41,9 @@ public:
 
 private:
     std::vector<DeformableCamView> viewsScratch_;
+    SpatialHashIndex3D voxelHash_;
+    std::array<int32_t, kMaxCamBuckets> camDetHead_{};
+    std::vector<int32_t> detNextScratch_;
 };
 
 } // namespace cybercab::sota

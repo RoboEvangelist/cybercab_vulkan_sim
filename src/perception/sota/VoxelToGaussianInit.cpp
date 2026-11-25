@@ -14,8 +14,6 @@ constexpr float kTrackSeedCenterYFloor = 0.55f;
 constexpr float kTrackOpacityBase = 0.42f;
 constexpr float kTrackOpacityGain = 0.54f;
 constexpr float kTrackDuplicateRadScale = 0.85f;
-constexpr float kVoxelOpacityBase = 0.38f;
-constexpr float kVoxelOpacityGain = 0.58f;
 constexpr float kDominantLogitScale = 4.0f;
 constexpr float kBackgroundLogit = -1.5f;
 constexpr float kStaticCellMinConf = 0.50f;
@@ -25,6 +23,8 @@ constexpr float kStaticCellOpacityBase = 0.45f;
 constexpr float kStaticCellOpacityGain = 0.50f;
 constexpr float kTemporalMatchMaxDistM = 1.60f;
 constexpr float kVoxelStepExpandFrac = 0.50f;
+constexpr float kVoxelClusterExpandFrac = 0.35f;
+constexpr float kMaxVoxelClusterScaleXZ = 0.90f;
 constexpr float kMaxClusterExtentM = 4.20f;
 
 bool areVoxelClassesMergeable(SemanticClass a, SemanticClass b) {
@@ -34,29 +34,39 @@ bool areVoxelClassesMergeable(SemanticClass a, SemanticClass b) {
     return aStaticLike && bStaticLike;
 }
 
-bool nearExistingGaussian(const std::vector<Gaussian3DPrimitive>& existing,
+bool nearExistingGaussian(const SpatialHashIndex3D& gaussianHash,
+                          const std::vector<Gaussian3DPrimitive>& existing,
                           const Vec3& pos,
                           float radiusM,
                           SemanticClass sem) {
     const float rSq = radiusM * radiusM;
-    for (const auto& g : existing) {
+    bool found = false;
+    const float searchRad = std::max(radiusM, kMaxClusterExtentM);
+    gaussianHash.forEachNeighbor(pos.x, pos.z, searchRad, [&](int idx) {
+        const auto& g = existing[static_cast<size_t>(idx)];
         const SemanticClass gSem = g.argmaxSemantic();
-        if (gSem != sem && !areVoxelClassesMergeable(gSem, sem)) continue;
+        if (gSem != sem && !areVoxelClassesMergeable(gSem, sem)) return true;
         const float dx = g.mean.x - pos.x;
         const float dy = g.mean.y - pos.y;
         const float dz = g.mean.z - pos.z;
         const float scaleR = std::max(radiusM, kTrackDuplicateRadScale * std::max(g.scale.x, g.scale.z));
         if ((dx * dx + dy * dy + dz * dz) <= std::max(rSq, scaleR * scaleR)) {
-            return true;
+            found = true;
+            return false;
         }
-    }
-    return false;
+        return true;
+    });
+    return found;
 }
 
 } // namespace
 
 void VoxelToGaussianInit::reserve(uint32_t maxGaussians) {
-    visitedScratch_.reserve(static_cast<size_t>(std::max(maxGaussians, 256u)) * 16u);
+    const size_t cap = static_cast<size_t>(std::max(maxGaussians, 256u));
+    visitedScratch_.reserve(cap * 16u);
+    voxelHash_.reserve(cap * 32u);
+    gaussianHash_.reserve(cap);
+    prevHash_.reserve(cap);
 }
 
 void VoxelToGaussianInit::seedSemanticLogits(Gaussian3DPrimitive& g,
@@ -83,19 +93,22 @@ Gaussian3DPrimitive VoxelToGaussianInit::makeSeedFromTrack(const Track3D& tr, ui
     g.velWorld = {tr.worldVel.x, 0.0f, tr.worldVel.z};
     g.confidence = clampf(tr.score, 0.0f, 1.0f);
     g.isDynamic = true;
+    g.fromTrack = true;
     seedSemanticLogits(g, tr.semantic, g.confidence);
     return g;
 }
 
 void VoxelToGaussianInit::applyTemporalPrior(const GaussianFormer3DConfig& gfCfg,
+                                             const SpatialHashIndex3D& prevHash,
                                              const std::vector<Gaussian3DPrimitive>& prevGaussians,
                                              Gaussian3DPrimitive& g) {
     if (prevGaussians.empty() || gfCfg.temporalSmoothAlpha <= 0.0f) return;
     const SemanticClass targetSem = g.argmaxSemantic();
     float bestDistSq = kTemporalMatchMaxDistM * kTemporalMatchMaxDistM;
     const Gaussian3DPrimitive* bestPrev = nullptr;
-    for (const auto& prev : prevGaussians) {
-        if (prev.argmaxSemantic() != targetSem) continue;
+    prevHash.forEachNeighbor(g.mean.x, g.mean.z, kTemporalMatchMaxDistM, [&](int idx) {
+        const auto& prev = prevGaussians[static_cast<size_t>(idx)];
+        if (prev.argmaxSemantic() != targetSem) return true;
         const float dx = prev.mean.x - g.mean.x;
         const float dy = prev.mean.y - g.mean.y;
         const float dz = prev.mean.z - g.mean.z;
@@ -104,7 +117,8 @@ void VoxelToGaussianInit::applyTemporalPrior(const GaussianFormer3DConfig& gfCfg
             bestDistSq = dSq;
             bestPrev = &prev;
         }
-    }
+        return true;
+    });
     if (!bestPrev) return;
     const float wPrev = clampf(gfCfg.temporalSmoothAlpha * bestPrev->confidence, 0.0f, 0.65f);
     const float wCurr = 1.0f - wPrev;
@@ -128,21 +142,43 @@ uint32_t VoxelToGaussianInit::initialize(const SimConfig& cfg,
                                          std::vector<Gaussian3DPrimitive>& outGaussians) {
     outGaussians.clear();
     const uint32_t cap = std::max(1u, gfCfg.maxGaussians);
+    gaussianHash_.reset(cap, std::max(1.5f, gfCfg.mergeRadiusM * 2.0f));
+    const bool hasPrev = (prevGaussians && !prevGaussians->empty() && gfCfg.temporalSmoothAlpha > 0.0f);
+    if (hasPrev) {
+        prevHash_.reset(prevGaussians->size(), kTemporalMatchMaxDistM);
+        for (size_t i = 0u; i < prevGaussians->size(); ++i) {
+            prevHash_.insert(static_cast<int>(i), (*prevGaussians)[i].mean.x, (*prevGaussians)[i].mean.z);
+        }
+    }
+
+    auto pushGaussian = [&](const Gaussian3DPrimitive& g) {
+        const int idx = static_cast<int>(outGaussians.size());
+        outGaussians.push_back(g);
+        gaussianHash_.insert(idx, g.mean.x, g.mean.z);
+    };
 
     // 1. Seed tracked dynamic actors first so salient traffic participants never get dropped.
     for (const auto& tr : tracks) {
         if (outGaussians.size() >= cap) break;
         if (tr.state == TrackState::Removed) continue;
         Gaussian3DPrimitive g = makeSeedFromTrack(tr, kNumGaussianSemClasses);
-        if (prevGaussians) applyTemporalPrior(gfCfg, *prevGaussians, g);
-        outGaussians.push_back(g);
+        if (hasPrev) applyTemporalPrior(gfCfg, prevHash_, *prevGaussians, g);
+        pushGaussian(g);
     }
 
-    // 2. Cluster non-empty active 3D voxels into compact anisotropic Gaussians.
+    // 2. Cluster non-empty active 3D voxels via O(1) spatial hash lookup.
     if (visitedScratch_.capacity() < voxels.size()) {
         visitedScratch_.reserve(voxels.size());
     }
     visitedScratch_.assign(voxels.size(), 0u);
+    voxelHash_.reset(voxels.size(), std::max(0.75f, gfCfg.mergeRadiusM));
+    for (size_t i = 0u; i < voxels.size(); ++i) {
+        const auto& v = voxels[i];
+        if (v.sem == SemanticClass::Empty || v.sem == SemanticClass::OccShadow) continue;
+        if (v.confidence < gfCfg.minInitConf) continue;
+        voxelHash_.insert(static_cast<int>(i), v.wx, v.wz);
+    }
+
     const float mergeRadSq = gfCfg.mergeRadiusM * gfCfg.mergeRadiusM;
     const Quat3D egoYawRot = Quat3D::fromYaw(ego.yaw);
 
@@ -153,6 +189,7 @@ uint32_t VoxelToGaussianInit::initialize(const SimConfig& cfg,
         if (seed.confidence < gfCfg.minInitConf) continue;
 
         visitedScratch_[i] = 1u;
+        int clusterCount = 1;
         float wSum = std::max(0.05f, seed.confidence);
         Vec3 posSum = Vec3{seed.wx, seed.wy, seed.wz} * wSum;
         Vec3 velSum = Vec3{seed.vx, 0.0f, seed.vz} * wSum;
@@ -162,18 +199,18 @@ uint32_t VoxelToGaussianInit::initialize(const SimConfig& cfg,
         const uint32_t seedCls = std::min(static_cast<uint32_t>(seed.sem), kNumGaussianSemClasses - 1u);
         classWeight[seedCls] += wSum;
 
-        for (size_t j = i + 1; j < voxels.size(); ++j) {
-            if (visitedScratch_[j] != 0u) continue;
+        voxelHash_.forEachNeighbor(seed.wx, seed.wz, gfCfg.mergeRadiusM, [&](int jIdx) {
+            const size_t j = static_cast<size_t>(jIdx);
+            if (j <= i || visitedScratch_[j] != 0u) return true;
             const auto& v = voxels[j];
-            if (v.sem == SemanticClass::Empty || v.sem == SemanticClass::OccShadow) continue;
-            if (v.confidence < gfCfg.minInitConf) continue;
-            if (!areVoxelClassesMergeable(seed.sem, v.sem)) continue;
+            if (!areVoxelClassesMergeable(seed.sem, v.sem)) return true;
             const float dx = v.wx - seed.wx;
             const float dy = v.wy - seed.wy;
             const float dz = v.wz - seed.wz;
-            if (dx * dx + dy * dy + dz * dz > mergeRadSq) continue;
+            if (dx * dx + dy * dy + dz * dz > mergeRadSq) return true;
 
             visitedScratch_[j] = 1u;
+            ++clusterCount;
             const float w = std::max(0.05f, v.confidence);
             wSum += w;
             posSum += Vec3{v.wx, v.wy, v.wz} * w;
@@ -186,7 +223,8 @@ uint32_t VoxelToGaussianInit::initialize(const SimConfig& cfg,
             maxP.z = std::max(maxP.z, v.wz);
             const uint32_t cls = std::min(static_cast<uint32_t>(v.sem), kNumGaussianSemClasses - 1u);
             classWeight[cls] += w;
-        }
+            return true;
+        });
 
         const Vec3 mean = posSum * (1.0f / wSum);
         uint32_t domCls = seedCls;
@@ -194,7 +232,7 @@ uint32_t VoxelToGaussianInit::initialize(const SimConfig& cfg,
             if (classWeight[c] > classWeight[domCls]) domCls = c;
         }
         const SemanticClass domSem = static_cast<SemanticClass>(domCls);
-        if (nearExistingGaussian(outGaussians, mean, 0.75f * gfCfg.mergeRadiusM, domSem)) continue;
+        if (nearExistingGaussian(gaussianHash_, outGaussians, mean, 0.75f * gfCfg.mergeRadiusM, domSem)) continue;
 
         const float spanX = std::min(kMaxClusterExtentM, maxP.x - minP.x);
         const float spanY = std::min(kMaxClusterExtentM, maxP.y - minP.y);
@@ -202,15 +240,14 @@ uint32_t VoxelToGaussianInit::initialize(const SimConfig& cfg,
         Gaussian3DPrimitive g{};
         g.mean = mean;
         g.scale = {
-            clampf(0.5f * spanX + kVoxelStepExpandFrac * cfg.occStepX, kDefaultMinScaleM, kDefaultMaxScaleM),
+            clampf(0.5f * spanX + kVoxelClusterExpandFrac * cfg.occStepX, kDefaultMinScaleM, kMaxVoxelClusterScaleXZ),
             clampf(0.5f * spanY + kVoxelStepExpandFrac * cfg.occStepZ, kDefaultMinScaleM, kDefaultMaxScaleM),
-            clampf(0.5f * spanZ + kVoxelStepExpandFrac * cfg.occStepY, kDefaultMinScaleM, kDefaultMaxScaleM)
+            clampf(0.5f * spanZ + kVoxelClusterExpandFrac * cfg.occStepY, kDefaultMinScaleM, kMaxVoxelClusterScaleXZ)
         };
         g.rot = egoYawRot;
-        const float meanConf = clampf(classWeight[domCls] / std::max(0.05f, wSum), 0.0f, 1.0f);
-        g.confidence = clampf(seed.confidence * 0.5f + meanConf * 0.5f, 0.0f, 1.0f);
-        g.opacity = clampf(kVoxelOpacityBase + kVoxelOpacityGain * g.confidence,
-                           kMinGaussianOpacity, kMaxGaussianOpacity);
+        const float avgVoxelConf = clampf(wSum / static_cast<float>(clusterCount), 0.0f, 1.0f);
+        g.confidence = avgVoxelConf;
+        g.opacity = clampf(avgVoxelConf, kMinGaussianOpacity, kMaxGaussianOpacity);
         g.velWorld = velSum * (1.0f / wSum);
         g.isDynamic = (domSem == SemanticClass::Vehicle || domSem == SemanticClass::Pedestrian);
         for (uint32_t c = 0u; c < kNumGaussianSemClasses; ++c) {
@@ -219,39 +256,50 @@ uint32_t VoxelToGaussianInit::initialize(const SimConfig& cfg,
                 ? clampf(kDominantLogitScale * share, kSemLogitMin, kSemLogitMax)
                 : kBackgroundLogit;
         }
-        if (prevGaussians) applyTemporalPrior(gfCfg, *prevGaussians, g);
-        outGaussians.push_back(g);
+        if (hasPrev) applyTemporalPrior(gfCfg, prevHash_, *prevGaussians, g);
+        pushGaussian(g);
     }
 
     // 3. Backfill persistent static spatial memory structures not already covered above.
+    const float staticOccThresh = std::min(0.35f, gfCfg.minVoxelOccProb);
     if (staticCells && staticNx > 0 && staticNy > 0 &&
         static_cast<int>(staticCells->size()) == staticNx * staticNy) {
         const Mat4 wFromIso = BEVFormer::worldFromIsoEgo(ego);
         const float cellDx = (cfg.bevMaxX - cfg.bevMinX) / static_cast<float>(staticNx);
         const float cellDy = (cfg.bevMaxY - cfg.bevMinY) / static_cast<float>(staticNy);
-        for (int iy = 0; iy < staticNy && outGaussians.size() < cap; ++iy) {
-            for (int ix = 0; ix < staticNx && outGaussians.size() < cap; ++ix) {
-                const auto& c = (*staticCells)[static_cast<size_t>(iy) * staticNx + ix];
-                if (c.featConf.x < gfCfg.minVoxelOccProb || c.featConf.w < kStaticCellMinConf) continue;
-                const float xIso = cfg.bevMinX + (static_cast<float>(ix) + 0.5f) * cellDx;
-                const float yIso = cfg.bevMinY + (static_cast<float>(iy) + 0.5f) * cellDy;
-                const Vec3 wp = wFromIso.transformPoint({xIso, yIso, 0.0f});
-                const float h = std::max(kStaticCellMinHeightM, c.featConf.y);
-                const Vec3 center{wp.x, 0.5f * h, wp.z};
-                const int rawSem = static_cast<int>(std::lround(c.featConf.z));
-                const SemanticClass sem = (rawSem == static_cast<int>(SemanticClass::SignalSign))
-                    ? SemanticClass::SignalSign : SemanticClass::Static;
-                if (nearExistingGaussian(outGaussians, center, gfCfg.mergeRadiusM, sem)) continue;
+        for (int pass = 0; pass < 2 && outGaussians.size() < cap; ++pass) {
+            const bool wantLocked = (pass == 0);
+            for (int iy = 0; iy < staticNy && outGaussians.size() < cap; ++iy) {
+                for (int ix = 0; ix < staticNx && outGaussians.size() < cap; ++ix) {
+                    const auto& c = (*staticCells)[static_cast<size_t>(iy) * staticNx + ix];
+                    if (c.featConf.x < staticOccThresh || c.featConf.w < kStaticCellMinConf) continue;
+                    const bool isLocked = (c.meta.z > 0.5f);
+                    if (isLocked != wantLocked) continue;
+                    const int rawSem = static_cast<int>(std::lround(c.featConf.z));
+                    const SemanticClass sem = (rawSem == static_cast<int>(SemanticClass::SignalSign))
+                        ? SemanticClass::SignalSign : SemanticClass::Static;
+                    const float xIso = cfg.bevMinX + (static_cast<float>(ix) + 0.5f) * cellDx;
+                    const float yIso = cfg.bevMinY + (static_cast<float>(iy) + 0.5f) * cellDy;
+                    const Vec3 wp = wFromIso.transformPoint({xIso, yIso, 0.0f});
+                    const float h = std::max(kStaticCellMinHeightM, c.featConf.y);
+                    const Vec3 center{wp.x, 0.5f * h, wp.z};
+                    if (!isLocked &&
+                        nearExistingGaussian(gaussianHash_, outGaussians, center, gfCfg.mergeRadiusM, sem)) {
+                        continue;
+                    }
 
-                Gaussian3DPrimitive g{};
-                g.mean = center;
-                g.scale = {kStaticCellHalfExtentXZ, 0.5f * h, kStaticCellHalfExtentXZ};
-                g.rot = egoYawRot;
-                g.confidence = clampf(c.featConf.w, 0.0f, 1.0f);
-                g.opacity = clampf(kStaticCellOpacityBase + kStaticCellOpacityGain * g.confidence,
-                                   kMinGaussianOpacity, kMaxGaussianOpacity);
-                seedSemanticLogits(g, sem, g.confidence);
-                outGaussians.push_back(g);
+                    Gaussian3DPrimitive g{};
+                    g.mean = center;
+                    g.scale = {kStaticCellHalfExtentXZ, 0.5f * h, kStaticCellHalfExtentXZ};
+                    g.rot = egoYawRot;
+                    g.confidence = clampf(c.featConf.w, 0.0f, 1.0f);
+                    g.opacity = clampf(kStaticCellOpacityBase + kStaticCellOpacityGain * g.confidence,
+                                       kMinGaussianOpacity, kMaxGaussianOpacity);
+                    g.fromStaticMem = true;
+                    g.staticMemLocked = isLocked;
+                    seedSemanticLogits(g, sem, g.confidence);
+                    pushGaussian(g);
+                }
             }
         }
     }

@@ -83,6 +83,22 @@ perception:
     read_noise_b_dn2: 1.51       # (3 e- read noise / gain)^2
     seed: 1234
     enable_rccb_mosaic: false
+  gaussianformer3d:              # Stage 1 spatial rep (--spatial-rep gaussianformer3d)
+    max_gaussians: 512
+    num_refinement_layers: 2
+    num_deformable_sample_pts: 7
+    merge_radius_m: 0.75
+    min_init_conf: 0.25
+    voxel_scale_x: 0.72          # Compact Gaussian ellipsoid scale multipliers for splatting
+    voxel_scale_y: 0.80
+    voxel_scale_z: 0.72
+    splat_radius_sigma_mul: 1.25 # Tightened Gaussian-to-voxel splat neighborhood radius
+    splat_sigma_cutoff_sq: 4.50
+    min_voxel_occ_prob: 0.38
+    cam_attn_weight: 0.55
+    lidar_attn_weight: 0.45
+    temporal_smooth_alpha: 0.30
+    enable_deformable_attn: true
 
 planning:
   target_cruise_speed_ms: 10.5

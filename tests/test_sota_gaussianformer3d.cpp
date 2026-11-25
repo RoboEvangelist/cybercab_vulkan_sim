@@ -1,3 +1,4 @@
+#include "TestPerceptionHelpers.hpp"
 #include "app/V15HudOverlay.hpp"
 #include "config/SimConfig.hpp"
 #include "core/TraceLogger.hpp"
@@ -269,6 +270,52 @@ TEST(GaussianFormer3DUnitTest, PipelineStageSplatTraceHudAndZeroRealloc) {
         if (out.activeVoxels.capacity() != capOutVox) ++growthEvents;
     }
     EXPECT_EQ(growthEvents, kZeroAllocsTol);
+}
+
+TEST(GaussianFormer3DUnitTest, YamlVoxelAndVolumeParamsControlSplatResolution) {
+    SimConfig yamlCfg = SimConfig::loadFromYaml(resolveAssetPath("config/cybercab_sim.yaml"));
+    EXPECT_FLOAT_EQ(yamlCfg.gf3d.voxelScaleX, 0.72f);
+    EXPECT_FLOAT_EQ(yamlCfg.gf3d.splatRadiusSigmaMul, 1.25f);
+    EXPECT_EQ(yamlCfg.gf3d.numRefinementLayers, 2u);
+
+    GaussianFormer3DPipeline coarsePipe;
+    coarsePipe.init(yamlCfg);
+    EXPECT_FLOAT_EQ(coarsePipe.config().voxelScaleX, yamlCfg.gf3d.voxelScaleX);
+
+    SimConfig fineCfg = yamlCfg;
+    fineCfg.occStepX = 0.5f;
+    fineCfg.occStepY = 0.5f;
+    fineCfg.gf3d.voxelScaleX = 0.55f;
+    fineCfg.gf3d.voxelScaleY = 0.60f;
+    fineCfg.gf3d.voxelScaleZ = 0.55f;
+
+    GaussianFormer3DPipeline finePipe;
+    finePipe.init(fineCfg);
+    EXPECT_FLOAT_EQ(finePipe.config().voxelScaleX, 0.55f);
+
+    EgoState ego{};
+    ego.pos = {0.0f, 0.0f, 0.0f};
+    ego.yaw = 0.0f;
+
+    auto seedCar = [&](PerceptionFrameOutput& out) {
+        out.tracks.resize(1u);
+        out.tracks[0].state = TrackState::Tracked;
+        out.tracks[0].semantic = SemanticClass::Vehicle;
+        out.tracks[0].worldPos = {14.0f, 0.72f, 0.0f};
+        out.tracks[0].halfExtents = {1.0f, 0.72f, 2.2f};
+        out.tracks[0].score = 0.94f;
+        out.activeVoxels.assign(1u, ActiveVoxel{14.0f, 0.0f, 0.75f, 14.0f, 0.0f,
+                                               SemanticClass::Vehicle, 0.90f, 0.0f, 0.0f, 0.2f});
+    };
+
+    PerceptionFrameOutput coarseOut{}, fineOut{};
+    seedCar(coarseOut);
+    seedCar(fineOut);
+    coarsePipe.runStage(yamlCfg, ego, nullptr, nullptr, coarseOut);
+    finePipe.runStage(fineCfg, ego, nullptr, nullptr, fineOut);
+
+    EXPECT_GT(fineOut.activeVoxels.size(), coarseOut.activeVoxels.size());
+    EXPECT_GE(coarseOut.activeVoxels.size(), 1u);
 }
 
 } // namespace

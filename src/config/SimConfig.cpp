@@ -206,6 +206,23 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
       cfg.photonRccbMosaic =
         readOr(ps, "enable_rccb_mosaic", cfg.photonRccbMosaic);
         }
+        if (const auto gf = perc["gaussianformer3d"]) {
+            cfg.gf3d.maxGaussians = readOr(gf, "max_gaussians", cfg.gf3d.maxGaussians);
+            cfg.gf3d.numRefinementLayers = readOr(gf, "num_refinement_layers", cfg.gf3d.numRefinementLayers);
+            cfg.gf3d.numDeformableSamplePts = readOr(gf, "num_deformable_sample_pts", cfg.gf3d.numDeformableSamplePts);
+            cfg.gf3d.mergeRadiusM = readOr(gf, "merge_radius_m", cfg.gf3d.mergeRadiusM);
+            cfg.gf3d.minInitConf = readOr(gf, "min_init_conf", cfg.gf3d.minInitConf);
+            cfg.gf3d.voxelScaleX = readOr(gf, "voxel_scale_x", cfg.gf3d.voxelScaleX);
+            cfg.gf3d.voxelScaleY = readOr(gf, "voxel_scale_y", cfg.gf3d.voxelScaleY);
+            cfg.gf3d.voxelScaleZ = readOr(gf, "voxel_scale_z", cfg.gf3d.voxelScaleZ);
+            cfg.gf3d.splatRadiusSigmaMul = readOr(gf, "splat_radius_sigma_mul", cfg.gf3d.splatRadiusSigmaMul);
+            cfg.gf3d.splatSigmaCutoffSq = readOr(gf, "splat_sigma_cutoff_sq", cfg.gf3d.splatSigmaCutoffSq);
+            cfg.gf3d.minVoxelOccProb = readOr(gf, "min_voxel_occ_prob", cfg.gf3d.minVoxelOccProb);
+            cfg.gf3d.camAttnWeight = readOr(gf, "cam_attn_weight", cfg.gf3d.camAttnWeight);
+            cfg.gf3d.lidarAttnWeight = readOr(gf, "lidar_attn_weight", cfg.gf3d.lidarAttnWeight);
+            cfg.gf3d.temporalSmoothAlpha = readOr(gf, "temporal_smooth_alpha", cfg.gf3d.temporalSmoothAlpha);
+            cfg.gf3d.enableDeformableAttn = readOr(gf, "enable_deformable_attn", cfg.gf3d.enableDeformableAttn);
+        }
     }
 
     if (const auto pl = root["planning"]) {

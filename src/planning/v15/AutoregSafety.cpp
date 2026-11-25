@@ -127,14 +127,17 @@ SafetyEvalOutput evaluateAutoregSafety(WorldEngine& world, const SafetyEvalInput
           v.sem == SemanticClass::Overhang ||
           v.sem == SemanticClass::SignalSign ||
           v.sem == SemanticClass::Curb) continue;
-      if (v.sem == SemanticClass::Static &&
-          !isOnRoadBlockingStaticVoxel(world, v)) {
+      if (v.sem == SemanticClass::Static && !isGroundedStaticVoxel(v)) {
         continue;
       }
         float fwd = 0.0f, lat = 0.0f, vtX = sinEgo, vtZ = cosEgo;
         rss::projectOntoPolyline(in.corrPts, in.corrArc, v.wx, v.wz, fwd, lat, vtX, vtZ);
         const float voxLatLim = (v.sem == SemanticClass::Pedestrian) ? p.voxelCorridorPedM : p.voxelCorridorVehM;
         if (fwd > 0.25f && fwd < in.rssDist + 3.0f && lat < voxLatLim) {
+            if (v.sem == SemanticClass::Static &&
+                !isOnRoadBlockingStaticVoxel(world, v)) {
+                continue;
+            }
             bool adjTrackedVeh = false;
             if (v.sem == SemanticClass::Vehicle ||
                 v.sem == SemanticClass::Static) {

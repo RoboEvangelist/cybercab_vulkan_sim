@@ -6,6 +6,7 @@
 #include "config/SimConfig.hpp"
 #include "perception/PerceptionTypes.hpp"
 #include "perception/sota/Gaussian3DTypes.hpp"
+#include "perception/sota/SpatialHashIndex3D.hpp"
 #include "perception/v15/StaticSpatialMemory.hpp"
 
 #include <vector>
@@ -31,10 +32,14 @@ private:
     static Gaussian3DPrimitive makeSeedFromTrack(const Track3D& tr, uint32_t maxClasses);
     static void seedSemanticLogits(Gaussian3DPrimitive& g, SemanticClass sem, float conf);
     static void applyTemporalPrior(const GaussianFormer3DConfig& gfCfg,
+                                   const SpatialHashIndex3D& prevHash,
                                    const std::vector<Gaussian3DPrimitive>& prevGaussians,
                                    Gaussian3DPrimitive& g);
 
     std::vector<uint8_t> visitedScratch_;
+    SpatialHashIndex3D voxelHash_;
+    SpatialHashIndex3D gaussianHash_;
+    SpatialHashIndex3D prevHash_;
 };
 
 } // namespace cybercab::sota
