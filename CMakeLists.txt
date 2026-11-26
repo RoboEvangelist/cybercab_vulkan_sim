@@ -126,6 +126,7 @@ target_link_libraries(cybercab_perception PUBLIC cybercab_world)
 target_compile_options(cybercab_perception PRIVATE ${CYBERCAB_WARN_FLAGS})
 
 add_library(cybercab_planning SHARED
+    src/app/GaussianOverlayMesh.cpp
     src/app/V15HudOverlay.cpp
     src/planning/TrajectoryPlanner.cpp
     src/planning/v15/AutoregSafety.cpp
@@ -208,6 +209,7 @@ add_executable(cybercab_tests
     tests/test_sota_lewm_hjepa_ab_benchmark.cpp
     tests/test_sota_lewm_hjepa_sota_metrics.cpp
     tests/test_sota_lewm_hjepa_openset.cpp
+    tests/test_gaussian_overlay_mesh.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
 target_link_libraries(cybercab_tests PRIVATE

@@ -94,6 +94,9 @@ void PerceptionPipeline::runFrame(const VulkanContext& ctx,
         static_cast<size_t>(v15::GaussianWorldModel::kRealityW) *
           static_cast<size_t>(v15::GaussianWorldModel::kRealityH) * 4u);
       v15_->beginFrameCpu(world, dt);
+    } else if (gf3d_) {
+      out.v15Gaussians.reserve(
+        static_cast<size_t>(v15::GaussianWorldModel::kMaxGaussians));
     }
     {
         VkCommandBuffer cmd = ctx.beginSingleTimeCommands();
@@ -171,6 +174,11 @@ void PerceptionPipeline::runFrame(const VulkanContext& ctx,
     if (v15_) {
         const std::vector<V15Gaussian3D>* gfGauss = gf3d_ ? &gf3d_->v15Gaussians() : nullptr;
         v15_->finishBackEnd(ctx, ego, out, profiler, gfGauss);
+    } else if (gf3d_) {
+        out.v15Gaussians.assign(gf3d_->v15Gaussians().begin(),
+                                gf3d_->v15Gaussians().end());
+    } else {
+        out.v15Gaussians.clear();
     }
     if (wmSota_) {
         wmSota_->stepFrame(cfg_, world, out, dt, out.worldModelSota);

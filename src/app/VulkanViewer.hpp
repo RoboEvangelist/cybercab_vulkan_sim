@@ -37,6 +37,7 @@ struct ViewerToggleState {
     CamOverlayMode camOverlay = CamOverlayMode::Neural;
     int selectedCam = 0;
     bool showVoxels = true;
+    bool showGaussians = false;
     bool showShadows = true;
     bool showFlow = true;
     bool showWorldGhosts = true;
@@ -56,6 +57,7 @@ enum class UiAction : uint8_t {
     ToggleAeb,
     ToggleSoilSelected,
     ToggleLayerVoxels,
+    ToggleLayerGaussians,
     ToggleLayerShadows,
     ToggleLayerFlow,
     ToggleLayerGhosts,
@@ -182,6 +184,7 @@ private:
     int lastMouseX_ = 0;
     int lastMouseY_ = 0;
     bool framebufferResized_ = false;
+    size_t lastGaussianCount_ = 0;
 
     void applyUiAction(UiAction action, int param, SimConfig& cfg, WorldEngine& world,
                        CameraRigRenderer& rig, PerceptionPipeline& pipeline,

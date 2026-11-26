@@ -1,5 +1,6 @@
 #include "app/VulkanViewer.hpp"
 #include "app/BitmapFont.hpp"
+#include "app/GaussianOverlayMesh.hpp"
 #include "core/VulkanPipeline.hpp"
 #include "core/VulkanUtils.hpp"
 
@@ -164,6 +165,8 @@ const Vec4 kRealityCardBorder{0.13f, 0.83f, 0.93f, 0.90f};
 const Vec4 kRealityHeaderCol{0.13f, 0.83f, 0.93f, 1.0f};
 const Vec4 kRealitySubCol{0.84f, 0.89f, 0.96f, 1.0f};
 const Vec4 kRealityWarnCol{0.98f, 0.65f, 0.14f, 1.0f};
+constexpr uint32_t kMaxVoxelVerts = 160000u;
+constexpr uint32_t kMaxVoxelIndices = 300000u;
 
 } // namespace
 
@@ -229,9 +232,9 @@ void VulkanViewer::init(SimConfig& cfg, WorldEngine& world, CameraRigRenderer& r
                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     dynWorldIB_.create(*ctx_, 262144 * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    voxelVB_.create(*ctx_, 120000 * sizeof(SceneVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+    voxelVB_.create(*ctx_, kMaxVoxelVerts * sizeof(SceneVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    voxelIB_.create(*ctx_, 200000 * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+    voxelIB_.create(*ctx_, kMaxVoxelIndices * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     lineVB_.create(*ctx_, 32768 * sizeof(LineVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
@@ -242,8 +245,8 @@ void VulkanViewer::init(SimConfig& cfg, WorldEngine& world, CameraRigRenderer& r
 
     dynVertsScratch_.reserve(32768);
     dynIdxScratch_.reserve(65536);
-    voxelVertsScratch_.reserve(100000);
-    voxelIdxScratch_.reserve(160000);
+    voxelVertsScratch_.reserve(kMaxVoxelVerts);
+    voxelIdxScratch_.reserve(kMaxVoxelIndices);
     lineVertsScratch_.reserve(16384);
     uiVertsScratch_.reserve(32768);
     uiIdxScratch_.reserve(65536);
@@ -670,6 +673,10 @@ void VulkanViewer::applyUiAction(UiAction action, int param, SimConfig& cfg, Wor
             toggles.showVoxels = !toggles.showVoxels;
             toastMsg = toggles.showVoxels ? "3D Occupancy Voxels ON" : "3D Occupancy Voxels OFF";
             break;
+        case UiAction::ToggleLayerGaussians:
+            toastMsg = gaussian_overlay::toggleGaussianOverlay(
+                toggles.showGaussians, lastGaussianCount_);
+            break;
         case UiAction::ToggleLayerShadows:
             toggles.showShadows = !toggles.showShadows;
             toastMsg = toggles.showShadows ? "Occlusion Shadows ON" : "Occlusion Shadows OFF";
@@ -805,6 +812,7 @@ bool VulkanViewer::pollEvents(SimConfig& cfg, WorldEngine& world, CameraRigRende
             else if (k == SDLK_F5) applyUiAction(UiAction::ScenarioReset, 0, cfg, world, rig, pipeline, toggles, toastMsg);
             else if (k == SDLK_F6) applyUiAction(UiAction::ToggleForcedRed, 0, cfg, world, rig, pipeline, toggles, toastMsg);
             else if (k == SDLK_o) applyUiAction(UiAction::ToggleLayerVoxels, 0, cfg, world, rig, pipeline, toggles, toastMsg);
+            else if (k == SDLK_u) applyUiAction(UiAction::ToggleLayerGaussians, 0, cfg, world, rig, pipeline, toggles, toastMsg);
             else if (k == SDLK_h) applyUiAction(UiAction::ToggleLayerShadows, 0, cfg, world, rig, pipeline, toggles, toastMsg);
             else if (k == SDLK_f) applyUiAction(UiAction::ToggleLayerFlow, 0, cfg, world, rig, pipeline, toggles, toastMsg);
             else if (k == SDLK_m) applyUiAction(UiAction::ToggleLayerGhosts, 0, cfg, world, rig, pipeline, toggles, toastMsg);
@@ -838,6 +846,11 @@ void VulkanViewer::buildVoxelAndGhostGeometry(const WorldEngine& world, const Pe
             appendCube(voxelVertsScratch_, voxelIdxScratch_, {v.wx, v.wy, v.wz},
                        {0.84f * scale, 0.42f * scale, 0.84f * scale}, world.ego().yaw, col, 0.86f, 0.15f);
         }
+    }
+    if (toggles.showGaussians && !perc.v15Gaussians.empty()) {
+        gaussian_overlay::appendGaussianEllipsoids(
+            perc.v15Gaussians, voxelVertsScratch_, voxelIdxScratch_,
+            kMaxVoxelVerts, kMaxVoxelIndices);
     }
     if (toggles.showShadows) {
         int count = 0;
@@ -892,7 +905,7 @@ void VulkanViewer::buildVoxelAndGhostGeometry(const WorldEngine& world, const Pe
         }
     }
 
-    if (!voxelVertsScratch_.empty() && voxelVertsScratch_.size() <= 120000 && voxelIdxScratch_.size() <= 200000) {
+    if (!voxelVertsScratch_.empty() && voxelVertsScratch_.size() <= kMaxVoxelVerts && voxelIdxScratch_.size() <= kMaxVoxelIndices) {
         voxelVB_.upload(voxelVertsScratch_.data(), voxelVertsScratch_.size() * sizeof(SceneVertex));
         voxelIB_.upload(voxelIdxScratch_.data(), voxelIdxScratch_.size() * sizeof(uint32_t));
     }
@@ -1269,7 +1282,7 @@ void VulkanViewer::buildUiOverlay(const SimConfig& cfg, const WorldEngine& world
 
     // 4. Left Floating Panel: Clickable Display Controls, Layers, Scenarios & GPU Latency
     const float panW = 356.0f;
-    const float leftH = 440.0f;
+    const float leftH = 460.0f;
     const float panY = std::max(topBarH + pad + 4.0f, H - leftH - pad);
     uiPanelsScratch_.push_back({pad, panY, panW, leftH});
     uiRect(pad, panY, panW, leftH, {0.035f, 0.051f, 0.086f, 0.88f});
@@ -1329,6 +1342,8 @@ void VulkanViewer::buildUiOverlay(const SimConfig& cfg, const WorldEngine& world
     ly += 20.0f;
     addCheckbox(pad + 10.0f,             ly, halfW, "G: Cam Frustums",toggles.showFrustums,    {0.98f, 0.75f, 0.14f, 1.0f}, UiAction::ToggleLayerFrustums);
     addCheckbox(pad + 10.0f + halfW + 6, ly, halfW, "P: Quintic Plan",toggles.showPlanner,     {0.06f, 0.73f, 0.51f, 1.0f}, UiAction::ToggleLayerPlanner);
+    ly += 20.0f;
+    addCheckbox(pad + 10.0f,             ly, halfW, "U: 3D Gaussians",toggles.showGaussians,   {0.18f, 0.90f, 0.82f, 1.0f}, UiAction::ToggleLayerGaussians);
     ly += 26.0f;
 
     uiText(pad + 10.0f, ly, 1.25f, {0.98f, 0.75f, 0.14f, 1.0f}, "EDGE-CASE SCENARIOS");
@@ -1561,6 +1576,7 @@ void VulkanViewer::renderFrame(const SimConfig& cfg, const WorldEngine& world, c
         dynWorldIB_.upload(dynIdxScratch_.data(), dynIdxScratch_.size() * sizeof(uint32_t));
     }
 
+    lastGaussianCount_ = perc.v15Gaussians.size();
     buildVoxelAndGhostGeometry(world, perc, cmd, toggles);
     build3DLines(cfg, world, perc, cmd, toggles);
     buildUiOverlay(cfg, world, rig, perc, cmd, toggles, toastMsg);
