@@ -38,6 +38,10 @@ bool SimConfig::isValidSpatialRepMode(const std::string& mode) {
   return mode == "legacy" || mode == "gaussianformer3d";
 }
 
+bool SimConfig::isValidWorldModelMode(const std::string& mode) {
+  return cybercab::isValidWorldModelMode(mode);
+}
+
 std::array<CamResPreset, 4> SimConfig::resolutionPresets() const {
   return {{
     {"half", camWidth, camHeight, "Legacy Half"},
@@ -122,6 +126,9 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
         cfg.pipelineVersion = readOr(sim, "pipeline_version", cfg.pipelineVersion);
     cfg.lightingMode = readOr(sim, "lighting_mode", cfg.lightingMode);
     cfg.spatialRepMode = readOr(sim, "spatial_rep_mode", cfg.spatialRepMode);
+    cfg.worldModelMode = readOr(sim, "world_model_mode", cfg.worldModelMode);
+    cfg.wmSota.weightsPath =
+      readOr<std::string>(sim, "world_model_weights", cfg.wmSota.weightsPath);
     cfg.cameraKnockRpyDeg =
       readVec3Or(sim, "camera_knock_rpy_deg", cfg.cameraKnockRpyDeg);
         cfg.v15PolicyPath = readOr(sim, "v15_policy_config", cfg.v15PolicyPath);
@@ -226,6 +233,7 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
             cfg.gf3d.temporalSmoothAlpha = readOr(gf, "temporal_smooth_alpha", cfg.gf3d.temporalSmoothAlpha);
             cfg.gf3d.enableDeformableAttn = readOr(gf, "enable_deformable_attn", cfg.gf3d.enableDeformableAttn);
         }
+        loadWorldModelSotaYaml(perc["lewm_hjepa"], cfg.wmSota);
     }
 
     if (const auto pl = root["planning"]) {
@@ -301,7 +309,15 @@ SimConfig SimConfig::loadFromYaml(const std::string& path) {
       "simulation.lighting_mode must be \"day\" or \"night_glare\", got \"" +
       cfg.lightingMode + "\"");
   }
-    if (!(cfg.photonShotNoiseA >= 0.0f) || !(cfg.photonReadNoiseB >= 0.0f)) {
+  if (!SimConfig::isValidWorldModelMode(cfg.worldModelMode)) {
+    throw std::runtime_error(
+      "simulation.world_model_mode must be \"legacy\", \"lewm\", or \"hjepa\", got \"" +
+      cfg.worldModelMode + "\"");
+  }
+  if (!validateWorldModelSotaParams(cfg.wmSota)) {
+    throw std::runtime_error("Invalid numeric bounds in perception.lewm_hjepa");
+  }
+  if (!(cfg.photonShotNoiseA >= 0.0f) || !(cfg.photonReadNoiseB >= 0.0f)) {
         throw std::runtime_error("perception.photon_sensor noise parameters must be >= 0");
     }
 

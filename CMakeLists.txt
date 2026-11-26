@@ -58,6 +58,7 @@ set(CYBERCAB_WARN_FLAGS -Wall -Wextra -Wpedantic)
 # Shared modular libraries
 add_library(cybercab_core SHARED
     src/config/SimConfig.cpp
+    src/config/WorldModelSotaConfig.cpp
     src/config/V15PolicyConfig.cpp
     src/core/VulkanContext.cpp
     src/core/VulkanBuffer.cpp
@@ -115,6 +116,10 @@ add_library(cybercab_perception SHARED
     src/perception/sota/DeformableAttention3D.cpp
     src/perception/sota/GaussianToVoxelSplatter.cpp
     src/perception/sota/GaussianFormer3DPipeline.cpp
+    src/perception/sota/LeWmWeights.cpp
+    src/perception/sota/LeWmSceneEncoder.cpp
+    src/perception/sota/LeWmLatentModel.cpp
+    src/perception/sota/HJepaHierarchy.cpp
 )
 add_dependencies(cybercab_perception compile_shaders)
 target_link_libraries(cybercab_perception PUBLIC cybercab_world)
@@ -198,6 +203,11 @@ add_executable(cybercab_tests
     tests/test_sota_gaussianformer3d_ab_metrics.cpp
     tests/test_sota_gaussianformer3d_ab_missions_nfr.cpp
     tests/test_sota_gaussianformer3d_ab_robustness.cpp
+    tests/test_sota_lewm_hjepa_unit_fmea.cpp
+    tests/test_sota_lewm_hjepa_closed_loop_fmea.cpp
+    tests/test_sota_lewm_hjepa_ab_benchmark.cpp
+    tests/test_sota_lewm_hjepa_sota_metrics.cpp
+    tests/test_sota_lewm_hjepa_openset.cpp
 )
 add_dependencies(cybercab_tests compile_shaders)
 target_link_libraries(cybercab_tests PRIVATE

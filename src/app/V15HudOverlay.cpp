@@ -20,19 +20,25 @@ V15HudTelemetryLines formatV15HudTelemetry(
   const char* alertTag = (cmd.behaviorState == "SENSOR_SOILED_MRM")
                            ? " | MRM"
                            : (cmd.aebActive ? " | AEB" : "");
+  const char* wmTag = "";
+  if (perc.worldModelSota.active) {
+    wmTag = perc.worldModelSota.fmeaFallbackTriggered
+              ? " | WM:FB"
+              : (perc.worldModelSota.hierarchical ? " | HJEPA" : " | LEWM");
+  }
   const char* sirenLbl = perc.v15.sirenDetected ? "YIELD" : "CLEAR";
   const float latOffsetM = finiteOrZero(ego.currentLateralOffset);
   if (perc.gaussianFormer3D.active) {
     std::snprintf(
       out.header.data(), out.header.size(),
-      "FSD v15 REALITY | GEAR:%s | LAT:%+.2fm | GAUSS:%zu | GF3D:%u%s",
+      "FSD v15 REALITY | GEAR:%s | LAT:%+.2fm | GAUSS:%zu | GF3D:%u%s%s",
       gearLbl, latOffsetM, perc.v15Gaussians.size(),
-      perc.gaussianFormer3D.gaussianCount, alertTag);
+      perc.gaussianFormer3D.gaussianCount, wmTag, alertTag);
   } else {
     std::snprintf(
       out.header.data(), out.header.size(),
-      "FSD v15 REALITY | GEAR:%s | LAT:%+.2fm | GAUSS:%zu%s", gearLbl,
-      latOffsetM, perc.v15Gaussians.size(), alertTag);
+      "FSD v15 REALITY | GEAR:%s | LAT:%+.2fm | GAUSS:%zu%s%s", gearLbl,
+      latOffsetM, perc.v15Gaussians.size(), wmTag, alertTag);
   }
   std::snprintf(
     out.calib.data(), out.calib.size(),

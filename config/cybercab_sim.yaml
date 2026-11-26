@@ -21,6 +21,7 @@ simulation:
   pipeline_version: "v14"        # "v14" (RT-DETR/BEVFormer/voxels) | "v15" (photon-count/Plücker/Gaussian world)
   lighting_mode: "day"           # "day" | "night_glare"
   spatial_rep_mode: "legacy"     # "legacy" | "gaussianformer3d" (Stage 1 GaussianFormer3D + 3D deformable attn)
+  world_model_mode: "legacy"     # "legacy" | "lewm" | "hjepa" (Stage 2/3 LeWorldModel / H-JEPA planner)
 
 perception:
   # Feature & Transformer dimensions (pure Vulkan compute shaders)
@@ -102,6 +103,24 @@ perception:
     lidar_attn_weight: 0.45
     temporal_smooth_alpha: 0.30
     enable_deformable_attn: true
+  lewm_hjepa:                    # Stage 2/3 world model (--world-model lewm|hjepa)
+    latent_dim: 16
+    rollout_horizon_steps: 6
+    step_dt_sec: 0.25
+    macro_horizon_steps: 6
+    macro_dt_sec: 0.50
+    cem_iterations: 3
+    cem_candidates: 9
+    cem_elites: 3
+    sigreg_weight: 0.25
+    sigreg_target_var: 1.0
+    surprise_sigma_gain: 0.30
+    surprise_baseline: 0.32
+    energy_cost_weight: 0.85
+    subgoal_prior_weight: 26.0
+    oncoming_safety_weight: 180.0
+    comfort_jerk_weight: 12.0
+    enable_fmea_fallback: true
 
 planning:
   target_cruise_speed_ms: 10.5

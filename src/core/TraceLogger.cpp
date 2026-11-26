@@ -159,6 +159,27 @@ std::string TraceLogger::formatFrameJson(int stepIdx, float simTimeSec,
     root["gaussianformer3d"] = jGf;
   }
 
+  if (perc.worldModelSota.active) {
+    Json::Value jWm;
+    jWm["mode"] = cfg.worldModelMode;
+    jWm["hierarchical"] = perc.worldModelSota.hierarchical;
+    jWm["weights_from_file"] = perc.worldModelSota.weightsLoadedFromFile;
+    jWm["fmea_fallback"] = perc.worldModelSota.fmeaFallbackTriggered;
+    jWm["fmea_fault_mask"] = static_cast<Json::UInt>(perc.worldModelSota.fmeaFaultMask);
+    jWm["pred_surprise"] = perc.worldModelSota.predSurprise;
+    jWm["surprise_sigma_delta"] = perc.worldModelSota.surpriseSigmaDelta;
+    jWm["sigreg_loss"] = perc.worldModelSota.sigregLoss;
+    jWm["latent_norm"] = perc.worldModelSota.latentNorm;
+    jWm["best_rollout_energy"] = perc.worldModelSota.bestRolloutEnergy;
+    jWm["macro_subgoal"] = perc.worldModelSota.macroSubgoalCode;
+    jWm["macro_subgoal_lat_m"] = perc.worldModelSota.macroSubgoalLatM;
+    jWm["macro_subgoal_speed_ms"] = perc.worldModelSota.macroSubgoalSpeedMs;
+    jWm["rec_lat_m"] = perc.worldModelSota.recommendedLatM;
+    jWm["rec_speed_scale"] = perc.worldModelSota.recommendedSpeedScale;
+    jWm["stage_cpu_ms"] = perc.worldModelSota.stageCpuMs;
+    root["world_model_sota"] = jWm;
+  }
+
     root["sat_contact"] = contact.occurred;
     if (contact.occurred) root["sat_contact_other"] = contact.otherId;
 

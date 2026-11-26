@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config/V15PolicyConfig.hpp"
+#include "config/WorldModelSotaConfig.hpp"
 #include "core/Math.hpp"
 #include <array>
 #include <string>
@@ -129,6 +130,12 @@ struct SimConfig {
   std::string spatialRepMode = "legacy";
   bool isGaussianFormer3D() const { return spatialRepMode == "gaussianformer3d"; }
   static bool isValidSpatialRepMode(const std::string& mode);
+  // Stage-2/3 World Model selector: "legacy" | "lewm" | "hjepa"
+  std::string worldModelMode = "legacy";
+  bool isLeWorldModel() const { return worldModelMode == "lewm"; }
+  bool isHJepa() const { return worldModelMode == "hjepa"; }
+  bool usesSotaWorldModel() const { return isLeWorldModel() || isHJepa(); }
+  static bool isValidWorldModelMode(const std::string& mode);
   Vec3 cameraKnockRpyDeg{0.0f, 0.0f, 0.0f};
     std::string v15PolicyPath = "config/v15_policy.yaml";
     V15PolicyConfig v15Policy{};
@@ -197,6 +204,7 @@ struct SimConfig {
     // World Model
     std::vector<float> wmHorizonsSec{0.5f, 1.0f, 1.5f, 2.0f};
     float wmUncertaintyGrowthRate = 0.90f;
+    WorldModelSotaParams wmSota{};
 
     // v15 Module 1 photon sensor (Poisson-Gaussian noise: var_DN = a * mean_DN + b), used only when isV15()
     bool photonNoiseEnabled = true;

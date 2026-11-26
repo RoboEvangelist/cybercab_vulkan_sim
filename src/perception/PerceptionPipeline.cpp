@@ -26,6 +26,14 @@ void PerceptionPipeline::init(const VulkanContext& ctx, const CameraRigRenderer&
         gf3d_ = std::make_unique<sota::GaussianFormer3DPipeline>();
         gf3d_->init(cfg_);
     }
+    if (cfg_.usesSotaWorldModel()) {
+        wmSota_ = std::make_unique<sota::LeWmLatentModel>();
+        wmSota_->init(cfg_);
+        if (cfg_.isHJepa()) {
+            hjepa_ = std::make_unique<sota::HJepaHierarchy>();
+            hjepa_->reset();
+        }
+    }
 }
 
 void PerceptionPipeline::onCameraResized(const CameraRigRenderer& rig) {
@@ -41,9 +49,19 @@ void PerceptionPipeline::reset() {
     occ_.resetVoxels();
     if (v15_) v15_->reset();
     if (gf3d_) gf3d_->reset();
+    if (wmSota_) wmSota_->reset();
+    if (hjepa_) hjepa_->reset();
 }
 
 void PerceptionPipeline::destroy() {
+    if (hjepa_) {
+        hjepa_->reset();
+        hjepa_.reset();
+    }
+    if (wmSota_) {
+        wmSota_->reset();
+        wmSota_.reset();
+    }
     if (gf3d_) {
         gf3d_->reset();
         gf3d_.reset();
@@ -153,6 +171,19 @@ void PerceptionPipeline::runFrame(const VulkanContext& ctx,
     if (v15_) {
         const std::vector<V15Gaussian3D>* gfGauss = gf3d_ ? &gf3d_->v15Gaussians() : nullptr;
         v15_->finishBackEnd(ctx, ego, out, profiler, gfGauss);
+    }
+    if (wmSota_) {
+        wmSota_->stepFrame(cfg_, world, out, dt, out.worldModelSota);
+        if (hjepa_) {
+            hjepa_->runHierarchy(cfg_, world, out, *wmSota_, wmSota_->lastLatent(),
+                                 out.worldModelSota);
+        }
+        if (!out.worldModelSota.fmeaFallbackTriggered) {
+            out.forwardEpistemicSigma += std::max(
+              0.0f, out.worldModelSota.surpriseSigmaDelta - out.v15.surpriseSigmaDelta);
+        }
+    } else {
+        out.worldModelSota = {};
     }
     if (cfg_.isV15()) calib::calibrateFrame(cfg_, out);
 

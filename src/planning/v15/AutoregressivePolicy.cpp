@@ -1,5 +1,6 @@
 #include "planning/v15/AutoregressivePolicy.hpp"
 #include "planning/RssCorridor.hpp"
+#include "planning/sota/WorldModelGuidance.hpp"
 #include "planning/v15/AutoregSafety.hpp"
 #include "planning/v15/GaussianRolloutScorer.hpp"
 #include "planning/v15/StaticVoxelGuard.hpp"
@@ -174,7 +175,8 @@ void AutoregressivePolicy::plan(const SimConfig& cfg, WorldEngine& world,
     rolloutMiddleOfLane(ego, centerline, loopU, currentLat, candOffsets[c],
                         trajSteps, lookaheadDist, cmd.candidateTrajectories[c],
                         candKappa[c], p);
-    float cost = choice.comfortJerkCost;
+    float cost = choice.comfortJerkCost +
+                 sota::candidateGuidanceCost(cfg, perc, candOffsets[c], c, curLane, sirenYield);
     float voxCost = 0.0f, obsCost = choice.gaussianCost;
         if (sirenYield) {
             cost = (c == 1) ? 1e4f : 0.0f;
@@ -284,7 +286,6 @@ void AutoregressivePolicy::plan(const SimConfig& cfg, WorldEngine& world,
         cmd.candidateBlocked[c] = (obsCost > kCandBlockedThresh);
         if (cost < bestScore) { bestScore = cost; bestIdx = c; }
     }
-
     cmd.bestCandIdx = bestIdx;
     cmd.optimalTrajectory = cmd.candidateTrajectories[bestIdx];
     const float excessSigma = std::max(0.0f, perc.forwardEpistemicSigma - kSigmaBase);
@@ -327,7 +328,7 @@ void AutoregressivePolicy::plan(const SimConfig& cfg, WorldEngine& world,
     clampf(1.0f - kSigmaCruiseGain * excessSigma, kMinSigmaSpeedScale, 1.0f);
   const float cruiseSpd =
     std::min(cfg.targetCruiseSpeedMs * sigmaScale, curveCap) *
-    candSpeedScale[bestIdx];
+    candSpeedScale[bestIdx] * sota::guidedSpeedScale(cfg, perc);
     const bool activelyCrossing = (bestIdx != curLane) || (std::abs(std::abs(currentLat) - p.laneCenterAbsM) > p.crossingDevThreshM);
     const SafetyEvalOutput safe = evaluateAutoregSafety(world,
         {cfg, ego, perc, corrPts, corrArc, rssDist, candLeadGap[bestIdx], sirenYield, staticBlocked[0] && staticBlocked[1],

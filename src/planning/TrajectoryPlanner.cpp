@@ -1,5 +1,6 @@
 #include "planning/TrajectoryPlanner.hpp"
 #include "planning/RssCorridor.hpp"
+#include "planning/sota/WorldModelGuidance.hpp"
 #include "planning/v15/AutoregressivePolicy.hpp"
 #include <algorithm>
 #include <cmath>
@@ -136,8 +137,9 @@ void TrajectoryPlanner::plan(WorldEngine& world, const PerceptionFrameOutput& pe
         const float distToLane1 = std::abs(targetLat - 1.9f);
         const float laneCenterPenalty = std::min(distToLane0, distToLane1) * 14.0f + ((distToLane1 < 0.3f) ? 6.0f : 0.0f);
         const float lateralChangePenalty = std::abs(targetLat - currentLat) * 2.5f;
-        const float totalCost = collisionCost + laneCenterPenalty + lateralChangePenalty;
-
+        const float wmGuide = sota::candidateGuidanceCost(
+            cfg_, perc, targetLat, (targetLat >= 0.0f) ? 1 : 0, (currentLat >= 0.0f) ? 1 : 0, false);
+        const float totalCost = collisionCost + laneCenterPenalty + lateralChangePenalty + wmGuide;
         cmd.candidateBlocked[c] = (collisionCost > 40.0f);
         if (totalCost < bestScore) {
             bestScore = totalCost;
@@ -158,7 +160,9 @@ void TrajectoryPlanner::plan(WorldEngine& world, const PerceptionFrameOutput& pe
                         + (ego.speed * ego.speed) / (2.0f * cfg_.rssABrakeMs2);
     cmd.rssSafeDist = rssDist;
 
-    float desiredSpeed = cfg_.targetCruiseSpeedMs * clampf(1.0f - 0.38f * excessSigma, 0.55f, 1.0f);
+    float desiredSpeed = cfg_.targetCruiseSpeedMs *
+                         clampf(1.0f - 0.38f * excessSigma, 0.55f, 1.0f) *
+                         sota::guidedSpeedScale(cfg_, perc);
     std::string behavior = (std::abs(bestTargetOffset - 1.9f) < 0.6f) ? "LANE_CHANGE_OVERTAKE" : "CRUISING";
     float minForwardObsDist = 45.0f;
     bool aebTriggered = false;

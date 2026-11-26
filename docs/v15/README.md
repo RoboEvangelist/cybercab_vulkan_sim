@@ -34,12 +34,16 @@ Index of FSD v15 modules and Stage-1 spatial representation reports (`docs/v15/`
 | 22 | Full-vision MOT/IDSW, Lane IoU/assoc, ECE/slicing, RSS & poles/gantry | [step22_av_validation_framework.md](step22_av_validation_framework.md) | `7589de1`..`c5c8c91` |
 | 23 | Per-condition calib, vision signal FSM, open-set road obstacles & shadow replay | [step23_calibration_signal_openset_and_replay.md](step23_calibration_signal_openset_and_replay.md) | Step 23 |
 | S1 | Stage 1: Multi-modal GaussianFormer3D (`--spatial-rep legacy\|gaussianformer3d`) | [stage1_gaussianformer3d.md](stage1_gaussianformer3d.md) | `fe61e78` |
-| S1b | Stage 1 A/B evaluation, OBB clamp, YAML voxel presets, Reality Window hardening & 205-test validation | [stage1_gaussianformer3d_ab_report.md](stage1_gaussianformer3d_ab_report.md) | `2d10b85`..latest |
+| S1b | Stage 1 A/B evaluation, OBB clamp, YAML voxel presets, Reality Window hardening & 205-test validation | [stage1_gaussianformer3d_ab_report.md](stage1_gaussianformer3d_ab_report.md) | `2d10b85`..`49d7736` |
+| S2 | Stage 2/3: LeWorldModel (SIGReg) & H-JEPA (`--world-model legacy\|lewm\|hjepa`), FMEA & SOTA PDMS | [stage2_lewm_hjepa_ab_report.md](stage2_lewm_hjepa_ab_report.md) | `feature/stage2-lewm-hjepa` |
 
 - **FSD v15 Reality Window & Stage-1 Highlights:** [`GaussianWorldModel`](../../src/perception/v15/GaussianWorldModel.cpp) splats foreground semantic primitives ahead of translucent (`<= 0.20` alpha) `Static` background and filters `NaN`/degenerate Gaussians; [`V15HudOverlay`](../../src/app/V15HudOverlay.cpp) adds `R/N/D` gear, `| AEB`/`| MRM` tags, and non-finite sanitization; [`VulkanViewer`](../../src/app/VulkanViewer.cpp) guards stale buffers; validated in [`test_v15_reality_window_validation.cpp`](../../tests/test_v15_reality_window_validation.cpp).
 
 ## References
 - **GaussianFormer3D** (ICRA 2026, [arXiv:2505.10685](https://arxiv.org/abs/2505.10685)) — Multi-modal 3D Gaussian semantic occupancy prediction with 3D deformable attention.
+- **LeWorldModel (LeWM)** (Maes et al., [arXiv:2603.19312](https://arxiv.org/abs/2603.19312)) — Action-conditioned JEPA latent dynamics with SIGReg regularization.
+- **H-JEPA & AD-E2E-JEPA** (Zhang et al., Oct 2026; Zhu et al., Sep 2026) — Multi-timescale hierarchical subgoal JEPA & compressed patch-latent planning rollouts.
+- **NAVSIM** (Dauner et al., NeurIPS 2024 [arXiv:2406.15349](https://arxiv.org/abs/2406.15349)) — Predictive Driver Model Score (`PDMS`) evaluation.
 - **GaussianFormer / GaussianFormer-2** (Huang et al., ECCV 2024 [arXiv:2405.17429](https://arxiv.org/abs/2405.17429); CVPR 2025 [arXiv:2412.04384](https://arxiv.org/abs/2412.04384)) — Object-centric 3D semantic Gaussians & probabilistic occupancy superposition.
 - **3D Gaussian Splatting & EWA Splatting** (Kerbl et al., SIGGRAPH 2023 [arXiv:2308.04079](https://arxiv.org/abs/2308.04079); Zwicker et al., IEEE TVCG 2002) — Reality View EWA covariance projection & alpha blending.
 - **BEVFormer** (Li et al., ECCV 2022 [arXiv:2203.17270](https://arxiv.org/abs/2203.17270)) — Spatial-temporal BEV lifting.

@@ -31,6 +31,8 @@ struct CliArgs {
     std::string pipelineVer;
   std::string lightingMode;
   std::string spatialRepMode;
+  std::string worldModelMode;
+  std::string worldModelWeights;
 };
 
 CliArgs parseArgs(int argc, char** argv) {
@@ -48,10 +50,13 @@ CliArgs parseArgs(int argc, char** argv) {
         else if (a == "--pipeline" && i + 1 < argc) args.pipelineVer = argv[++i];
     else if (a == "--lighting" && i + 1 < argc) args.lightingMode = argv[++i];
     else if (a == "--spatial-rep" && i + 1 < argc) args.spatialRepMode = argv[++i];
+    else if (a == "--world-model" && i + 1 < argc) args.worldModelMode = argv[++i];
+    else if (a == "--world-model-weights" && i + 1 < argc) args.worldModelWeights = argv[++i];
         else if (a == "--help" || a == "-h") {
           std::cout
             << "Usage: cybercab_sim [--config path.yaml] [--pipeline v14|v15]"
             << " [--spatial-rep legacy|gaussianformer3d]"
+            << " [--world-model legacy|lewm|hjepa] [--world-model-weights path.bin]"
             << " [--lighting day|night_glare] [--headless] [--steps N] "
             << "[--scenario nominal|jaywalk|occluded|hardbrake|soil_front|"
             << "siren] [--trace out.jsonl] [--dump-dir dir]"
@@ -111,6 +116,16 @@ int main(int argc, char** argv) {
         if (!cybercab::SimConfig::isValidSpatialRepMode(cfg.spatialRepMode)) {
             throw std::runtime_error("spatial_rep_mode must be \"legacy\" or \"gaussianformer3d\", got \"" + cfg.spatialRepMode + "\"");
         }
+        if (!args.worldModelMode.empty()) {
+            if (!cybercab::SimConfig::isValidWorldModelMode(args.worldModelMode)) {
+                throw std::runtime_error("--world-model must be legacy|lewm|hjepa, got \"" + args.worldModelMode + "\"");
+            }
+            cfg.worldModelMode = args.worldModelMode;
+        }
+        if (!cybercab::SimConfig::isValidWorldModelMode(cfg.worldModelMode)) {
+            throw std::runtime_error("world_model_mode must be legacy|lewm|hjepa, got \"" + cfg.worldModelMode + "\"");
+        }
+        if (!args.worldModelWeights.empty()) cfg.wmSota.weightsPath = args.worldModelWeights;
     if (!args.lightingMode.empty()) {
       if (args.lightingMode != "day" && args.lightingMode != "night_glare") {
         throw std::runtime_error(

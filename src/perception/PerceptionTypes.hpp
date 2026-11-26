@@ -161,6 +161,25 @@ struct GaussianFormer3DSummary {
     float attnResidualM = 0.0f;
 };
 
+struct WorldModelSotaSummary {
+  bool active = false;
+  bool hierarchical = false;
+  bool weightsLoadedFromFile = false;
+  bool fmeaFallbackTriggered = false;
+  uint32_t fmeaFaultMask = 0u;
+  float predSurprise = 0.0f;
+  float surpriseSigmaDelta = 0.0f;
+  float sigregLoss = 0.0f;
+  float latentNorm = 0.0f;
+  float bestRolloutEnergy = 0.0f;
+  float recommendedLatM = -1.95f;
+  float recommendedSpeedScale = 1.0f;
+  int macroSubgoalCode = 0;
+  float macroSubgoalLatM = -1.95f;
+  float macroSubgoalSpeedMs = 10.5f;
+  float stageCpuMs = 0.0f;
+};
+
 struct PerceptionFrameOutput {
     std::array<SoilCameraSummary, 8> soilCameras{};
     std::vector<SoilPatchStats> soilPatches; // 8 * patchCols * patchRows
@@ -179,6 +198,7 @@ struct PerceptionFrameOutput {
     EvalMetrics eval{};
     V15PerceptionSummary v15{};
     GaussianFormer3DSummary gaussianFormer3D{};
+    WorldModelSotaSummary worldModelSota{};
   std::vector<V15Gaussian3D> v15Gaussians;
   std::vector<uint8_t> v15RealityRgba;
 

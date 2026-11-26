@@ -18,6 +18,10 @@ A modular, zero-hot-path-allocation **C++ + Vulkan** simulation of the **Tesla C
   - **`legacy` (default):** Existing BEVFormer/OccupancyFlowNet voxel path (`v14`) and GPU `GaussianWorldModel::updateFromPerception` (`v15`).
   - **`gaussianformer3d` (opt-in, ICRA 2026 / arXiv:2505.10685):** Replaces Stage-1 spatial construction with [`GaussianFormer3DPipeline`](src/perception/sota/GaussianFormer3DPipeline.hpp) (`VoxelToGaussianInit` -> `DeformableAttention3D` -> `GaussianToVoxelSplatter`), with YAML voxel/volume tuning (`occupancy_flow.step_x/y/z` + `gaussianformer3d.splat_voxel_step_x/y/z`, `voxel_scale_x/y/z`, `splat_sigma_cutoff_sq`, `max_gaussians`, `min_voxel_occ_prob`).
   - **A/B Summary ([report](docs/v15/stage1_gaussianformer3d_ab_report.md)):** Improves dynamic voxel precision (`0.881 -> 0.919`, `0.945` at `0.5m` splat step), Gaussian GT occupancy (`0.301 -> 0.459`, `0.512` hit), open-set `BARRIER` efficiency (`707 -> 323` voxels, `0.29 -> 1.02 m` clearance), and `v15` nominal/hardbrake/glare smoothness at `0.34-0.54 ms` CPU stage time (`11.62-19.40 ms` mean wall time under `RelWithDebInfo`) and `0` steady-state heap allocs.
+- **Stage 2/3 World Model & Hierarchical JEPA Switch (`simulation.world_model_mode` or `--world-model legacy|lewm|hjepa`):**
+  - **`legacy` (default):** Existing Stage-2 world model and planners.
+  - **`lewm` (opt-in, [arXiv:2603.19312](https://arxiv.org/abs/2603.19312)):** SIGReg-regularized `16D` latent encoder ([`LeWmSceneEncoder`](src/perception/sota/LeWmSceneEncoder.hpp)) and action-conditioned rollout engine ([`LeWmLatentModel`](src/perception/sota/LeWmLatentModel.hpp)) with binary weight loading (`--world-model-weights`) and full FMEA fallback.
+  - **`hjepa` (opt-in, Zhang et al. Oct 2026 / Zhu et al. Sep 2026):** 2-level hierarchical world model ([`HJepaHierarchy`](src/perception/sota/HJepaHierarchy.hpp)) pairing a `3.0 s` Level-2 macro subgoal planner with a `1.5 s` deterministic CEM action optimizer downstream-guarded by RSS/AEB ([report](docs/v15/stage2_lewm_hjepa_ab_report.md)): improves NAVSIM PDMS (`0.9793 -> 0.9833`), `v15:hardbrake` jerk (`17.42 -> 5.75`, `0` vs `13` AEBs), `night_glare_jaywalk` clearance (`0.18 -> 1.08 m`), and composes with `gaussianformer3d` (`VehAP 0.444 -> 0.496`, `<= 0.20 ms` CPU, `0 B` heap allocs).
 - **8-Camera Calibrated Surround Matrix & HDR Night Lighting:** Concurrent offscreen rendering across 4 camera presets (`half` `320x240`, `full` `640x480`, `cybercab_binned` `1448x938`, `cybercab` `2896x1876`) with `day` / `night_glare` HDR + RCCB mosaic support via [`cam_isp_soil.comp`](shaders/cam_isp_soil.comp).
 - **Interactive HUD & Hardened FSD v15 Reality Window:** Clickable mode/layer/scenario controls, 8-camera live matrix overlays (`Neural`, `RGB`, `Calib`, `SoilHeatmap`, `VoxelReproj`), 2-layer foreground-over-translucent-static EWA Reality View with `R/N/D` gear & `AEB`/`MRM` alerts, `NaN`/degenerate-splat & stale-buffer guards, per-stage GPU profiling, and JSONL tracing.
 
@@ -38,7 +42,7 @@ cybercab_vulkan_sim/
 │   ├── planning/                   # v14 quintic RSS planner & v15/ (StaticVoxelGuard, AutoregSafety, Policy)
 │   ├── app/                        # Interactive SDL2 + Vulkan HUD viewer & bitmap font
 │   └── main.cpp                    # Interactive / headless CLI entry point
-└── tests/                          # 205 GoogleTest tests (v14/v15/Stage-1/Reality-View/FMEA/benchmark)
+└── tests/                          # 217 GoogleTest tests (v14/v15/Stage-1/Stage-2-3/FMEA/SOTA/benchmark)
 ```
 
 ## Dependencies (Ubuntu / Debian)
@@ -77,6 +81,8 @@ Options:
 - `--config <path.yaml>` (defaults to `config/cybercab_sim.yaml`; loads `config/v15_policy.yaml`)
 - `--pipeline v14|v15` (overrides `simulation.pipeline_version`)
 - `--spatial-rep legacy|gaussianformer3d` (overrides `simulation.spatial_rep_mode`)
+- `--world-model legacy|lewm|hjepa` (overrides `simulation.world_model_mode`)
+- `--world-model-weights <path.bin>` (optional binary weights for `lewm`/`hjepa`; defaults to analytical)
 - `--lighting day|night_glare` (selects daytime or HDR night-glare rendering)
 - `--scenario nominal|jaywalk|occluded|hardbrake|soil_front|siren`
 - `--steps N` (control ticks at 36 Hz)
@@ -87,6 +93,9 @@ Options:
 
 ## References
 - **GaussianFormer3D** (ICRA 2026, [arXiv:2505.10685](https://arxiv.org/abs/2505.10685)) — Multi-modal 3D Gaussian semantic occupancy with 3D deformable attention.
+- **LeWorldModel (LeWM)** (Maes et al., [arXiv:2603.19312](https://arxiv.org/abs/2603.19312)) — Action-conditioned JEPA latent dynamics & SIGReg regularization.
+- **H-JEPA & AD-E2E-JEPA** (Zhang et al., Oct 2026; Zhu et al., Sep 2026) — Multi-timescale hierarchical subgoal JEPA & compressed latent driving rollouts.
+- **NAVSIM** (Dauner et al., NeurIPS 2024 [arXiv:2406.15349](https://arxiv.org/abs/2406.15349)) — Predictive Driver Model Score (`PDMS`) closed-loop safety/comfort evaluation.
 - **GaussianFormer / GaussianFormer-2** (Huang et al., ECCV 2024 [arXiv:2405.17429](https://arxiv.org/abs/2405.17429); CVPR 2025 [arXiv:2412.04384](https://arxiv.org/abs/2412.04384)) — 3D semantic Gaussians & probabilistic occupancy superposition.
 - **3D Gaussian Splatting & EWA Splatting** (Kerbl et al., SIGGRAPH 2023 [arXiv:2308.04079](https://arxiv.org/abs/2308.04079); Zwicker et al., IEEE TVCG 2002) — Reality View EWA projection & alpha compositing.
 - **BEVFormer** (Li et al., ECCV 2022 [arXiv:2203.17270](https://arxiv.org/abs/2203.17270)) — Spatial-temporal BEV lifting.

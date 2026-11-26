@@ -11,6 +11,8 @@
 #include "perception/SoilDetector.hpp"
 #include "perception/WorldModel.hpp"
 #include "perception/sota/GaussianFormer3DPipeline.hpp"
+#include "perception/sota/HJepaHierarchy.hpp"
+#include "perception/sota/LeWmLatentModel.hpp"
 #include "perception/v15/V15Pipeline.hpp"
 #include "sensors/CameraRigRenderer.hpp"
 #include "world/WorldEngine.hpp"
@@ -52,6 +54,8 @@ public:
     const WorldModel& worldModel() const { return wm_; }
     const v15::V15Pipeline* v15() const { return v15_.get(); }
     const sota::GaussianFormer3DPipeline* gaussianFormer3D() const { return gf3d_.get(); }
+    const sota::LeWmLatentModel* worldModelSota() const { return wmSota_.get(); }
+    const sota::HJepaHierarchy* hjepaHierarchy() const { return hjepa_.get(); }
 
 private:
     const SimConfig& cfg_;
@@ -63,6 +67,8 @@ private:
     WorldModel wm_;
     std::unique_ptr<v15::V15Pipeline> v15_;
     std::unique_ptr<sota::GaussianFormer3DPipeline> gf3d_;
+    std::unique_ptr<sota::LeWmLatentModel> wmSota_;
+    std::unique_ptr<sota::HJepaHierarchy> hjepa_;
 
     // Pre-allocated hot-path scratch buffers
     std::vector<TrackPriorGpu> trackPriorsScratch_;
