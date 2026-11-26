@@ -25,10 +25,19 @@ struct V15HudTelemetryLines {
   std::array<char, kHudLineBufLen> calib{};
   std::array<char, kHudLineBufLen> audio{};
   std::array<char, kHudLineBufLen> compute{};
+  std::array<char, kHudLineBufLen> worldModel{};
+};
+
+struct WorldModelHudLines {
+  std::array<char, kHudLineBufLen> line1{};
+  std::array<char, kHudLineBufLen> line2{};
 };
 
 V15HudTelemetryLines formatV15HudTelemetry(
   const EgoState& ego, const PerceptionFrameOutput& perc,
   const PlannerCommand& cmd);
+
+WorldModelHudLines formatWorldModelHudLines(
+  const PerceptionFrameOutput& perc);
 
 }  // namespace cybercab::v15_hud

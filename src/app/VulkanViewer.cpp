@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <stdexcept>
 
 namespace cybercab {
@@ -1414,6 +1415,28 @@ void VulkanViewer::buildUiOverlay(const SimConfig& cfg, const WorldEngine& world
                   spec.soiled, {0.55f, 0.24f, 0.06f, 0.95f}, {0.98f, 0.55f, 0.15f, 1.0f},
                   UiAction::ToggleSoilSelected);
 
+    constexpr float kGlyphAdvPx = 6.0f;
+    auto fitTextScale = [&](const char* txt, float baseScale, float maxW,
+                            float minScale) -> float {
+      const float tw =
+        static_cast<float>(std::strlen(txt)) * kGlyphAdvPx * baseScale;
+      if (tw <= maxW || tw <= 1.0f) return baseScale;
+      return std::max(minScale, baseScale * (maxW / tw));
+    };
+    const auto wmHud = v15_hud::formatWorldModelHudLines(perc);
+    const Vec4 wmMuteCol{0.62f, 0.68f, 0.76f, 1.0f};
+    const Vec4 wmLine1Col = perc.worldModelSota.fmeaFallbackTriggered
+      ? kRealityWarnCol
+      : (perc.worldModelSota.active ? kRealityHeaderCol : wmMuteCol);
+    const Vec4 wmLine2Col = perc.worldModelSota.active ? kRealitySubCol : wmMuteCol;
+    const float rTextW = rPanW - 20.0f;
+    uiText(rx + 10.0f, ry + 268.0f,
+           fitTextScale(wmHud.line1.data(), 1.15f, rTextW, 0.85f),
+           wmLine1Col, wmHud.line1.data());
+    uiText(rx + 10.0f, ry + 286.0f,
+           fitTextScale(wmHud.line2.data(), 1.15f, rTextW, 0.85f),
+           wmLine2Col, wmHud.line2.data());
+
     if (!toastMsg.empty()) {
         const float tw = std::min(W - 80.0f, static_cast<float>(toastMsg.size()) * 8.5f + 24.0f);
         uiRect((W - tw) * 0.5f, topBarH + 14.0f, tw, 24.0f, {0.03f, 0.18f, 0.26f, 0.92f});
@@ -1427,6 +1450,8 @@ void VulkanViewer::buildUiOverlay(const SimConfig& cfg, const WorldEngine& world
     constexpr float kFullTopMargin = 24.0f;
     constexpr float kStripPadY = 6.0f;
     constexpr float kHeaderTxtY = 4.0f;
+    constexpr float kMaxPipCardW = 460.0f;
+    constexpr float kMinPipScale = 0.78f;
     const Vec4 kWhiteTint{1.0f, 1.0f, 1.0f, 1.0f};
     const auto hud = v15_hud::formatV15HudTelemetry(ego, perc, cmd);
     const bool alertState =
@@ -1438,33 +1463,58 @@ void VulkanViewer::buildUiOverlay(const SimConfig& cfg, const WorldEngine& world
     const float sc = fullReal ? kPipFullScale : kBorderPx;
     const float imgW = static_cast<float>(v15_hud::kRealityTexW) * sc;
     const float imgH = static_cast<float>(v15_hud::kRealityTexH) * sc;
-    const float cardW = imgW + kPipFullScale * kPipCardPad;
+    const float baseCardW = imgW + kPipFullScale * kPipCardPad;
+    const float hdrFullW =
+      static_cast<float>(std::strlen(hud.header.data())) * kGlyphAdvPx *
+      kPipTextScale;
+    const float cardW = fullReal
+      ? baseCardW
+      : std::min(kMaxPipCardW,
+                 std::max(baseCardW,
+                          hdrFullW + kPipFullScale * kPipCardPad + 4.0f));
+    const float innerW = cardW - kPipFullScale * kPipCardPad;
+    const float hdrScale =
+      fitTextScale(hud.header.data(), kPipTextScale, innerW, kMinPipScale);
+    const bool wmActive = perc.worldModelSota.active;
+    const float extraStripH = wmActive ? kPipLineStepY : 0.0f;
     const float cardH =
-      kPipHeaderH + imgH + kPipStripH + kPipFullScale * kPipCardPad;
+      kPipHeaderH + imgH + kPipStripH + extraStripH + kPipFullScale * kPipCardPad;
     const float cx = (W - cardW) * kCenterHalf;
     const float cy = fullReal ? (topBarH + kFullTopMargin) : (H - pad - cardH);
+    const float imgX = cx + (cardW - imgW) * kCenterHalf;
     uiPanelsScratch_.push_back({cx, cy, cardW, cardH});
     uiRect(cx, cy, cardW, cardH, kRealityCardBg);
     uiRectOutline(cx, cy, cardW, cardH, kBorderPx, borderCol);
-    uiText(cx + kPipCardPad, cy + kHeaderTxtY, kPipTextScale,
+    uiText(cx + kPipCardPad, cy + kHeaderTxtY, hdrScale,
            headerCol, hud.header.data());
     flushBatch(0);
-    uiTexQuad(cx + kPipCardPad, cy + kPipHeaderH, imgW, imgH, kWhiteTint);
+    uiTexQuad(imgX, cy + kPipHeaderH, imgW, imgH, kWhiteTint);
     flushBatch(v15_hud::kRealityUiSetIdx);
     if (!realityFrameValid_) {
-      uiText(cx + kPipCardPad + 16.0f, cy + kPipHeaderH + imgH * kCenterHalf,
+      uiText(imgX + 16.0f, cy + kPipHeaderH + imgH * kCenterHalf,
              kPipTextScale, kRealityWarnCol,
              "NO REALITY DATA (STALE BUFFER)");
     }
     const float sy = cy + kPipHeaderH + imgH + kStripPadY;
-    uiText(cx + kPipCardPad, sy, kPipTextScale, kRealitySubCol,
-           hud.calib.data());
+    uiText(cx + kPipCardPad, sy,
+           fitTextScale(hud.calib.data(), kPipTextScale, innerW, kMinPipScale),
+           kRealitySubCol, hud.calib.data());
     const Vec4 audioCol =
       perc.v15.sirenDetected ? kRealityWarnCol : kRealitySubCol;
-    uiText(cx + kPipCardPad, sy + kPipLineStepY, kPipTextScale, audioCol,
-           hud.audio.data());
+    uiText(cx + kPipCardPad, sy + kPipLineStepY,
+           fitTextScale(hud.audio.data(), kPipTextScale, innerW, kMinPipScale),
+           audioCol, hud.audio.data());
     uiText(cx + kPipCardPad, sy + kPipFullScale * kPipLineStepY,
-           kPipTextScale, kRealityHeaderCol, hud.compute.data());
+           fitTextScale(hud.compute.data(), kPipTextScale, innerW, kMinPipScale),
+           kRealityHeaderCol, hud.compute.data());
+    if (wmActive) {
+      const Vec4 wmCol = perc.worldModelSota.fmeaFallbackTriggered
+        ? kRealityWarnCol
+        : kRealityHeaderCol;
+      uiText(cx + kPipCardPad, sy + 3.0f * kPipLineStepY,
+             fitTextScale(hud.worldModel.data(), kPipTextScale, innerW, kMinPipScale),
+             wmCol, hud.worldModel.data());
+    }
   }
 
     flushBatch(0);

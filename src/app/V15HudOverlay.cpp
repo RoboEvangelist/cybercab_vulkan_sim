@@ -1,5 +1,7 @@
 #include "app/V15HudOverlay.hpp"
+#include "perception/sota/LeWmTypes.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 
@@ -60,7 +62,69 @@ V15HudTelemetryLines formatV15HudTelemetry(
     finiteOrZero(perc.v15.tokenSparsityRatio) * kPercentScale,
     finiteOrZero(perc.v15.kvCacheReuseRatio) * kPercentScale,
     std::max(1.0f, finiteOrZero(perc.v15.effectiveSpeedupX)));
+  if (perc.worldModelSota.active) {
+    const char* fb = perc.worldModelSota.fmeaFallbackTriggered ? "[FB]" : "";
+    const float surp = finiteOrZero(perc.worldModelSota.predSurprise);
+    const float cpuMs = finiteOrZero(perc.worldModelSota.stageCpuMs);
+    if (perc.worldModelSota.hierarchical) {
+      const char* sub =
+        sota::macroSubgoalName(perc.worldModelSota.macroSubgoalCode);
+      std::snprintf(
+        out.worldModel.data(), out.worldModel.size(),
+        "WM:HJEPA%s %s | SURP:%.2f | %.2fms",
+        fb, sub, surp, cpuMs);
+    } else {
+      const float lat = finiteOrZero(perc.worldModelSota.recommendedLatM);
+      const float spdPct =
+        finiteOrZero(perc.worldModelSota.recommendedSpeedScale) * kPercentScale;
+      std::snprintf(
+        out.worldModel.data(), out.worldModel.size(),
+        "WM:LEWM%s LAT:%+.2fm SPD:%.0f%% | SURP:%.2f | %.2fms",
+        fb, lat, spdPct, surp, cpuMs);
+    }
+  }
   return out;
+}
+
+WorldModelHudLines formatWorldModelHudLines(
+  const PerceptionFrameOutput& perc) {
+  WorldModelHudLines lines{};
+  const auto& gf = perc.gaussianFormer3D;
+  const auto& wm = perc.worldModelSota;
+  std::array<char, 32> repBuf{};
+  if (gf.active) {
+    std::snprintf(repBuf.data(), repBuf.size(), "GF3D(%u)", gf.gaussianCount);
+  } else {
+    std::snprintf(repBuf.data(), repBuf.size(), "BEV2D");
+  }
+  const char* wmMode = !wm.active ? "LEGACY"
+    : (wm.hierarchical ? "HJEPA" : "LEWM");
+  const char* fb = (wm.active && wm.fmeaFallbackTriggered) ? "[FB]" : "";
+  std::array<char, 24> goalBuf{};
+  if (wm.active && wm.hierarchical) {
+    std::snprintf(
+      goalBuf.data(), goalBuf.size(), " (%s)",
+      sota::macroSubgoalName(wm.macroSubgoalCode));
+  }
+  std::snprintf(
+    lines.line1.data(), lines.line1.size(),
+    "REP:%s | WM:%s%s%s",
+    repBuf.data(), wmMode, fb, goalBuf.data());
+  if (wm.active) {
+    std::snprintf(
+      lines.line2.data(), lines.line2.size(),
+      "SURP:%.2f SR:%.2f LAT:%+.2fm SPD:%.0f%% %.2fms",
+      finiteOrZero(wm.predSurprise),
+      finiteOrZero(wm.sigregLoss),
+      finiteOrZero(wm.recommendedLatM),
+      finiteOrZero(wm.recommendedSpeedScale) * kPercentScale,
+      finiteOrZero(wm.stageCpuMs));
+  } else {
+    std::snprintf(
+      lines.line2.data(), lines.line2.size(),
+      "WM LEGACY: PREDICTIVE ROLLOUT OFF");
+  }
+  return lines;
 }
 
 }  // namespace cybercab::v15_hud

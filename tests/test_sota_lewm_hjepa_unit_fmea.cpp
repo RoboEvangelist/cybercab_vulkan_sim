@@ -294,6 +294,11 @@ TEST(LeWmHJepaUnitTest, TraceLoggerSchemaOmissionAndHudTags) {
   std::istringstream issLeg(jLegacy);
   ASSERT_TRUE(Json::parseFromStream(rb, issLeg, &rootLeg, &errs)) << errs;
   EXPECT_FALSE(rootLeg.isMember("world_model_sota"));
+  static_assert(std::is_trivially_copyable_v<v15_hud::WorldModelHudLines>);
+  const auto hudLeg = v15_hud::formatV15HudTelemetry(ego, perc, cmd);
+  EXPECT_EQ(hudLeg.worldModel[0], '\0');
+  const auto wmLeg = v15_hud::formatWorldModelHudLines(perc);
+  EXPECT_NE(std::string(wmLeg.line1.data()).find("REP:BEV2D | WM:LEGACY"), std::string::npos);
 
   cfg.worldModelMode = "hjepa";
   perc.v15.active = true;
@@ -302,14 +307,26 @@ TEST(LeWmHJepaUnitTest, TraceLoggerSchemaOmissionAndHudTags) {
   perc.worldModelSota.macroSubgoalCode = static_cast<int>(MacroSubgoal::KeepLane);
   const auto hudHj = v15_hud::formatV15HudTelemetry(ego, perc, cmd);
   EXPECT_NE(std::string(hudHj.header.data()).find("| HJEPA"), std::string::npos);
+  EXPECT_NE(std::string(hudHj.worldModel.data()).find("WM:HJEPA KEEP_LANE"), std::string::npos);
+  const auto wmHj = v15_hud::formatWorldModelHudLines(perc);
+  EXPECT_NE(std::string(wmHj.line1.data()).find("WM:HJEPA (KEEP_LANE)"), std::string::npos);
+  EXPECT_NE(std::string(wmHj.line2.data()).find("SURP:"), std::string::npos);
 
   perc.worldModelSota.hierarchical = false;
+  perc.gaussianFormer3D.active = true;
+  perc.gaussianFormer3D.gaussianCount = 512;
   const auto hudLe = v15_hud::formatV15HudTelemetry(ego, perc, cmd);
   EXPECT_NE(std::string(hudLe.header.data()).find("| LEWM"), std::string::npos);
+  EXPECT_NE(std::string(hudLe.worldModel.data()).find("WM:LEWM LAT:"), std::string::npos);
+  const auto wmGf = v15_hud::formatWorldModelHudLines(perc);
+  EXPECT_NE(std::string(wmGf.line1.data()).find("REP:GF3D(512) | WM:LEWM"), std::string::npos);
 
   perc.worldModelSota.fmeaFallbackTriggered = true;
   const auto hudFb = v15_hud::formatV15HudTelemetry(ego, perc, cmd);
   EXPECT_NE(std::string(hudFb.header.data()).find("| WM:FB"), std::string::npos);
+  EXPECT_NE(std::string(hudFb.worldModel.data()).find("WM:LEWM[FB]"), std::string::npos);
+  const auto wmFb = v15_hud::formatWorldModelHudLines(perc);
+  EXPECT_NE(std::string(wmFb.line1.data()).find("[FB]"), std::string::npos);
 
   const std::string jWm =
     TraceLogger::formatFrameJson(1, 0.1f, cfg, ego, cmd, perc, {});
@@ -319,6 +336,12 @@ TEST(LeWmHJepaUnitTest, TraceLoggerSchemaOmissionAndHudTags) {
   ASSERT_TRUE(rootWm.isMember("world_model_sota"));
   EXPECT_EQ(rootWm["world_model_sota"]["mode"].asString(), "hjepa");
   EXPECT_TRUE(rootWm["world_model_sota"]["fmea_fallback"].asBool());
+
+  perc.worldModelSota.predSurprise = std::numeric_limits<float>::quiet_NaN();
+  perc.worldModelSota.sigregLoss = std::numeric_limits<float>::infinity();
+  const auto wmNaN = v15_hud::formatWorldModelHudLines(perc);
+  EXPECT_EQ(std::string(wmNaN.line2.data()).find("nan"), std::string::npos);
+  EXPECT_EQ(std::string(wmNaN.line2.data()).find("inf"), std::string::npos);
 }
 
 }  // namespace
